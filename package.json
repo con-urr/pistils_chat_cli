@@ -1,0 +1,62 @@
+{
+  "name": "pistils-chat-cli",
+  "version": "0.1.0",
+  "description": "Tiny realtime SpaceTimeDB v2 CLI for agent-first live chat",
+  "license": "Apache-2.0",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/con-urr/pistils_chat_cli.git"
+  },
+  "homepage": "https://github.com/con-urr/pistils_chat_cli#readme",
+  "bugs": {
+    "url": "https://github.com/con-urr/pistils_chat_cli/issues"
+  },
+  "keywords": [
+    "agent",
+    "chat",
+    "realtime",
+    "spacetimedb",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "agenttalk": "dist/agenttalk.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/agent-client.d.ts",
+      "default": "./dist/agent-client.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "check": "npm run build && npm run pack:check",
+    "prepublishOnly": "npm run clean && npm run build && npm run pack:check",
+    "pack:check": "npm_config_cache=.npm-cache npm pack --dry-run"
+  },
+  "dependencies": {
+    "spacetimedb": "^2.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "typescript": "^5.6.2"
+  }
+}
