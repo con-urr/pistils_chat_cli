@@ -3,6 +3,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import util from 'node:util';
+import { setGlobalLogLevel } from 'spacetimedb';
 import { AgentRealtimeClient, type AgentRole } from './agent-client';
 import type * as ModuleTypes from './module_bindings/types';
 
@@ -20,6 +22,80 @@ const STATE_DIR = process.env.AGENTTALK_STATE_DIR
   ? path.resolve(process.env.AGENTTALK_STATE_DIR)
   : path.join(os.homedir(), '.agenttalk');
 const STATE_PATH = path.join(STATE_DIR, 'state.json');
+
+let QUIET = false;
+let STRICT_OUTPUT = false;
+
+function writeStdout(line: string) {
+  process.stdout.write(line + '\n');
+}
+
+function writeJson(payload: unknown, pretty = true) {
+  process.stdout.write(JSON.stringify(payload, null, pretty ? 2 : undefined) + '\n');
+}
+
+function writeStderr(line: string) {
+  process.stderr.write(line + '\n');
+}
+
+function logInfo(message: string) {
+  if (!QUIET) {
+    writeStderr(`[info] ${message}`);
+  }
+}
+
+function logWarn(message: string) {
+  if (!QUIET) {
+    writeStderr(`[warn] ${message}`);
+  }
+}
+
+function coerceErrorText(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error;
+  }
+
+  if (error && typeof error === 'object') {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === 'string' && maybeMessage.trim()) {
+      return maybeMessage;
+    }
+  }
+
+  return String(error);
+}
+
+function sanitizeConsoleArgs(args: unknown[]) {
+  const line = util.format(...args);
+  return line.replace(/%c/g, '').trim();
+}
+
+function configureRuntime(command: string, flags: Flags) {
+  QUIET = getBooleanFlag(flags, ['quiet']);
+  STRICT_OUTPUT =
+    getBooleanFlag(flags, ['json', 'jsonl']) ||
+    (command === 'run' && getBooleanFlag(flags, ['jsonl']));
+
+  if (STRICT_OUTPUT || QUIET) {
+    setGlobalLogLevel('error');
+  } else {
+    // Suppress SDK "Connecting..." banners while keeping warnings.
+    setGlobalLogLevel('warn');
+  }
+
+  if (STRICT_OUTPUT) {
+    console.log = (...args: unknown[]) => {
+      const cleaned = sanitizeConsoleArgs(args);
+      if (cleaned) {
+        writeStderr(cleaned);
+      }
+    };
+  }
+}
 
 function parseArgs(argv: string[]): { flags: Flags; positionals: string[] } {
   const flags: Flags = {};
@@ -81,6 +157,20 @@ function getBooleanFlag(flags: Flags, keys: string[]): boolean {
   return false;
 }
 
+function getIntFlag(flags: Flags, keys: string[], defaultValue: number) {
+  const raw = getStringFlag(flags, keys);
+  if (!raw) {
+    return defaultValue;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+    throw new Error(`${keys[0]} must be a non-negative integer`);
+  }
+
+  return parsed;
+}
+
 async function loadState(): Promise<AgenttalkState> {
   try {
     const raw = await fs.readFile(STATE_PATH, 'utf8');
@@ -96,12 +186,14 @@ async function saveState(state: AgenttalkState): Promise<void> {
 }
 
 function printHelp() {
-  console.log(`agenttalk: tiny realtime SpaceTimeDB agent client
+  writeStdout(`agenttalk: tiny realtime SpaceTimeDB agent client
 
 Usage:
   agenttalk signup --name <name> [--role agent|human] [--bio text]
   agenttalk whoami
   agenttalk channels [--json]
+  agenttalk doctor [--json]
+  agenttalk smoke [--json] [--name <name>] [--channel <channel>]
   agenttalk create-channel --name <name> --topic <topic>
   agenttalk join <channel-id-or-name>
   agenttalk leave <channel-id-or-name>
@@ -115,6 +207,11 @@ Global flags:
   --host <url>       default: ${DEFAULT_HOST}
   --db <name>        default: ${DEFAULT_DB}
   --token <token>    override saved token
+  --show-token       include raw token in signup/whoami output
+  --quiet            suppress non-data informational output
+  --retries <n>      connect retry attempts on transient failures (default: 2)
+  --retry-base-ms <n> base backoff milliseconds (default: 300)
+  --connect-timeout-ms <n> connection timeout milliseconds (default: 15000)
 
 State file:
   ${STATE_PATH}
@@ -167,7 +264,39 @@ function emitJsonLine(payload: unknown) {
   process.stdout.write(JSON.stringify(payload) + '\n');
 }
 
-async function connectClient(flags: Flags, state: AgenttalkState) {
+function sleep(ms: number) {
+  return new Promise<void>(resolve => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+type ResolvedConnectConfig = {
+  host: string;
+  databaseName: string;
+  token?: string;
+  retries: number;
+  retryBaseMs: number;
+  connectTimeoutMs: number;
+};
+
+function resolveConnectConfig(flags: Flags, state: AgenttalkState): ResolvedConnectConfig {
   const host =
     getStringFlag(flags, ['host']) ??
     process.env.SPACETIMEDB_HOST ??
@@ -181,21 +310,105 @@ async function connectClient(flags: Flags, state: AgenttalkState) {
   const token =
     getStringFlag(flags, ['token']) ?? process.env.AGENTTALK_TOKEN ?? state.token;
 
-  const client = await AgentRealtimeClient.connect({
+  return {
     host,
     databaseName,
     token,
-  });
-
-  const nextState: AgenttalkState = {
-    host,
-    databaseName,
-    token: client.token,
+    retries: getIntFlag(flags, ['retries'], 2),
+    retryBaseMs: getIntFlag(flags, ['retry-base-ms'], 300),
+    connectTimeoutMs: getIntFlag(flags, ['connect-timeout-ms'], 15000),
   };
+}
 
-  await saveState(nextState);
+function isTransientConnectError(errorText: string) {
+  const text = errorText.toLowerCase();
+  return (
+    text.includes('eai_again') ||
+    text.includes('enotfound') ||
+    text.includes('econnreset') ||
+    text.includes('econnrefused') ||
+    text.includes('etimedout') ||
+    text.includes('timed out') ||
+    text.includes('networkerror') ||
+    text.includes('fetch failed')
+  );
+}
 
-  return { client, state: nextState };
+function describeConnectFailure(
+  error: unknown,
+  config: ResolvedConnectConfig,
+  attempt: number,
+  totalAttempts: number
+) {
+  const text = coerceErrorText(error);
+  const normalized = text.toLowerCase();
+
+  let hint = 'Unknown connection failure.';
+  if (normalized.includes('enotfound') || normalized.includes('eai_again')) {
+    hint = `DNS resolution failed for host '${config.host}'. Check host spelling and network DNS access.`;
+  } else if (normalized.includes('econnrefused')) {
+    hint = `TCP connection refused by '${config.host}'. Verify SpaceTimeDB host and outbound firewall rules.`;
+  } else if (normalized.includes('timed out')) {
+    hint = `Connection timed out to '${config.host}'. Check network path and retry.`;
+  } else if (normalized.includes('401') || normalized.includes('unauthorized')) {
+    hint = 'Authentication failed (likely invalid/expired token). Re-run signup or pass a fresh --token.';
+  } else if (normalized.includes('403') || normalized.includes('forbidden')) {
+    hint = `Authorization failed for database '${config.databaseName}'. Verify DB access and token ownership.`;
+  } else if (normalized.includes('ssl') || normalized.includes('tls') || normalized.includes('certificate')) {
+    hint = 'TLS handshake failed. Check system clock, certificates, and HTTPS interception/proxy settings.';
+  } else if (normalized.includes('fetch failed')) {
+    hint =
+      'Network fetch failed before WS handshake. Check outbound internet access, DNS, and proxy/firewall settings.';
+  } else if (normalized.includes('errorevent')) {
+    hint = 'WebSocket connect failed (generic browser/node ErrorEvent). Check network policy and host reachability.';
+  }
+
+  return `connect failed (${attempt}/${totalAttempts}) to ${config.host}/${config.databaseName}: ${hint} Raw: ${text}`;
+}
+
+async function connectClient(flags: Flags, state: AgenttalkState) {
+  const config = resolveConnectConfig(flags, state);
+  const totalAttempts = config.retries + 1;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    try {
+      const client = await withTimeout(
+        AgentRealtimeClient.connect({
+          host: config.host,
+          databaseName: config.databaseName,
+          token: config.token,
+        }),
+        config.connectTimeoutMs,
+        'SpaceTimeDB connect'
+      );
+
+      const nextState: AgenttalkState = {
+        host: config.host,
+        databaseName: config.databaseName,
+        token: client.token,
+      };
+
+      await saveState(nextState);
+      return { client, state: nextState };
+    } catch (error) {
+      lastError = error;
+      const text = coerceErrorText(error);
+      const retryable = isTransientConnectError(text);
+
+      if (!retryable || attempt >= totalAttempts) {
+        throw new Error(describeConnectFailure(error, config, attempt, totalAttempts));
+      }
+
+      const delayMs = Math.min(config.retryBaseMs * 2 ** (attempt - 1), 5000);
+      logWarn(
+        `${describeConnectFailure(error, config, attempt, totalAttempts)}; retrying in ${delayMs}ms`
+      );
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error(describeConnectFailure(lastError, config, totalAttempts, totalAttempts));
 }
 
 function resolveChannelId(client: AgentRealtimeClient, channelRef: string): bigint {
@@ -248,32 +461,36 @@ async function commandSignup(flags: Flags, positionals: string[], state: Agentta
   const roleRaw = getStringFlag(flags, ['role']) ?? 'agent';
   const role: AgentRole = roleRaw === 'human' ? 'human' : 'agent';
   const bio = getStringFlag(flags, ['bio']) ?? '';
+  const showToken = getBooleanFlag(flags, ['show-token']);
 
-  const { client } = await connectClient(flags, state);
+  const { client, state: resolvedState } = await connectClient(flags, state);
 
   try {
     await client.signUp({ name, role, bio });
 
-    console.log(
-      JSON.stringify(
-        {
-          ok: true,
-          identity: client.identityHex,
-          token: client.token,
-          name,
-          role,
-          bio,
-        },
-        null,
-        2
-      )
-    );
+    writeJson({
+      ok: true,
+      identity: client.identityHex,
+      token: showToken ? client.token : null,
+      tokenRedacted: !showToken,
+      tokenStoredAt: STATE_PATH,
+      host: resolvedState.host,
+      databaseName: resolvedState.databaseName,
+      name,
+      role,
+      bio,
+    });
+
+    if (!showToken) {
+      logInfo('Token is stored locally. Use --show-token if you explicitly need it in stdout.');
+    }
   } finally {
     client.disconnect();
   }
 }
 
 async function commandWhoami(flags: Flags, state: AgenttalkState) {
+  const showToken = getBooleanFlag(flags, ['show-token']);
   const { client } = await connectClient(flags, state);
 
   try {
@@ -281,24 +498,20 @@ async function commandWhoami(flags: Flags, state: AgenttalkState) {
       .listUsers()
       .find(row => row.identity.toHexString() === client.identityHex);
 
-    console.log(
-      JSON.stringify(
-        {
-          identity: client.identityHex,
-          token: client.token,
-          profile: me
-            ? {
-                name: me.name ?? null,
-                role: me.role,
-                bio: me.bio ?? null,
-                online: me.online,
-              }
-            : null,
-        },
-        null,
-        2
-      )
-    );
+    writeJson({
+      identity: client.identityHex,
+      token: showToken ? client.token : null,
+      tokenRedacted: !showToken,
+      tokenStoredAt: STATE_PATH,
+      profile: me
+        ? {
+            name: me.name ?? null,
+            role: me.role,
+            bio: me.bio ?? null,
+            online: me.online,
+          }
+        : null,
+    });
   } finally {
     client.disconnect();
   }
@@ -312,12 +525,12 @@ async function commandChannels(flags: Flags, state: AgenttalkState) {
     const channels = client.listChannels().map(toChannelDto);
 
     if (outputJson) {
-      console.log(JSON.stringify(channels, null, 2));
+      writeJson(channels);
       return;
     }
 
     for (const channel of channels) {
-      console.log(`${channel.id}\t#${channel.name}\t${channel.topic}`);
+      writeStdout(`${channel.id}\t#${channel.name}\t${channel.topic}`);
     }
   } finally {
     client.disconnect();
@@ -338,16 +551,10 @@ async function commandCreateChannel(flags: Flags, state: AgenttalkState) {
     await client.createChannel(name, topic);
     const created = client.listChannels().find(row => row.name === name);
 
-    console.log(
-      JSON.stringify(
-        {
-          ok: true,
-          channel: created ? toChannelDto(created) : { id: null, name, topic },
-        },
-        null,
-        2
-      )
-    );
+    writeJson({
+      ok: true,
+      channel: created ? toChannelDto(created) : { id: null, name, topic },
+    });
   } finally {
     client.disconnect();
   }
@@ -375,17 +582,11 @@ async function commandJoinOrLeave(
       await client.leaveChannel(channelId);
     }
 
-    console.log(
-      JSON.stringify(
-        {
-          ok: true,
-          action: command,
-          channelId: channelId.toString(),
-        },
-        null,
-        2
-      )
-    );
+    writeJson({
+      ok: true,
+      action: command,
+      channelId: channelId.toString(),
+    });
   } finally {
     client.disconnect();
   }
@@ -402,12 +603,12 @@ async function commandThreads(flags: Flags, positionals: string[], state: Agentt
     const threads = client.listThreads(channelId).map(toThreadDto);
 
     if (outputJson) {
-      console.log(JSON.stringify(threads, null, 2));
+      writeJson(threads);
       return;
     }
 
     for (const thread of threads) {
-      console.log(
+      writeStdout(
         `${thread.id}\tchannel:${thread.channelId}\t${thread.title}\tlast:${thread.lastActivity}`
       );
     }
@@ -445,17 +646,11 @@ async function commandCreateThread(
 
     const created = findCreatedThread(client, channelId, title, beforeIds);
 
-    console.log(
-      JSON.stringify(
-        {
-          ok: true,
-          channelId: channelId.toString(),
-          thread: created ? toThreadDto(created) : null,
-        },
-        null,
-        2
-      )
-    );
+    writeJson({
+      ok: true,
+      channelId: channelId.toString(),
+      thread: created ? toThreadDto(created) : null,
+    });
   } finally {
     client.disconnect();
   }
@@ -477,17 +672,230 @@ async function commandSend(flags: Flags, positionals: string[], state: Agenttalk
 
   try {
     await client.sendThreadMessage(threadId, message);
-    console.log(
-      JSON.stringify(
-        {
-          ok: true,
-          threadId: threadId.toString(),
-          text: message,
-        },
-        null,
-        2
-      )
+    writeJson({
+      ok: true,
+      threadId: threadId.toString(),
+      text: message,
+    });
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandDoctor(flags: Flags, state: AgenttalkState) {
+  const outputJson = getBooleanFlag(flags, ['json']);
+  const config = resolveConnectConfig(flags, state);
+  const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
+
+  try {
+    const parsed = new URL(config.host);
+    checks.push({
+      name: 'host',
+      ok: true,
+      detail: `host parsed (${parsed.protocol}//${parsed.host})`,
+    });
+  } catch (error) {
+    checks.push({
+      name: 'host',
+      ok: false,
+      detail: `invalid host URL: ${coerceErrorText(error)}`,
+    });
+  }
+
+  let identity: string | null = null;
+  let channelCount = 0;
+  let client: AgentRealtimeClient | null = null;
+
+  try {
+    const connected = await connectClient(flags, state);
+    client = connected.client;
+    const currentClient = client;
+    identity = currentClient.identityHex;
+    checks.push({
+      name: 'connect',
+      ok: true,
+      detail: `connected to ${connected.state.databaseName} as ${identity.slice(0, 12)}...`,
+    });
+
+    const channels = currentClient.listChannels();
+    channelCount = channels.length;
+    checks.push({
+      name: 'read:channels',
+      ok: true,
+      detail: `read ${channels.length} channels`,
+    });
+
+    const me = currentClient
+      .listUsers()
+      .find(row => row.identity.toHexString() === currentClient.identityHex);
+    checks.push({
+      name: 'identity:profile',
+      ok: true,
+      detail: me ? `profile role=${me.role} name=${me.name ?? ''}` : 'no profile row yet',
+    });
+  } catch (error) {
+    checks.push({
+      name: 'connect',
+      ok: false,
+      detail: coerceErrorText(error),
+    });
+  } finally {
+    client?.disconnect();
+  }
+
+  const result = {
+    ok: checks.every(check => check.ok),
+    host: config.host,
+    databaseName: config.databaseName,
+    tokenProvided: Boolean(config.token),
+    identity,
+    channelCount,
+    checks,
+  };
+
+  if (outputJson) {
+    writeJson(result);
+  } else {
+    writeStdout(`doctor: ${result.ok ? 'ok' : 'failed'}`);
+    for (const check of checks) {
+      writeStdout(`${check.ok ? 'ok' : 'fail'} ${check.name}: ${check.detail}`);
+    }
+  }
+
+  if (!result.ok) {
+    process.exitCode = 1;
+  }
+}
+
+async function waitForThreadMessage(
+  client: AgentRealtimeClient,
+  threadId: bigint,
+  expectedText: string,
+  timeoutMs: number
+) {
+  return new Promise<boolean>(resolve => {
+    let detach: () => void = () => {};
+
+    const timer = setTimeout(() => {
+      detach();
+      resolve(false);
+    }, timeoutMs);
+
+    detach = client.onMessageInsert(row => {
+      if (row.threadId !== threadId || row.text !== expectedText) {
+        return;
+      }
+
+      clearTimeout(timer);
+      detach();
+      resolve(true);
+    });
+  });
+}
+
+async function commandSmoke(flags: Flags, state: AgenttalkState) {
+  const outputJson = getBooleanFlag(flags, ['json']);
+  const seed = Date.now();
+  const smokeName = getStringFlag(flags, ['name']) ?? `agent-smoke-${seed}`;
+  const channelName = normalizeChannelRef(
+    getStringFlag(flags, ['channel']) ?? 'agent-ops'
+  );
+  const threadTitle = getStringFlag(flags, ['title']) ?? `smoke-${seed}`;
+  const openingMessage =
+    getStringFlag(flags, ['message']) ?? `smoke opening ${new Date(seed).toISOString()}`;
+  const watchTimeoutMs = getIntFlag(flags, ['watch-timeout-ms'], 5000);
+  const steps: Array<{ name: string; ok: boolean; detail: string }> = [];
+
+  const { client } = await connectClient(flags, state);
+
+  try {
+    await client.signUp({ name: smokeName, role: 'agent', bio: 'agenttalk smoke test' });
+    steps.push({ name: 'signup', ok: true, detail: `signed up as ${smokeName}` });
+
+    let channel = client.listChannels().find(row => row.name === channelName);
+    if (!channel) {
+      await client.createChannel(channelName, 'Created by agenttalk smoke');
+      channel = client.listChannels().find(row => row.name === channelName);
+      steps.push({
+        name: 'channel:create',
+        ok: Boolean(channel),
+        detail: channel ? `created #${channelName}` : `failed to create #${channelName}`,
+      });
+    } else {
+      steps.push({
+        name: 'channel:exists',
+        ok: true,
+        detail: `found #${channelName} (${channel.id.toString()})`,
+      });
+    }
+
+    if (!channel) {
+      throw new Error(`smoke failed: channel '${channelName}' unavailable`);
+    }
+
+    await client.joinChannel(channel.id);
+    steps.push({
+      name: 'channel:join',
+      ok: true,
+      detail: `joined #${channelName} (${channel.id.toString()})`,
+    });
+
+    const beforeIds = new Set(
+      client.listThreads(channel.id).map(row => row.id.toString())
     );
+    await client.createThread(channel.id, threadTitle, openingMessage);
+    const thread = findCreatedThread(client, channel.id, threadTitle, beforeIds);
+
+    if (!thread) {
+      throw new Error('smoke failed: could not resolve created thread');
+    }
+    steps.push({
+      name: 'thread:create',
+      ok: true,
+      detail: `thread ${thread.id.toString()} created`,
+    });
+
+    const realtimeText = `smoke realtime probe ${seed}`;
+    const realtimePromise = waitForThreadMessage(
+      client,
+      thread.id,
+      realtimeText,
+      watchTimeoutMs
+    );
+    await client.sendThreadMessage(thread.id, realtimeText);
+    const realtimeOk = await realtimePromise;
+    steps.push({
+      name: 'message:realtime',
+      ok: realtimeOk,
+      detail: realtimeOk
+        ? `received realtime insert for thread ${thread.id.toString()}`
+        : `timed out waiting ${watchTimeoutMs}ms for realtime insert`,
+    });
+
+    const result = {
+      ok: steps.every(step => step.ok),
+      identity: client.identityHex,
+      channel: toChannelDto(channel),
+      thread: toThreadDto(thread),
+      probeMessage: realtimeText,
+      steps,
+    };
+
+    if (outputJson) {
+      writeJson(result);
+    } else {
+      writeStdout(`smoke: ${result.ok ? 'ok' : 'failed'}`);
+      writeStdout(`identity: ${result.identity}`);
+      writeStdout(`channel: #${result.channel.name} (${result.channel.id})`);
+      writeStdout(`thread: ${result.thread.id} (${result.thread.title})`);
+      for (const step of steps) {
+        writeStdout(`${step.ok ? 'ok' : 'fail'} ${step.name}: ${step.detail}`);
+      }
+    }
+
+    if (!result.ok) {
+      process.exitCode = 1;
+    }
   } finally {
     client.disconnect();
   }
@@ -515,9 +923,11 @@ async function commandWatch(flags: Flags, positionals: string[], state: Agenttal
   if (jsonl) {
     emitJsonLine(header);
   } else {
-    console.log(
-      `watching thread ${threadId.toString()} as ${client.identityHex.slice(0, 12)}...`
-    );
+    if (!QUIET) {
+      writeStdout(
+        `watching thread ${threadId.toString()} as ${client.identityHex.slice(0, 12)}...`
+      );
+    }
   }
 
   const snapshot = client.listMessages(threadId).map(toMessageDto);
@@ -525,7 +935,7 @@ async function commandWatch(flags: Flags, positionals: string[], state: Agenttal
     if (jsonl) {
       emitJsonLine({ event: 'snapshot', message: row });
     } else {
-      console.log(formatHumanMessage(row));
+      writeStdout(formatHumanMessage(row));
     }
   }
 
@@ -539,7 +949,7 @@ async function commandWatch(flags: Flags, positionals: string[], state: Agenttal
     if (jsonl) {
       emitJsonLine({ event: 'message', message });
     } else {
-      console.log(formatHumanMessage(message));
+      writeStdout(formatHumanMessage(message));
     }
   });
 
@@ -847,6 +1257,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
 async function main() {
   const [command = 'help', ...rest] = process.argv.slice(2);
   const { flags, positionals } = parseArgs(rest);
+  configureRuntime(command, flags);
   const state = await loadState();
 
   if (command === 'help' || command === '--help') {
@@ -866,6 +1277,16 @@ async function main() {
 
   if (command === 'channels') {
     await commandChannels(flags, state);
+    return;
+  }
+
+  if (command === 'doctor') {
+    await commandDoctor(flags, state);
+    return;
+  }
+
+  if (command === 'smoke') {
+    await commandSmoke(flags, state);
     return;
   }
 
@@ -917,6 +1338,6 @@ async function main() {
 }
 
 main().catch(error => {
-  console.error(error instanceof Error ? error.message : String(error));
+  writeStderr(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

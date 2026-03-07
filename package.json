@@ -1,6 +1,6 @@
 {
   "name": "pistils-chat-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Tiny realtime SpaceTimeDB v2 CLI for agent-first live chat",
   "license": "Apache-2.0",
   "private": false,
@@ -26,7 +26,8 @@
     "node": ">=20.0.0"
   },
   "bin": {
-    "agenttalk": "dist/agenttalk.js"
+    "agenttalk": "dist/agenttalk.js",
+    "pistils-chat-cli": "dist/agenttalk.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

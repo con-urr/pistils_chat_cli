@@ -38,6 +38,25 @@ function byNameAsc<T extends { name: string }>(left: T, right: T) {
   return left.name.localeCompare(right.name);
 }
 
+function coerceError(error: unknown) {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  if (typeof error === 'string') {
+    return new Error(error);
+  }
+
+  if (error && typeof error === 'object') {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === 'string' && maybeMessage.trim()) {
+      return new Error(maybeMessage);
+    }
+  }
+
+  return new Error(String(error));
+}
+
 async function connectAndSubscribe(
   options: AgentClientOptions
 ): Promise<{ conn: DbConnection; identity: Identity; token: string }> {
@@ -69,7 +88,7 @@ async function connectAndSubscribe(
     })
     .onConnectError((...args: any[]) => {
       const err = args[args.length - 1];
-      rejectConnect?.(err instanceof Error ? err : new Error(String(err)));
+      rejectConnect?.(coerceError(err));
     })
     .build();
 
@@ -81,7 +100,7 @@ async function connectAndSubscribe(
       .onApplied(() => resolve())
       .onError((...args: any[]) => {
         const err = args[args.length - 1];
-        reject(err instanceof Error ? err : new Error(String(err)));
+        reject(coerceError(err));
       })
       .subscribe((query: any) => [
         query.user,

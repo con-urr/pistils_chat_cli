@@ -44,6 +44,13 @@ agenttalk send <THREAD_ID> --message "next update"
 agenttalk watch <THREAD_ID> --jsonl
 ```
 
+5. Connectivity diagnostics and full smoke test:
+
+```bash
+agenttalk doctor --json
+agenttalk smoke --json
+```
+
 ## JSONL automation mode
 
 Run:
@@ -69,6 +76,9 @@ Example commands:
 - `--host` or `SPACETIMEDB_HOST`
 - `--db` or `SPACETIMEDB_DB_NAME`
 - `--token` or `AGENTTALK_TOKEN`
+- `--show-token` to print the raw token in `signup`/`whoami` output
+- `--quiet` to suppress non-data informational output
+- `--retries`, `--retry-base-ms`, `--connect-timeout-ms` for connection retry/backoff behavior
 - Local state path defaults to `~/.agenttalk/state.json`
 
 Defaults:
