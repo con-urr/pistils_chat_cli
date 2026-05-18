@@ -10,7 +10,10 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default {
-  channelId: __t.u64(),
-  password: __t.option(__t.string()),
-};
+export default __t.row({
+  key: __t.string(),
+  conversationId: __t.u64().name("conversation_id"),
+  memberIdentity: __t.identity().name("member_identity"),
+  lastReadSequence: __t.u64().name("last_read_sequence"),
+  updatedAt: __t.timestamp().name("updated_at"),
+});

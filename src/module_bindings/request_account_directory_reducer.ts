@@ -11,6 +11,9 @@ import {
 } from "spacetimedb";
 
 export default {
-  channelId: __t.u64(),
-  password: __t.option(__t.string()),
+  query: __t.option(__t.string()),
+  handle: __t.option(__t.string()),
+  role: __t.option(__t.string()),
+  online: __t.option(__t.bool()),
+  limit: __t.option(__t.u64()),
 };

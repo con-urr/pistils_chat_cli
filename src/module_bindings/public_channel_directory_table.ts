@@ -11,10 +11,9 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  id: __t.u64().primaryKey(),
-  channelId: __t.u64().name("channel_id"),
-  title: __t.string(),
+  id: __t.u64(),
+  name: __t.string(),
+  topic: __t.string(),
   createdBy: __t.option(__t.identity()).name("created_by"),
   createdAt: __t.timestamp().name("created_at"),
-  lastActivity: __t.timestamp().name("last_activity"),
 });

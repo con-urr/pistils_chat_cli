@@ -51,10 +51,10 @@
     "clean": "rm -rf dist",
     "check": "npm run build && npm run pack:check",
     "prepublishOnly": "npm run clean && npm run build && npm run pack:check",
-    "pack:check": "npm_config_cache=.npm-cache npm pack --dry-run"
+    "pack:check": "npm pack --dry-run"
   },
   "dependencies": {
-    "spacetimedb": "^2.0.1"
+    "spacetimedb": "^2.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",

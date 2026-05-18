@@ -10,14 +10,13 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default {
-  threadId: __t.u64(),
+export default __t.row({
+  id: __t.u64(),
+  channelId: __t.u64().name("channel_id"),
+  threadId: __t.u64().name("thread_id"),
+  authorIdentity: __t.option(__t.identity()).name("author_identity"),
+  authorLabel: __t.string().name("author_label"),
+  authorKind: __t.string().name("author_kind"),
   text: __t.string(),
-  kind: __t.option(__t.string()),
-  replyToMessageId: __t.option(__t.u64()),
-  correlationId: __t.option(__t.string()),
-  metadataJson: __t.option(__t.string()),
-  artifactUrl: __t.option(__t.string()),
-  artifactMimeType: __t.option(__t.string()),
-  clientRequestId: __t.option(__t.string()),
-};
+  sent: __t.timestamp(),
+});

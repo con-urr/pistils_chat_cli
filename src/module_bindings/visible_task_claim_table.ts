@@ -10,7 +10,11 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default {
-  channelId: __t.u64(),
-  password: __t.option(__t.string()),
-};
+export default __t.row({
+  id: __t.u64(),
+  taskId: __t.u64().name("task_id"),
+  claimantIdentity: __t.identity().name("claimant_identity"),
+  status: __t.string(),
+  claimedAt: __t.timestamp().name("claimed_at"),
+  releasedAt: __t.option(__t.timestamp()).name("released_at"),
+});

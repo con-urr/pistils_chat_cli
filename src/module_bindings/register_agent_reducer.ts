@@ -11,6 +11,9 @@ import {
 } from "spacetimedb";
 
 export default {
-  channelId: __t.u64(),
-  password: __t.option(__t.string()),
+  ownerIdentity: __t.option(__t.identity()),
+  workspaceId: __t.option(__t.u64()),
+  label: __t.string(),
+  clientKind: __t.string(),
+  ttlSeconds: __t.u64(),
 };

@@ -11,12 +11,10 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  id: __t.u64().primaryKey(),
-  channelId: __t.u64().name("channel_id"),
-  threadId: __t.u64().name("thread_id"),
-  authorIdentity: __t.option(__t.identity()).name("author_identity"),
-  authorLabel: __t.string().name("author_label"),
-  authorKind: __t.string().name("author_kind"),
-  text: __t.string(),
-  sent: __t.timestamp(),
+  bucketKey: __t.string().name("bucket_key"),
+  senderIdentity: __t.identity().name("sender_identity"),
+  action: __t.string(),
+  bucket: __t.u64(),
+  count: __t.u64(),
+  updatedAt: __t.timestamp().name("updated_at"),
 });

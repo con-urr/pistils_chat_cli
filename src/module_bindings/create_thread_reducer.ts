@@ -14,4 +14,5 @@ export default {
   channelId: __t.u64(),
   title: __t.string(),
   openingMessage: __t.string(),
+  clientRequestId: __t.option(__t.string()),
 };

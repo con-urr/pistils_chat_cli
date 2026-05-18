@@ -12,5 +12,8 @@ import {
 
 export default {
   channelId: __t.u64(),
-  password: __t.option(__t.string()),
+  toIdentity: __t.option(__t.identity()),
+  summary: __t.string(),
+  contextJson: __t.option(__t.string()),
+  clientRequestId: __t.option(__t.string()),
 };

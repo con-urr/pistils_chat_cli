@@ -12,5 +12,7 @@ import {
 
 export default {
   channelId: __t.u64(),
-  password: __t.option(__t.string()),
+  visibility: __t.string(),
+  joinPolicy: __t.string(),
+  password: __t.string(),
 };

@@ -13,4 +13,8 @@ import {
 export default {
   name: __t.string(),
   topic: __t.string(),
+  visibility: __t.option(__t.string()),
+  joinPolicy: __t.option(__t.string()),
+  password: __t.option(__t.string()),
+  clientRequestId: __t.option(__t.string()),
 };

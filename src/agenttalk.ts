@@ -3,9 +3,15 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import util from 'node:util';
-import { setGlobalLogLevel } from 'spacetimedb';
-import { AgentRealtimeClient, type AgentRole } from './agent-client';
+import { Identity, setGlobalLogLevel } from 'spacetimedb';
+import {
+  AgentRealtimeClient,
+  type AccountType,
+  type AgentRole,
+  type AgentSubscriptionProfile,
+  type RichMessageInput,
+  type RoomOptions,
+} from './agent-client';
 import type * as ModuleTypes from './module_bindings/types';
 
 type Flags = Record<string, string | boolean>;
@@ -22,6 +28,8 @@ const STATE_DIR = process.env.AGENTTALK_STATE_DIR
   ? path.resolve(process.env.AGENTTALK_STATE_DIR)
   : path.join(os.homedir(), '.agenttalk');
 const STATE_PATH = path.join(STATE_DIR, 'state.json');
+const STATE_LOCK_DIR = path.join(STATE_DIR, '.state.lock');
+const DIRECTORY_SYNC_DELAY_MS = 250;
 
 let QUIET = false;
 let STRICT_OUTPUT = false;
@@ -70,15 +78,18 @@ function coerceErrorText(error: unknown): string {
 }
 
 function sanitizeConsoleArgs(args: unknown[]) {
-  const line = util.format(...args);
+  const line = args
+    .map(arg => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+    .join(' ');
   return line.replace(/%c/g, '').trim();
 }
 
 function configureRuntime(command: string, flags: Flags) {
-  QUIET = getBooleanFlag(flags, ['quiet']);
+  const agentMode = getBooleanFlag(flags, ['agent']);
+  QUIET = getBooleanFlag(flags, ['quiet']) || agentMode;
   STRICT_OUTPUT =
-    getBooleanFlag(flags, ['json', 'jsonl']) ||
-    (command === 'run' && getBooleanFlag(flags, ['jsonl']));
+    getBooleanFlag(flags, ['json', 'jsonl', 'agent']) ||
+    ((command === 'run' || command === 'serve') && getBooleanFlag(flags, ['jsonl']));
 
   if (STRICT_OUTPUT || QUIET) {
     setGlobalLogLevel('error');
@@ -171,6 +182,48 @@ function getIntFlag(flags: Flags, keys: string[], defaultValue: number) {
   return parsed;
 }
 
+function getBigIntFlag(flags: Flags, keys: string[]): bigint | undefined {
+  const raw = getStringFlag(flags, keys);
+  if (!raw) {
+    return undefined;
+  }
+
+  return parseRequiredBigInt(raw, keys[0]);
+}
+
+function getDurationFlagMs(flags: Flags, keys: string[], defaultValueMs: number) {
+  let raw: string | undefined;
+  for (const key of keys) {
+    const value = flags[key];
+    if (value === true) {
+      return defaultValueMs;
+    }
+    if (typeof value === 'string') {
+      raw = value;
+      break;
+    }
+  }
+
+  if (!raw) {
+    return defaultValueMs;
+  }
+
+  const match = raw.trim().match(/^(\d+)(ms|s|m)?$/i);
+  if (!match) {
+    throw new Error(`${keys[0]} must be a duration like 500ms, 30s, or 2m`);
+  }
+
+  const value = Number(match[1]);
+  const unit = (match[2] ?? 'ms').toLowerCase();
+  if (unit === 'm') {
+    return value * 60_000;
+  }
+  if (unit === 's') {
+    return value * 1000;
+  }
+  return value;
+}
+
 async function loadState(): Promise<AgenttalkState> {
   try {
     const raw = await fs.readFile(STATE_PATH, 'utf8');
@@ -185,23 +238,105 @@ async function saveState(state: AgenttalkState): Promise<void> {
   await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2) + '\n', 'utf8');
 }
 
+async function acquireStateLock(timeoutMs = 15000) {
+  const started = Date.now();
+
+  while (true) {
+    try {
+      await fs.mkdir(STATE_DIR, { recursive: true });
+      await fs.mkdir(STATE_LOCK_DIR);
+      await fs.writeFile(
+        path.join(STATE_LOCK_DIR, 'owner.json'),
+        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }) + '\n',
+        'utf8'
+      );
+      return async () => {
+        await fs.rm(STATE_LOCK_DIR, { recursive: true, force: true });
+      };
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== 'EEXIST') {
+        throw error;
+      }
+
+      try {
+        const stat = await fs.stat(STATE_LOCK_DIR);
+        if (Date.now() - stat.mtimeMs > 120000) {
+          await fs.rm(STATE_LOCK_DIR, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        continue;
+      }
+
+      if (Date.now() - started > timeoutMs) {
+        throw new Error(`Timed out waiting for state lock at ${STATE_LOCK_DIR}`);
+      }
+
+      await sleep(100);
+    }
+  }
+}
+
+function wantsJson(flags: Flags) {
+  return getBooleanFlag(flags, ['json', 'agent']);
+}
+
 function printHelp() {
   writeStdout(`agenttalk: tiny realtime SpaceTimeDB agent client
 
 Usage:
+  agenttalk init --handle <handle> [--name <display>] [--role agent|human] [--bio text] [--json]
+  agenttalk find <query-or-handle> [--json]
+  agenttalk chat <handle-or-identity> --message <text> [--kind chat|task|handoff|tool_result|approval_request|status|system] [--emit-event] [--json]
+  agenttalk reply <conversation-id> --message <text> [--kind chat|task|handoff|tool_result|approval_request|status|system] [--json]
+  agenttalk group start --with <handle-or-identity,...> [--title text] [--message text] [--json]
+  agenttalk inbox [--wait 30s] [--max 5] [--json|--jsonl]
+  agenttalk listen --conversation <id> [--after <sequence>] [--max 5] [--timeout 60s] [--json|--jsonl]
+  agenttalk listen --thread <id> [--max 5] [--timeout 60s] [--json|--jsonl]
+  agenttalk transcript --conversation <id> [--limit 50] [--after <sequence>|--before <sequence>] [--json]
+  agenttalk transcript --thread <id> [--limit 50] [--after-id <id>|--before-id <id>] [--json]
+  agenttalk account create --handle <handle> [--name <display>] [--role agent|human] [--bio text]
+  agenttalk account bootstrap-operator
+  agenttalk account type <handle> --type free|group|pro|operator [--group-chat true|false]
+  agenttalk account entitlements [--json]
+  agenttalk account search [--query text] [--handle handle] [--role agent|human] [--online true|false] [--json]
   agenttalk signup --name <name> [--role agent|human] [--bio text]
   agenttalk whoami
   agenttalk channels [--json]
   agenttalk doctor [--json]
   agenttalk smoke [--json] [--name <name>] [--channel <channel>]
-  agenttalk create-channel --name <name> --topic <topic>
-  agenttalk join <channel-id-or-name>
+  agenttalk create-channel --name <name> --topic <topic> [--visibility public|private] [--join-policy open|password|invite] [--password text]
+  agenttalk room start --name <name> --with <handle-or-identity,...> [--message text] [--visibility public|private] [--join-policy open|password|invite] [--password text]
+  agenttalk room info <channel-id-or-name> [--json]
+  agenttalk room members <channel-id-or-name> [--json]
+  agenttalk room remove <channel-id-or-name> <handle-or-identity> [--reason text]
+  agenttalk room config <channel-id-or-name> [--visibility public|private] [--join-policy open|password|invite] [--password text]
+  agenttalk room role <channel-id-or-name> <handle-or-identity> --role owner|mod|member
+  agenttalk room kick <channel-id-or-name> <handle-or-identity> [--reason text]
+  agenttalk join <channel-id-or-name> [--password text]
   agenttalk leave <channel-id-or-name>
   agenttalk threads [<channel-id-or-name>] [--json]
   agenttalk create-thread <channel-id-or-name> --title <title> --message <text>
-  agenttalk send <thread-id> --message <text>
+  agenttalk send <thread-id> --message <text> [--kind chat|task|handoff|tool_result|approval_request|status|system]
+  agenttalk conversation start <handle-or-identity> [--title text] [--message text] [--json]
+  agenttalk conversation group --title <title> --members <handle-or-identity,...> [--message text] [--json]
+  agenttalk conversation add <conversation-id> <handle-or-identity> [--role mod|member]
+  agenttalk conversation send <conversation-id> --message <text> [--kind chat|task|handoff|tool_result|approval_request|status|system]
+  agenttalk conversation list [--json]
+  agenttalk conversation messages <conversation-id> [--limit 50] [--after <sequence>|--before <sequence>] [--json]
+  agenttalk task create <channel-id-or-name> --title <title> --description <text> [--priority low|normal|high|urgent] [--assign handle-or-identity]
+  agenttalk task claim <task-id>
+  agenttalk task status <task-id> --status open|claimed|in_progress|blocked|done|cancelled
+  agenttalk task list [channel-id-or-name] [--json]
+  agenttalk handoff create <channel-id-or-name> --summary <text> [--to handle-or-identity] [--context-json json]
+  agenttalk handoff accept <handoff-id>
+  agenttalk handoff list [channel-id-or-name] [--json]
+  agenttalk event emit --kind typing|heartbeat|mention|joined_thread|joined_conversation|status [--channel <channel>] [--thread-id <id>] [--conversation-id <id>] [--target handle-or-identity] [--text text]
   agenttalk watch <thread-id> [--jsonl]
+  agenttalk repair-access
   agenttalk run --jsonl
+  agenttalk serve --jsonl
 
 Global flags:
   --host <url>       default: ${DEFAULT_HOST}
@@ -209,9 +344,12 @@ Global flags:
   --token <token>    override saved token
   --show-token       include raw token in signup/whoami output
   --quiet            suppress non-data informational output
+  --agent            agent-friendly mode: quiet + JSON output
   --retries <n>      connect retry attempts on transient failures (default: 2)
   --retry-base-ms <n> base backoff milliseconds (default: 300)
   --connect-timeout-ms <n> connection timeout milliseconds (default: 15000)
+  --subscription-profile <directory|identity|direct|account-admin|rooms|ops|all>
+                     override the command's optimized realtime subscription set
 
 State file:
   ${STATE_PATH}
@@ -228,6 +366,119 @@ function parseRequiredBigInt(value: string, field: string): bigint {
 
 function normalizeChannelRef(ref: string): string {
   return ref.startsWith('#') ? ref.slice(1) : ref;
+}
+
+function normalizeAccountRef(ref: string): string {
+  return ref.startsWith('@') ? ref.slice(1).trim().toLowerCase() : ref.trim().toLowerCase();
+}
+
+function maybeAccountHandle(ref: string) {
+  const normalized = normalizeAccountRef(ref);
+  return /^[a-z0-9][a-z0-9_-]{2,39}$/.test(normalized) ? normalized : undefined;
+}
+
+function directoryLimitFromFlags(flags: Flags, defaultValue = 20) {
+  return BigInt(Math.min(getIntFlag(flags, ['limit'], defaultValue), 50));
+}
+
+function directoryLimitFromValue(value: unknown, defaultValue = 20) {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : defaultValue;
+  if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+    return BigInt(defaultValue);
+  }
+
+  return BigInt(Math.min(parsed, 50));
+}
+
+function assertChoice<T extends string>(
+  value: string | undefined,
+  field: string,
+  allowed: readonly T[],
+  defaultValue?: T
+): T {
+  if (!value) {
+    if (defaultValue !== undefined) {
+      return defaultValue;
+    }
+    throw new Error(`${field} is required`);
+  }
+
+  if ((allowed as readonly string[]).includes(value)) {
+    return value as T;
+  }
+
+  throw new Error(`${field} must be one of: ${allowed.join(', ')}`);
+}
+
+function parseOptionalBoolean(raw: string | undefined, field: string) {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const normalized = raw.trim().toLowerCase();
+  if (['true', '1', 'yes', 'online'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'offline'].includes(normalized)) {
+    return false;
+  }
+
+  throw new Error(`${field} must be true or false`);
+}
+
+function parseRoomOptions(flags: Flags): RoomOptions {
+  const visibilityRaw = getStringFlag(flags, ['visibility']);
+  const joinPolicyRaw = getStringFlag(flags, ['join-policy', 'joinPolicy']);
+
+  return {
+    visibility: visibilityRaw
+      ? assertChoice(visibilityRaw, 'visibility', ['public', 'private'] as const)
+      : undefined,
+    joinPolicy: joinPolicyRaw
+      ? assertChoice(joinPolicyRaw, 'join-policy', ['open', 'password', 'invite'] as const)
+      : undefined,
+    password: getStringFlag(flags, ['password']),
+  };
+}
+
+function parseRichMessageInput(flags: Flags): RichMessageInput {
+  const kindRaw = getStringFlag(flags, ['kind']);
+  const replyToRaw = getStringFlag(flags, ['reply-to', 'replyToMessageId']);
+  return {
+    kind: kindRaw
+      ? assertChoice(kindRaw, 'kind', [
+          'chat',
+          'task',
+          'handoff',
+          'tool_result',
+          'approval_request',
+          'status',
+          'system',
+        ] as const)
+      : undefined,
+    replyToMessageId: replyToRaw
+      ? parseRequiredBigInt(replyToRaw, 'reply-to')
+      : undefined,
+    correlationId: getStringFlag(flags, ['correlation-id', 'correlationId']),
+    metadataJson: getStringFlag(flags, ['metadata-json', 'metadataJson']),
+    artifactUrl: getStringFlag(flags, ['artifact-url', 'artifactUrl']),
+    artifactMimeType: getStringFlag(flags, ['artifact-mime', 'artifactMimeType']),
+    clientRequestId: getStringFlag(flags, ['client-request-id', 'clientRequestId']),
+  };
+}
+
+function parseAccountRefs(raw: string | undefined, extraRefs: string[] = []) {
+  return [
+    ...(raw ? raw.split(',') : []),
+    ...extraRefs,
+  ]
+    .map(ref => ref.trim())
+    .filter(Boolean);
 }
 
 function toChannelDto(channel: ModuleTypes.Channel) {
@@ -260,6 +511,204 @@ function toMessageDto(message: ModuleTypes.Message) {
   };
 }
 
+function identityHex(identity?: Identity | null) {
+  return identity ? identity.toHexString() : null;
+}
+
+function toAccountDto(account: ModuleTypes.Account) {
+  return {
+    handle: account.handle,
+    identity: account.identity.toHexString(),
+    displayName: account.displayName,
+    role: account.role,
+    bio: account.bio ?? null,
+    online: account.online,
+    createdAt: account.createdAt.toDate().toISOString(),
+    updatedAt: account.updatedAt.toDate().toISOString(),
+    lastSeen: account.lastSeen.toDate().toISOString(),
+  };
+}
+
+function toAccountEntitlementDto(entitlement: ModuleTypes.AccountEntitlement) {
+  return {
+    handle: entitlement.handle,
+    identity: entitlement.identity.toHexString(),
+    accountType: entitlement.accountType,
+    groupChatAllowed: entitlement.groupChatAllowed,
+    createdAt: entitlement.createdAt.toDate().toISOString(),
+    updatedAt: entitlement.updatedAt.toDate().toISOString(),
+    updatedBy: identityHex(entitlement.updatedBy),
+  };
+}
+
+function toRoomConfigDto(config: ModuleTypes.RoomConfig) {
+  return {
+    channelId: config.channelId.toString(),
+    ownerIdentity: config.ownerIdentity.toHexString(),
+    visibility: config.visibility,
+    joinPolicy: config.joinPolicy,
+    passwordConfigured: Boolean(config.password),
+    createdAt: config.createdAt.toDate().toISOString(),
+    updatedAt: config.updatedAt.toDate().toISOString(),
+  };
+}
+
+function toRoomRemovalReceiptDto(receipt: ModuleTypes.RoomRemovalReceipt) {
+  return {
+    id: receipt.id.toString(),
+    channelId: receipt.channelId.toString(),
+    channelName: receipt.channelName,
+    removedIdentity: receipt.removedIdentity.toHexString(),
+    removedBy: receipt.removedBy.toHexString(),
+    reason: receipt.reason,
+    removedAt: receipt.removedAt.toDate().toISOString(),
+  };
+}
+
+function toChannelRoleDto(role: ModuleTypes.ChannelRole) {
+  return {
+    key: role.key,
+    channelId: role.channelId.toString(),
+    memberIdentity: role.memberIdentity.toHexString(),
+    role: role.role,
+    setBy: identityHex(role.setBy),
+    updatedAt: role.updatedAt.toDate().toISOString(),
+  };
+}
+
+function toRoomMemberDto(
+  member: ModuleTypes.ChannelMember,
+  role: ModuleTypes.ChannelRole | undefined,
+  account: ModuleTypes.Account | undefined
+) {
+  return {
+    channelId: member.channelId.toString(),
+    memberIdentity: member.memberIdentity.toHexString(),
+    handle: account?.handle ? `@${account.handle}` : null,
+    displayName: account?.displayName ?? null,
+    role: role?.role ?? 'member',
+    joinedAt: member.joinedAt.toDate().toISOString(),
+  };
+}
+
+function toRichMessageDto(message: ModuleTypes.RichMessage) {
+  return {
+    id: message.id.toString(),
+    legacyMessageId: message.legacyMessageId?.toString() ?? null,
+    channelId: message.channelId.toString(),
+    threadId: message.threadId.toString(),
+    authorIdentity: identityHex(message.authorIdentity),
+    author: message.authorLabel,
+    authorKind: message.authorKind,
+    kind: message.kind,
+    text: message.text,
+    replyToMessageId: message.replyToMessageId?.toString() ?? null,
+    correlationId: message.correlationId ?? null,
+    clientRequestId: message.clientRequestId ?? null,
+    metadataJson: message.metadataJson ?? null,
+    artifactUrl: message.artifactUrl ?? null,
+    artifactMimeType: message.artifactMimeType ?? null,
+    sentAt: message.sent.toDate().toISOString(),
+  };
+}
+
+function toConversationDto(conversation: ModuleTypes.Conversation) {
+  return {
+    id: conversation.id.toString(),
+    kind: conversation.kind,
+    title: conversation.title,
+    createdBy: conversation.createdBy.toHexString(),
+    createdAt: conversation.createdAt.toDate().toISOString(),
+    lastActivity: conversation.lastActivity.toDate().toISOString(),
+  };
+}
+
+function toConversationMemberDto(member: ModuleTypes.ConversationMember) {
+  return {
+    id: member.id.toString(),
+    conversationId: member.conversationId.toString(),
+    memberIdentity: member.memberIdentity.toHexString(),
+    role: member.role,
+    joinedAt: member.joinedAt.toDate().toISOString(),
+  };
+}
+
+function toConversationMessageDto(message: ModuleTypes.ConversationMessage) {
+  return {
+    id: message.id.toString(),
+    conversationId: message.conversationId.toString(),
+    authorIdentity: message.authorIdentity.toHexString(),
+    author: message.authorLabel,
+    authorKind: message.authorKind,
+    kind: message.kind,
+    text: message.text,
+    replyToMessageId: message.replyToMessageId?.toString() ?? null,
+    correlationId: message.correlationId ?? null,
+    clientRequestId: message.clientRequestId ?? null,
+    metadataJson: message.metadataJson ?? null,
+    artifactUrl: message.artifactUrl ?? null,
+    artifactMimeType: message.artifactMimeType ?? null,
+    sequence: message.sequence?.toString() ?? message.id.toString(),
+    sentAt: message.sent.toDate().toISOString(),
+  };
+}
+
+function toTaskDto(task: ModuleTypes.AgentTask) {
+  return {
+    id: task.id.toString(),
+    channelId: task.channelId.toString(),
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    priority: task.priority,
+    createdBy: task.createdBy.toHexString(),
+    assignedTo: identityHex(task.assignedTo),
+    correlationId: task.correlationId ?? null,
+    createdAt: task.createdAt.toDate().toISOString(),
+    updatedAt: task.updatedAt.toDate().toISOString(),
+  };
+}
+
+function toTaskClaimDto(claim: ModuleTypes.TaskClaim) {
+  return {
+    id: claim.id.toString(),
+    taskId: claim.taskId.toString(),
+    claimantIdentity: claim.claimantIdentity.toHexString(),
+    status: claim.status,
+    claimedAt: claim.claimedAt.toDate().toISOString(),
+    releasedAt: claim.releasedAt?.toDate().toISOString() ?? null,
+  };
+}
+
+function toHandoffDto(handoff: ModuleTypes.Handoff) {
+  return {
+    id: handoff.id.toString(),
+    channelId: handoff.channelId.toString(),
+    fromIdentity: handoff.fromIdentity.toHexString(),
+    toIdentity: identityHex(handoff.toIdentity),
+    summary: handoff.summary,
+    contextJson: handoff.contextJson ?? null,
+    status: handoff.status,
+    createdAt: handoff.createdAt.toDate().toISOString(),
+    acceptedAt: handoff.acceptedAt?.toDate().toISOString() ?? null,
+  };
+}
+
+function toAgentEventDto(event: ModuleTypes.AgentEvent) {
+  return {
+    id: event.id.toString(),
+    kind: event.kind,
+    actorIdentity: event.actorIdentity.toHexString(),
+    channelId: event.channelId?.toString() ?? null,
+    threadId: event.threadId?.toString() ?? null,
+    conversationId: event.conversationId?.toString() ?? null,
+    targetIdentity: identityHex(event.targetIdentity),
+    text: event.text ?? null,
+    metadataJson: event.metadataJson ?? null,
+    emittedAt: event.emittedAt.toDate().toISOString(),
+  };
+}
+
 function emitJsonLine(payload: unknown) {
   process.stdout.write(JSON.stringify(payload) + '\n');
 }
@@ -271,7 +720,7 @@ function sleep(ms: number) {
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
-  let timer: NodeJS.Timeout | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       reject(new Error(`${label} timed out after ${timeoutMs}ms`));
@@ -366,63 +815,146 @@ function describeConnectFailure(
   return `connect failed (${attempt}/${totalAttempts}) to ${config.host}/${config.databaseName}: ${hint} Raw: ${text}`;
 }
 
-async function connectClient(flags: Flags, state: AgenttalkState) {
-  const config = resolveConnectConfig(flags, state);
-  const totalAttempts = config.retries + 1;
-  let lastError: unknown;
+async function connectClient(
+  flags: Flags,
+  state: AgenttalkState,
+  defaultProfile: AgentSubscriptionProfile = 'direct'
+) {
+  const release = await acquireStateLock();
 
-  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
-    try {
-      const client = await withTimeout(
-        AgentRealtimeClient.connect({
+  try {
+    const freshState = await loadState();
+    const config = resolveConnectConfig(flags, { ...state, ...freshState });
+    const profile = assertChoice(
+      getStringFlag(flags, ['subscription-profile', 'profile']) ?? defaultProfile,
+      'subscription-profile',
+      [
+        'directory',
+        'identity',
+        'direct',
+        'account-admin',
+        'rooms',
+        'ops',
+        'all',
+      ] as const
+    );
+    const includeFullConversationHistory = getBooleanFlag(flags, [
+      'full-conversation-history',
+    ]);
+    const totalAttempts = config.retries + 1;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+      try {
+        const client = await withTimeout(
+          AgentRealtimeClient.connect({
+            host: config.host,
+            databaseName: config.databaseName,
+            token: config.token,
+            subscriptionProfile: profile,
+            includeFullConversationHistory,
+          }),
+          config.connectTimeoutMs,
+          'SpaceTimeDB connect'
+        );
+
+        const nextState: AgenttalkState = {
           host: config.host,
           databaseName: config.databaseName,
-          token: config.token,
-        }),
-        config.connectTimeoutMs,
-        'SpaceTimeDB connect'
-      );
+          token: client.token,
+        };
 
-      const nextState: AgenttalkState = {
-        host: config.host,
-        databaseName: config.databaseName,
-        token: client.token,
-      };
+        await saveState(nextState);
+        return { client, state: nextState };
+      } catch (error) {
+        lastError = error;
+        const text = coerceErrorText(error);
+        const retryable = isTransientConnectError(text);
 
-      await saveState(nextState);
-      return { client, state: nextState };
-    } catch (error) {
-      lastError = error;
-      const text = coerceErrorText(error);
-      const retryable = isTransientConnectError(text);
+        if (!retryable || attempt >= totalAttempts) {
+          throw new Error(describeConnectFailure(error, config, attempt, totalAttempts));
+        }
 
-      if (!retryable || attempt >= totalAttempts) {
-        throw new Error(describeConnectFailure(error, config, attempt, totalAttempts));
+        const delayMs = Math.min(config.retryBaseMs * 2 ** (attempt - 1), 5000);
+        logWarn(
+          `${describeConnectFailure(error, config, attempt, totalAttempts)}; retrying in ${delayMs}ms`
+        );
+        await sleep(delayMs);
       }
-
-      const delayMs = Math.min(config.retryBaseMs * 2 ** (attempt - 1), 5000);
-      logWarn(
-        `${describeConnectFailure(error, config, attempt, totalAttempts)}; retrying in ${delayMs}ms`
-      );
-      await sleep(delayMs);
     }
-  }
 
-  throw new Error(describeConnectFailure(lastError, config, totalAttempts, totalAttempts));
+    throw new Error(describeConnectFailure(lastError, config, totalAttempts, totalAttempts));
+  } finally {
+    await release();
+  }
 }
 
-function resolveChannelId(client: AgentRealtimeClient, channelRef: string): bigint {
+async function resolveChannelId(
+  client: AgentRealtimeClient,
+  channelRef: string
+): Promise<bigint> {
   if (/^\d+$/.test(channelRef)) {
     return BigInt(channelRef);
   }
 
   const normalized = normalizeChannelRef(channelRef);
+  await client.requestChannelDirectory({ name: normalized, limit: 1n });
+  await sleep(DIRECTORY_SYNC_DELAY_MS);
   const found = client.listChannels().find(row => row.name === normalized);
   if (!found) {
+    const receipt = client
+      .listRoomRemovalReceipts()
+      .find(row => row.channelName === normalized);
+    if (receipt) {
+      return receipt.channelId;
+    }
+
     throw new Error(`Unknown channel: ${channelRef}`);
   }
 
   return found.id;
+}
+
+function findVisibleChannel(client: AgentRealtimeClient, channelId: bigint) {
+  return client.listChannels().find(row => row.id === channelId);
+}
+
+async function resolveAccountIdentity(
+  client: AgentRealtimeClient,
+  accountRef: string
+): Promise<Identity> {
+  const trimmed = accountRef.trim();
+  if (!trimmed) {
+    throw new Error('Account reference is required');
+  }
+
+  const maybeHex = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed;
+  if (/^[0-9a-fA-F]{64}$/.test(maybeHex)) {
+    return Identity.fromString(maybeHex);
+  }
+
+  const handle = normalizeAccountRef(trimmed);
+  await client.requestAccountDirectory({ handle, limit: 1n });
+  await sleep(DIRECTORY_SYNC_DELAY_MS);
+  const matches = client.searchAccounts({ handle });
+  const match = matches[0];
+  if (!match) {
+    throw new Error(`Unknown account handle: ${trimmed}`);
+  }
+
+  return match.identity;
+}
+
+async function resolveAccountIdentities(client: AgentRealtimeClient, refs: string[]) {
+  if (refs.length === 0) {
+    throw new Error('At least one account handle or identity is required');
+  }
+
+  const identities: Identity[] = [];
+  for (const ref of refs) {
+    identities.push(await resolveAccountIdentity(client, ref));
+  }
+  return identities;
 }
 
 function findCreatedThread(
@@ -448,8 +980,1428 @@ function findCreatedThread(
   return threads[0];
 }
 
+function findCreatedConversation(
+  client: AgentRealtimeClient,
+  beforeIds: Set<string>,
+  title?: string
+) {
+  const conversations = client.listConversations();
+  const byIdDiff = conversations.find(row => !beforeIds.has(row.id.toString()));
+  if (byIdDiff) {
+    return byIdDiff;
+  }
+
+  if (title) {
+    const byTitle = conversations.find(
+      row =>
+        row.title === title && row.createdBy.toHexString() === client.identityHex
+    );
+    if (byTitle) {
+      return byTitle;
+    }
+  }
+
+  return conversations[0];
+}
+
+function sameIdentityText(left: Identity, right: Identity) {
+  return left.toHexString() === right.toHexString();
+}
+
+function findMyAccount(client: AgentRealtimeClient) {
+  return client
+    .listAccounts()
+    .find(row => row.identity.toHexString() === client.identityHex);
+}
+
+function isCurrentChannelMember(client: AgentRealtimeClient, channelId: bigint) {
+  return client
+    .listMemberships()
+    .some(
+      row =>
+        row.channelId === channelId &&
+        row.memberIdentity.toHexString() === client.identityHex
+    );
+}
+
+function roomMembers(client: AgentRealtimeClient, channelId: bigint) {
+  const accounts = new Map(
+    client.listAccounts().map(account => [account.identity.toHexString(), account])
+  );
+  const roles = new Map(
+    client
+      .listChannelRoles()
+      .filter(role => role.channelId === channelId)
+      .map(role => [role.memberIdentity.toHexString(), role])
+  );
+
+  return client
+    .listMemberships()
+    .filter(row => row.channelId === channelId)
+    .map(member =>
+      toRoomMemberDto(
+        member,
+        roles.get(member.memberIdentity.toHexString()),
+        accounts.get(member.memberIdentity.toHexString())
+      )
+    )
+    .sort((left, right) => {
+      const roleOrder = { owner: 0, mod: 1, member: 2 } as Record<string, number>;
+      const leftRole = roleOrder[left.role] ?? 99;
+      const rightRole = roleOrder[right.role] ?? 99;
+      if (leftRole !== rightRole) {
+        return leftRole - rightRole;
+      }
+      return (left.handle ?? left.memberIdentity).localeCompare(
+        right.handle ?? right.memberIdentity
+      );
+    });
+}
+
+function latestRoomRemovalReceipt(client: AgentRealtimeClient, channelId?: bigint) {
+  return client.listRoomRemovalReceipts(channelId)[0];
+}
+
+function accessDeniedMessage({
+  operation,
+  channelName,
+  channelId,
+  receipt,
+}: {
+  operation: string;
+  channelName?: string;
+  channelId?: bigint;
+  receipt?: ModuleTypes.RoomRemovalReceipt;
+}) {
+  const room = channelName ? `#${channelName}` : channelId ? `channel ${channelId}` : 'this room';
+  const base = `Access denied: ${operation} requires room membership for ${room}.`;
+  if (!receipt) {
+    return `${base} Join the room or ask a room owner/mod to add you.`;
+  }
+
+  return `${base} Removal receipt: removed from #${receipt.channelName} at ${receipt.removedAt
+    .toDate()
+    .toISOString()} by ${receipt.removedBy.toHexString()} (${receipt.reason}).`;
+}
+
+function accessDeniedPayload({
+  operation,
+  channel,
+  channelId,
+  receipt,
+}: {
+  operation: string;
+  channel?: ModuleTypes.Channel;
+  channelId?: bigint;
+  receipt?: ModuleTypes.RoomRemovalReceipt;
+}) {
+  const resolvedChannelId = channel?.id ?? channelId ?? receipt?.channelId;
+  return {
+    ok: false,
+    error: 'access_denied',
+    reason: 'not_room_member',
+    operation,
+    channelId: resolvedChannelId?.toString() ?? null,
+    room: channel ? toChannelDto(channel) : null,
+    removalReceipt: receipt ? toRoomRemovalReceiptDto(receipt) : null,
+    message: accessDeniedMessage({
+      operation,
+      channelName: channel?.name ?? receipt?.channelName,
+      channelId: resolvedChannelId,
+      receipt,
+    }),
+  };
+}
+
+function isRoomMembershipError(error: unknown) {
+  const text = coerceErrorText(error).toLowerCase();
+  return (
+    text.includes('must join this channel') ||
+    text.includes('room requires') ||
+    text.includes('requires room membership') ||
+    text.includes('access denied')
+  );
+}
+
+function writeAccessDeniedResult(
+  payload: ReturnType<typeof accessDeniedPayload> & Record<string, unknown>,
+  flags: Flags,
+  jsonl = false
+) {
+  process.exitCode = 1;
+
+  if (jsonl) {
+    emitJsonLine({ event: 'error', ...payload });
+    emitJsonLine({ event: 'done', ok: false, error: payload.error });
+    return;
+  }
+
+  if (wantsJson(flags)) {
+    writeJson(payload);
+    return;
+  }
+
+  writeStderr(payload.message);
+}
+
+function conversationMemberSet(client: AgentRealtimeClient, conversationId: bigint) {
+  return new Set(
+    client
+      .listConversationMembers(conversationId)
+      .map(row => row.memberIdentity.toHexString())
+  );
+}
+
+function findReusableDirectConversation(
+  client: AgentRealtimeClient,
+  targetIdentity: Identity
+) {
+  const expected = new Set([client.identityHex, targetIdentity.toHexString()]);
+  return client.listConversations().find(row => {
+    if (row.kind !== 'direct') {
+      return false;
+    }
+    const members = conversationMemberSet(client, row.id);
+    return (
+      members.size === expected.size &&
+      Array.from(expected).every(identity => members.has(identity))
+    );
+  });
+}
+
+function findReusableGroupConversation(
+  client: AgentRealtimeClient,
+  memberIdentities: Identity[]
+) {
+  const expected = new Set([
+    client.identityHex,
+    ...memberIdentities.map(identity => identity.toHexString()),
+  ]);
+
+  return client.listConversations().find(row => {
+    if (row.kind !== 'group') {
+      return false;
+    }
+    const members = conversationMemberSet(client, row.id);
+    return (
+      members.size === expected.size &&
+      Array.from(expected).every(identity => members.has(identity))
+    );
+  });
+}
+
+function conversationNextCommands(conversationId: string) {
+  return [
+    `agenttalk listen --conversation ${conversationId} --timeout 60s --max 5 --jsonl`,
+    `agenttalk transcript --conversation ${conversationId} --limit 50 --json`,
+    `agenttalk reply ${conversationId} --message "..." --json`,
+  ];
+}
+
+function recentConversationMessages(client: AgentRealtimeClient, max: number) {
+  return client
+    .listUnreadConversationMessages()
+    .filter(row => row.authorIdentity.toHexString() !== client.identityHex)
+    .map(toConversationMessageDto)
+    .slice(0, max);
+}
+
+function maxConversationSequence(messages: ReturnType<typeof toConversationMessageDto>[]) {
+  let max = 0n;
+  for (const message of messages) {
+    const sequence = parseRequiredBigInt(message.sequence, 'sequence');
+    if (sequence > max) {
+      max = sequence;
+    }
+  }
+  return max;
+}
+
+function formatConversationMessage(message: ReturnType<typeof toConversationMessageDto>) {
+  return `[${message.sentAt}] conversation:${message.conversationId}#${message.sequence} ${message.author} (${message.kind}): ${message.text}`;
+}
+
 function formatHumanMessage(message: ReturnType<typeof toMessageDto>): string {
   return `[${message.sentAt}] ${message.author} (${message.authorKind}): ${message.text}`;
+}
+
+async function commandInit(flags: Flags, positionals: string[], state: AgenttalkState) {
+  const handle = getStringFlag(flags, ['handle']) ?? positionals[0];
+  if (!handle) {
+    throw new Error('init requires --handle <handle>');
+  }
+
+  const roleRaw = getStringFlag(flags, ['role']) ?? 'agent';
+  const role: AgentRole = roleRaw === 'human' ? 'human' : 'agent';
+  const displayName =
+    getStringFlag(flags, ['name', 'display-name', 'displayName']) ?? handle;
+  const bio = getStringFlag(flags, ['bio']) ?? '';
+  const { client, state: resolvedState } = await connectClient(
+    flags,
+    state,
+    'directory'
+  );
+
+  try {
+    const normalizedHandle = normalizeAccountRef(handle);
+    await client.requestAccountDirectory({ handle: normalizedHandle, limit: 1n });
+    await sleep(DIRECTORY_SYNC_DELAY_MS);
+    const existingByIdentity = findMyAccount(client);
+    const existingByHandle = client.searchAccounts({ handle: normalizedHandle })[0];
+
+    if (
+      existingByHandle &&
+      existingByHandle.identity.toHexString() !== client.identityHex
+    ) {
+      throw new Error(`Account handle is already owned by another identity: ${normalizedHandle}`);
+    }
+
+    if (existingByIdentity && existingByIdentity.handle !== normalizedHandle) {
+      throw new Error(
+        `This state already owns @${existingByIdentity.handle}; use a different AGENTTALK_STATE_DIR for @${normalizedHandle}`
+      );
+    }
+
+    if (!existingByIdentity || existingByIdentity.handle === normalizedHandle) {
+      await client.createAccount({ handle: normalizedHandle, displayName, role, bio });
+      await client.requestAccountDirectory({ handle: normalizedHandle, limit: 1n });
+      await sleep(DIRECTORY_SYNC_DELAY_MS);
+    }
+
+    const account =
+      client.searchAccounts({ handle: normalizedHandle })[0] ??
+      existingByIdentity;
+    const payload = {
+      ok: true,
+      identity: client.identityHex,
+      account: account ? toAccountDto(account) : null,
+      statePath: STATE_PATH,
+      host: resolvedState.host,
+      databaseName: resolvedState.databaseName,
+      next: [
+        `agenttalk find <handle-or-query> --json`,
+        `agenttalk chat @some-agent --message "hello" --json`,
+        `agenttalk inbox --wait 30s --json`,
+      ],
+    };
+
+    if (wantsJson(flags)) {
+      writeJson(payload);
+      return;
+    }
+
+    writeStdout(`initialized @${normalizedHandle} as ${client.identityHex}`);
+    writeStdout(`state: ${STATE_PATH}`);
+    writeStdout(`next: ${payload.next[0]}`);
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandFind(flags: Flags, positionals: string[], state: AgenttalkState) {
+  const query =
+    getStringFlag(flags, ['query', 'q', 'handle']) ??
+    (positionals.length > 0 ? positionals.join(' ') : undefined);
+  if (!query) {
+    throw new Error('find requires <query-or-handle>');
+  }
+
+  const { client } = await connectClient(flags, state, 'directory');
+
+  try {
+    const limit = directoryLimitFromFlags(flags);
+    const normalized = maybeAccountHandle(query);
+    let rows: ModuleTypes.Account[] = [];
+    if (normalized) {
+      await client.requestAccountDirectory({ handle: normalized, limit: 1n });
+      await sleep(DIRECTORY_SYNC_DELAY_MS);
+      rows = client.searchAccounts({ handle: normalized });
+    }
+    if (rows.length === 0) {
+      await client.requestAccountDirectory({ query, limit });
+      await sleep(DIRECTORY_SYNC_DELAY_MS);
+      rows = client.searchAccounts({ query });
+    }
+    const accounts = rows.map(toAccountDto);
+
+    if (wantsJson(flags)) {
+      writeJson({ ok: true, accounts });
+      return;
+    }
+
+    for (const account of accounts) {
+      writeStdout(
+        `@${account.handle}\t${account.role}\t${account.online ? 'online' : 'offline'}\t${account.displayName}`
+      );
+    }
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandChat(flags: Flags, positionals: string[], state: AgenttalkState) {
+  const targetRef = positionals[0] ?? getStringFlag(flags, ['to', 'target']);
+  const message = getStringFlag(flags, ['message', 'text']);
+  if (!targetRef || !message) {
+    throw new Error('chat requires <handle-or-identity> --message <text>');
+  }
+
+  const { client } = await connectClient(flags, state, 'direct');
+
+  try {
+    const targetIdentity = await resolveAccountIdentity(client, targetRef);
+    const targetAccount = client
+      .listAccounts()
+      .find(row => sameIdentityText(row.identity, targetIdentity));
+    let conversation = getBooleanFlag(flags, ['new'])
+      ? undefined
+      : findReusableDirectConversation(client, targetIdentity);
+    const reused = Boolean(conversation);
+
+    if (!conversation) {
+      const beforeIds = new Set(
+        client.listConversations().map(row => row.id.toString())
+      );
+      await client.createDirectConversation(
+        targetIdentity,
+        getStringFlag(flags, ['title']) ?? '',
+        ''
+      );
+      await sleep(250);
+      conversation = findCreatedConversation(client, beforeIds);
+    }
+
+    if (!conversation) {
+      throw new Error('Could not resolve created conversation');
+    }
+
+    await client.sendConversationMessage(
+      conversation.id,
+      message,
+      parseRichMessageInput(flags)
+    );
+    if (getBooleanFlag(flags, ['emit-event', 'mention-event'])) {
+      await client.emitAgentEvent({
+        kind: 'mention',
+        conversationId: conversation.id,
+        targetIdentity,
+        text: message,
+      });
+    }
+
+    const payload = {
+      ok: true,
+      reused,
+      conversation: toConversationDto(conversation),
+      target: targetAccount ? toAccountDto(targetAccount) : targetIdentity.toHexString(),
+      sent: message,
+      next: conversationNextCommands(conversation.id.toString()),
+    };
+
+    if (wantsJson(flags)) {
+      writeJson(payload);
+      return;
+    }
+
+    writeStdout(
+      `sent to ${targetAccount ? `@${targetAccount.handle}` : targetIdentity.toHexString()} in conversation ${conversation.id.toString()}`
+    );
+    writeStdout(`next: ${payload.next[0]}`);
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandReply(flags: Flags, positionals: string[], state: AgenttalkState) {
+  const conversationIdRaw =
+    positionals[0] ?? getStringFlag(flags, ['conversation', 'conversation-id']);
+  const message = getStringFlag(flags, ['message', 'text']);
+  if (!conversationIdRaw || !message) {
+    throw new Error('reply requires <conversation-id> --message <text>');
+  }
+
+  const conversationId = parseRequiredBigInt(conversationIdRaw, 'conversation-id');
+  const { client } = await connectClient(flags, state, 'direct');
+
+  try {
+    await client.sendConversationMessage(
+      conversationId,
+      message,
+      parseRichMessageInput(flags)
+    );
+    const conversation = client
+      .listConversations()
+      .find(row => row.id === conversationId);
+    const payload = {
+      ok: true,
+      conversation: conversation ? toConversationDto(conversation) : null,
+      sent: message,
+      next: conversationNextCommands(conversationId.toString()),
+    };
+
+    if (wantsJson(flags)) {
+      writeJson(payload);
+      return;
+    }
+
+    writeStdout(`sent to conversation ${conversationId.toString()}`);
+    writeStdout(`next: ${payload.next[0]}`);
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandGroup(flags: Flags, positionals: string[], state: AgenttalkState) {
+  const subcommand = positionals[0] ?? 'start';
+  if (subcommand !== 'start') {
+    throw new Error(`Unknown group command: ${subcommand}`);
+  }
+
+  const refs = parseAccountRefs(
+    getStringFlag(flags, ['with', 'members']),
+    positionals.slice(1)
+  );
+  const message = getStringFlag(flags, ['message', 'text']) ?? '';
+  const { client } = await connectClient(flags, state, 'direct');
+
+  try {
+    const memberIdentities = await resolveAccountIdentities(client, refs);
+    let conversation = getBooleanFlag(flags, ['new'])
+      ? undefined
+      : findReusableGroupConversation(client, memberIdentities);
+    const reused = Boolean(conversation);
+    const memberHandles = memberIdentities.map(identity => {
+      const account = client
+        .listAccounts()
+        .find(row => sameIdentityText(row.identity, identity));
+      return account ? `@${account.handle}` : identity.toHexString().slice(0, 12);
+    });
+    const title =
+      getStringFlag(flags, ['title']) ??
+      `Group: ${memberHandles.join(', ')}`;
+
+    if (!conversation) {
+      const beforeIds = new Set(
+        client.listConversations().map(row => row.id.toString())
+      );
+      await client.createGroupConversation(title, memberIdentities, '');
+      await sleep(250);
+      conversation = findCreatedConversation(client, beforeIds, title);
+    }
+
+    if (!conversation) {
+      throw new Error('Could not resolve created group conversation');
+    }
+
+    if (message) {
+      await client.sendConversationMessage(
+        conversation.id,
+        message,
+        parseRichMessageInput(flags)
+      );
+      await sleep(250);
+    }
+
+    const payload = {
+      ok: true,
+      reused,
+      conversation: toConversationDto(conversation),
+      members: client.listConversationMembers(conversation.id).map(toConversationMemberDto),
+      sent: message || null,
+      next: conversationNextCommands(conversation.id.toString()),
+    };
+
+    if (wantsJson(flags)) {
+      writeJson(payload);
+      return;
+    }
+
+    writeStdout(`group conversation ${conversation.id.toString()} ${reused ? 'reused' : 'ready'}`);
+    writeStdout(`next: ${payload.next[0]}`);
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandInbox(flags: Flags, state: AgenttalkState) {
+  const max = getIntFlag(flags, ['max'], 10);
+  const hasWait = flags.wait !== undefined;
+  const waitMs = hasWait ? getDurationFlagMs(flags, ['wait'], 30000) : 0;
+  const jsonl = getBooleanFlag(flags, ['jsonl']);
+  const { client } = await connectClient(flags, state, 'direct');
+
+  try {
+    if (jsonl) {
+      emitJsonLine({ event: 'ready', identity: client.identityHex, waitMs, max });
+    }
+
+    const recent = recentConversationMessages(client, max);
+    if (!hasWait) {
+      const readThrough = maxConversationSequence(recent);
+      if (readThrough > 0n) {
+        for (const conversationId of new Set(recent.map(message => message.conversationId))) {
+          const conversationMax = maxConversationSequence(
+            recent.filter(message => message.conversationId === conversationId)
+          );
+          await client.markConversationRead(BigInt(conversationId), conversationMax);
+        }
+      }
+
+      if (jsonl) {
+        for (const message of recent) {
+          emitJsonLine({ event: 'message', message });
+        }
+        emitJsonLine({ event: 'done', timedOut: false, count: recent.length });
+      } else if (wantsJson(flags)) {
+        writeJson({ ok: true, messages: recent, timedOut: false });
+      } else {
+        for (const message of recent) {
+          writeStdout(formatConversationMessage(message));
+        }
+      }
+      return;
+    }
+
+    const waited = await waitForConversationMessages({
+      client,
+      max,
+      timeoutMs: waitMs,
+    });
+    const messages = waited.messages.map(toConversationMessageDto);
+    for (const conversationId of new Set(messages.map(message => message.conversationId))) {
+      const conversationMax = maxConversationSequence(
+        messages.filter(message => message.conversationId === conversationId)
+      );
+      if (conversationMax > 0n) {
+        await client.markConversationRead(BigInt(conversationId), conversationMax);
+      }
+    }
+
+    if (jsonl) {
+      for (const message of messages) {
+        emitJsonLine({ event: 'message', message });
+      }
+      emitJsonLine({
+        event: 'done',
+        timedOut: waited.timedOut,
+        count: messages.length,
+        recent,
+      });
+      return;
+    }
+
+    const payload = {
+      ok: true,
+      messages,
+      recent: messages.length > 0 ? [] : recent,
+      timedOut: waited.timedOut,
+      next: [`agenttalk inbox --wait 30s --json`],
+    };
+
+    if (wantsJson(flags)) {
+      writeJson(payload);
+      return;
+    }
+
+    const toPrint = messages.length > 0 ? messages : recent;
+    for (const message of toPrint) {
+      writeStdout(formatConversationMessage(message));
+    }
+    if (waited.timedOut) {
+      writeStdout(`timed out after ${waitMs}ms`);
+    }
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandListen(flags: Flags, positionals: string[], state: AgenttalkState) {
+  const conversationRaw =
+    getStringFlag(flags, ['conversation', 'conversation-id']) ??
+    (positionals[0] === 'conversation' ? positionals[1] : undefined);
+  const threadRaw =
+    getStringFlag(flags, ['thread', 'thread-id']) ??
+    (positionals[0] === 'thread' ? positionals[1] : undefined);
+
+  if (!conversationRaw && !threadRaw) {
+    throw new Error('listen requires --conversation <id> or --thread <id>');
+  }
+
+  const max = getIntFlag(flags, ['max'], 1);
+  const snapshotMax = getIntFlag(flags, ['snapshot'], 10);
+  const timeoutMs = getDurationFlagMs(flags, ['timeout'], 30000);
+  const jsonl = getBooleanFlag(flags, ['jsonl']);
+  const { client } = await connectClient(
+    flags,
+    state,
+    conversationRaw ? 'direct' : 'rooms'
+  );
+
+  try {
+    if (conversationRaw) {
+      const conversationId = parseRequiredBigInt(conversationRaw, 'conversation-id');
+      const afterSequence =
+        getBigIntFlag(flags, ['after', 'after-sequence']) ??
+        client.conversationReadSequence(conversationId);
+      const requestLimit = BigInt(Math.max(max, snapshotMax, 1));
+      await client.requestConversationMessages({
+        conversationId,
+        afterSequence,
+        limit: requestLimit,
+      });
+      await sleep(250);
+      const snapshot = client
+        .listRequestedConversationMessages(conversationId)
+        .filter(row => (row.sequence ?? row.id) > afterSequence)
+        .map(toConversationMessageDto)
+        .slice(0, snapshotMax);
+      const snapshotReadThrough = maxConversationSequence(snapshot);
+      if (snapshotReadThrough > 0n) {
+        await client.markConversationRead(conversationId, snapshotReadThrough);
+        await client.requestConversationMessages({
+          conversationId,
+          afterSequence: snapshotReadThrough,
+          limit: BigInt(Math.max(max, 1)),
+        });
+        await sleep(100);
+      }
+
+      if (jsonl) {
+        emitJsonLine({
+          event: 'ready',
+          kind: 'conversation',
+          conversationId: conversationId.toString(),
+          afterSequence: afterSequence.toString(),
+          timeoutMs,
+          max,
+        });
+        for (const message of snapshot) {
+          emitJsonLine({ event: 'snapshot', message });
+        }
+      }
+
+      const waited = await waitForConversationMessages({
+        client,
+        conversationId,
+        max,
+        timeoutMs,
+        includeOwn: true,
+      });
+      const messages = waited.messages.map(toConversationMessageDto);
+      const readThrough = maxConversationSequence(messages);
+      if (readThrough > 0n) {
+        await client.markConversationRead(conversationId, readThrough);
+      }
+
+      if (jsonl) {
+        for (const message of messages) {
+          emitJsonLine({ event: 'message', message });
+        }
+        emitJsonLine({ event: 'done', timedOut: waited.timedOut, count: messages.length });
+      } else if (wantsJson(flags)) {
+        writeJson({ ok: true, snapshot, messages, timedOut: waited.timedOut });
+      } else {
+        for (const message of snapshot) {
+          writeStdout(`snapshot ${formatConversationMessage(message)}`);
+        }
+        for (const message of messages) {
+          writeStdout(formatConversationMessage(message));
+        }
+        if (waited.timedOut) {
+          writeStdout(`timed out after ${timeoutMs}ms`);
+        }
+      }
+      return;
+    }
+
+    const threadId = parseRequiredBigInt(threadRaw!, 'thread-id');
+    try {
+      await client.watchThread(threadId);
+    } catch (error) {
+      if (!isRoomMembershipError(error)) {
+        throw error;
+      }
+
+      const receipt = latestRoomRemovalReceipt(client);
+      const payload = {
+        ...accessDeniedPayload({
+          operation: 'listen',
+          receipt,
+        }),
+        threadId: threadId.toString(),
+        reducerError: coerceErrorText(error),
+      };
+      writeAccessDeniedResult(payload, flags, jsonl);
+      return;
+    }
+    const snapshot = client.listMessages(threadId).map(toMessageDto).slice(-snapshotMax);
+
+    if (jsonl) {
+      emitJsonLine({
+        event: 'ready',
+        kind: 'thread',
+        threadId: threadId.toString(),
+        timeoutMs,
+        max,
+      });
+      for (const message of snapshot) {
+        emitJsonLine({ event: 'snapshot', message });
+      }
+    }
+
+    const waited = await waitForThreadMessages({
+      client,
+      threadId,
+      max,
+      timeoutMs,
+      includeOwn: true,
+    });
+    const messages = waited.messages.map(toMessageDto);
+
+    if (jsonl) {
+      for (const message of messages) {
+        emitJsonLine({ event: 'message', message });
+      }
+      emitJsonLine({ event: 'done', timedOut: waited.timedOut, count: messages.length });
+    } else if (wantsJson(flags)) {
+      writeJson({ ok: true, snapshot, messages, timedOut: waited.timedOut });
+    } else {
+      for (const message of snapshot) {
+        writeStdout(`snapshot ${formatHumanMessage(message)}`);
+      }
+      for (const message of messages) {
+        writeStdout(formatHumanMessage(message));
+      }
+      if (waited.timedOut) {
+        writeStdout(`timed out after ${timeoutMs}ms`);
+      }
+    }
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandTranscript(
+  flags: Flags,
+  positionals: string[],
+  state: AgenttalkState
+) {
+  const conversationRaw =
+    getStringFlag(flags, ['conversation', 'conversation-id']) ??
+    (positionals[0] === 'conversation' ? positionals[1] : undefined);
+  const threadRaw =
+    getStringFlag(flags, ['thread', 'thread-id']) ??
+    (positionals[0] === 'thread' ? positionals[1] : undefined) ??
+    (positionals.length === 1 && /^\d+$/.test(positionals[0]) ? positionals[0] : undefined);
+
+  if (!conversationRaw && !threadRaw) {
+    throw new Error('transcript requires --conversation <id> or --thread <id>');
+  }
+
+  const limit = Math.min(getIntFlag(flags, ['limit'], 50), 100);
+  const afterSequence = getBigIntFlag(flags, ['after', 'after-sequence']);
+  const beforeSequence = getBigIntFlag(flags, ['before', 'before-sequence']);
+  if (afterSequence && beforeSequence) {
+    throw new Error('transcript accepts --after or --before, not both');
+  }
+
+  const { client } = await connectClient(
+    flags,
+    state,
+    conversationRaw ? 'direct' : 'rooms'
+  );
+
+  try {
+    if (conversationRaw) {
+      const conversationId = parseRequiredBigInt(conversationRaw, 'conversation-id');
+      const conversation = client
+        .listConversations()
+        .find(row => row.id === conversationId);
+      await client.requestConversationMessages({
+        conversationId,
+        afterSequence,
+        beforeSequence,
+        limit: BigInt(limit),
+      });
+      await sleep(250);
+      const messages = client
+        .listRequestedConversationMessages(conversationId)
+        .map(toConversationMessageDto);
+      const firstSequence = messages[0]?.sequence ?? null;
+      const lastSequence = messages[messages.length - 1]?.sequence ?? null;
+      const payload = {
+        ok: true,
+        conversation: conversation ? toConversationDto(conversation) : null,
+        messages,
+        page: {
+          limit,
+          count: messages.length,
+          afterSequence: afterSequence?.toString() ?? null,
+          beforeSequence: beforeSequence?.toString() ?? null,
+          previousBeforeSequence: firstSequence,
+          nextAfterSequence: lastSequence,
+        },
+      };
+
+      if (wantsJson(flags)) {
+        writeJson(payload);
+        return;
+      }
+
+      writeStdout(
+        `conversation ${conversationId.toString()}${conversation ? `: ${conversation.title}` : ''} (limit ${limit})`
+      );
+      for (const message of messages) {
+        writeStdout(formatConversationMessage(message));
+      }
+      return;
+    }
+
+    const threadId = parseRequiredBigInt(threadRaw!, 'thread-id');
+    try {
+      await client.watchThread(threadId);
+    } catch (error) {
+      if (!isRoomMembershipError(error)) {
+        throw error;
+      }
+
+      const receipt = latestRoomRemovalReceipt(client);
+      const payload = {
+        ...accessDeniedPayload({
+          operation: 'transcript',
+          receipt,
+        }),
+        threadId: threadId.toString(),
+        reducerError: coerceErrorText(error),
+      };
+      writeAccessDeniedResult(payload, flags);
+      return;
+    }
+    const thread = client.listThreads().find(row => row.id === threadId);
+    const afterId = getBigIntFlag(flags, ['after-id']);
+    const beforeId = getBigIntFlag(flags, ['before-id']);
+    if (afterId && beforeId) {
+      throw new Error('thread transcript accepts --after-id or --before-id, not both');
+    }
+    const threadRows = client
+      .listMessages(threadId)
+      .filter(row => (afterId ? row.id > afterId : true))
+      .filter(row => (beforeId ? row.id < beforeId : true));
+    const pagedThreadRows = beforeId
+      ? threadRows.slice(-limit)
+      : threadRows.slice(0, limit);
+    const messages = pagedThreadRows.map(toMessageDto);
+    const richRows = client
+      .listRichMessages(threadId)
+      .filter(row => {
+        const sourceId = row.legacyMessageId ?? row.id;
+        if (afterId && sourceId <= afterId) {
+          return false;
+        }
+        if (beforeId && sourceId >= beforeId) {
+          return false;
+        }
+        return true;
+      });
+    const richMessages = (beforeId ? richRows.slice(-limit) : richRows.slice(0, limit)).map(
+      toRichMessageDto
+    );
+    const payload = {
+      ok: true,
+      thread: thread ? toThreadDto(thread) : null,
+      messages,
+      richMessages,
+      page: {
+        limit,
+        count: messages.length,
+        afterId: afterId?.toString() ?? null,
+        beforeId: beforeId?.toString() ?? null,
+        previousBeforeId: messages[0]?.id ?? null,
+        nextAfterId: messages[messages.length - 1]?.id ?? null,
+      },
+    };
+
+    if (wantsJson(flags)) {
+      writeJson(payload);
+      return;
+    }
+
+    writeStdout(`thread ${threadId.toString()}${thread ? `: ${thread.title}` : ''}`);
+    for (const message of messages) {
+      writeStdout(formatHumanMessage(message));
+    }
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandAccount(
+  flags: Flags,
+  positionals: string[],
+  state: AgenttalkState
+) {
+  const subcommand = positionals[0] ?? 'search';
+  const profile: AgentSubscriptionProfile =
+    subcommand === 'create' ||
+    subcommand === 'bootstrap-operator' ||
+    subcommand === 'type' ||
+    subcommand === 'entitle' ||
+    subcommand === 'entitlements'
+      ? 'account-admin'
+      : 'directory';
+  const { client } = await connectClient(flags, state, profile);
+
+  try {
+    if (subcommand === 'create') {
+      const handle = getStringFlag(flags, ['handle']) ?? positionals[1];
+      if (!handle) {
+        throw new Error('account create requires --handle <handle>');
+      }
+
+      const roleRaw = getStringFlag(flags, ['role']) ?? 'agent';
+      const role: AgentRole = roleRaw === 'human' ? 'human' : 'agent';
+      const displayName =
+        getStringFlag(flags, ['name', 'display-name', 'displayName']) ?? handle;
+      const bio = getStringFlag(flags, ['bio']) ?? '';
+
+      await client.createAccount({ handle, displayName, role, bio });
+      await client.requestAccountDirectory({
+        handle: normalizeAccountRef(handle),
+        limit: 1n,
+      });
+      await sleep(DIRECTORY_SYNC_DELAY_MS);
+
+      const created = client.searchAccounts({ handle: normalizeAccountRef(handle) })[0];
+      const entitlement = client.currentAccountEntitlement();
+      writeJson({
+        ok: true,
+        identity: client.identityHex,
+        account: created
+          ? toAccountDto(created)
+          : {
+              handle: normalizeAccountRef(handle),
+              identity: client.identityHex,
+              displayName,
+              role,
+              bio,
+            },
+        entitlement: entitlement ? toAccountEntitlementDto(entitlement) : null,
+      });
+      return;
+    }
+
+    if (subcommand === 'bootstrap-operator') {
+      await client.bootstrapOperatorAccount();
+      await sleep(250);
+      writeJson({
+        ok: true,
+        identity: client.identityHex,
+        entitlement: client.currentAccountEntitlement()
+          ? toAccountEntitlementDto(client.currentAccountEntitlement()!)
+          : null,
+      });
+      return;
+    }
+
+    if (subcommand === 'type' || subcommand === 'entitle') {
+      const handle = getStringFlag(flags, ['handle']) ?? positionals[1];
+      const typeRaw = getStringFlag(flags, ['type', 'account-type']) ?? positionals[2];
+      if (!handle || !typeRaw) {
+        throw new Error('account type requires <handle> --type free|group|pro|operator');
+      }
+
+      const accountType: AccountType = assertChoice(
+        typeRaw,
+        'type',
+        ['free', 'group', 'pro', 'operator'] as const
+      );
+      const explicitGroup = parseOptionalBoolean(
+        getStringFlag(flags, ['group-chat', 'groupChatAllowed']),
+        'group-chat'
+      );
+      const groupChatAllowed =
+        explicitGroup ??
+        (accountType === 'group' || accountType === 'pro' || accountType === 'operator');
+
+      await client.setAccountType({
+        handle: normalizeAccountRef(handle),
+        accountType,
+        groupChatAllowed,
+      });
+      await sleep(250);
+      const entitlement = client
+        .listAccountEntitlements()
+        .find(row => row.handle === normalizeAccountRef(handle));
+      writeJson({
+        ok: true,
+        entitlement: entitlement ? toAccountEntitlementDto(entitlement) : null,
+      });
+      return;
+    }
+
+    if (subcommand === 'entitlements') {
+      writeJson(client.listAccountEntitlements().map(toAccountEntitlementDto));
+      return;
+    }
+
+    if (subcommand === 'search' || subcommand === 'list') {
+      const outputJson = wantsJson(flags);
+      const roleRaw = getStringFlag(flags, ['role']);
+      const role = roleRaw
+        ? assertChoice(roleRaw, 'role', ['agent', 'human'] as const)
+        : undefined;
+      const online = parseOptionalBoolean(getStringFlag(flags, ['online']), 'online');
+      const query =
+        getStringFlag(flags, ['query', 'q']) ??
+        (positionals.length > 1 ? positionals.slice(1).join(' ') : undefined);
+      const handle = getStringFlag(flags, ['handle']);
+      await client.requestAccountDirectory({
+        query,
+        handle: handle ? normalizeAccountRef(handle) : undefined,
+        role,
+        online,
+        limit: directoryLimitFromFlags(flags),
+      });
+      await sleep(DIRECTORY_SYNC_DELAY_MS);
+      const accounts = client
+        .searchAccounts({
+          query,
+          handle,
+          role,
+          online,
+        })
+        .map(toAccountDto);
+
+      if (outputJson) {
+        writeJson(accounts);
+        return;
+      }
+
+      for (const account of accounts) {
+        writeStdout(
+          `@${account.handle}\t${account.role}\t${account.online ? 'online' : 'offline'}\t${account.displayName}\t${account.identity}`
+        );
+      }
+      return;
+    }
+
+    throw new Error(`Unknown account command: ${subcommand}`);
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandRoom(flags: Flags, positionals: string[], state: AgenttalkState) {
+  const subcommand = positionals[0] ?? 'list';
+  const { client } = await connectClient(flags, state, 'rooms');
+
+  try {
+    if (subcommand === 'list') {
+      await client.requestChannelDirectory({
+        query: getStringFlag(flags, ['query', 'q']),
+        limit: directoryLimitFromFlags(flags),
+      });
+      await sleep(DIRECTORY_SYNC_DELAY_MS);
+      const channels = new Map(
+        client.listChannels().map(channel => [channel.id.toString(), channel])
+      );
+      const rooms = client.listRoomConfigs().map(room => ({
+        ...toRoomConfigDto(room),
+        room: channels.get(room.channelId.toString())
+          ? toChannelDto(channels.get(room.channelId.toString())!)
+          : null,
+        currentMember: isCurrentChannelMember(client, room.channelId),
+      }));
+      if (wantsJson(flags)) {
+        writeJson(rooms);
+        return;
+      }
+      for (const room of rooms) {
+        writeStdout(
+          `${room.channelId}\t#${room.room?.name ?? room.channelId}\t${room.visibility}\t${room.joinPolicy}\tmember:${room.currentMember ? 'yes' : 'no'}\tpassword:${room.passwordConfigured ? 'yes' : 'no'}`
+        );
+      }
+      return;
+    }
+
+    if (subcommand === 'start') {
+      const nameFromFlag = getStringFlag(flags, ['name']);
+      const name = nameFromFlag ?? positionals[1];
+      if (!name) {
+        throw new Error('room start requires --name <name> --with <handle-or-identity,...>');
+      }
+
+      const memberRefs = parseAccountRefs(
+        getStringFlag(flags, ['with', 'members']),
+        positionals.slice(nameFromFlag ? 1 : 2)
+      );
+      if (memberRefs.length === 0) {
+        throw new Error('room start requires --with <handle-or-identity,...>');
+      }
+
+      const normalizedName = normalizeChannelRef(name).trim().toLowerCase();
+      const roomOptions = parseRoomOptions(flags);
+      if (roomOptions.joinPolicy === 'password' && !roomOptions.password) {
+        throw new Error('room start with --join-policy password requires --password');
+      }
+
+      const topic =
+        getStringFlag(flags, ['topic']) ??
+        `Agent collaboration room started by ${client.identityHex.slice(0, 12)}`;
+      const memberIdentities = await resolveAccountIdentities(client, memberRefs);
+      const beforeThreadIds = new Set(
+        client.listThreads().map(row => row.id.toString())
+      );
+
+      await client.requestChannelDirectory({ name: normalizedName, limit: 1n });
+      await sleep(DIRECTORY_SYNC_DELAY_MS);
+      let channel = client.listChannels().find(row => row.name === normalizedName);
+      let reused = Boolean(channel);
+      if (!channel) {
+        await client.createRoom(normalizedName, topic, roomOptions);
+        await client.requestChannelDirectory({ name: normalizedName, limit: 1n });
+        await sleep(DIRECTORY_SYNC_DELAY_MS);
+        channel = client.listChannels().find(row => row.name === normalizedName);
+        reused = false;
+      }
+
+      if (!channel) {
+        throw new Error(`Room was created but is not visible yet: ${normalizedName}`);
+      }
+
+      for (const memberIdentity of memberIdentities) {
+        if (memberIdentity.toHexString() !== client.identityHex) {
+          await client.setRoomRole(channel.id, memberIdentity, 'member');
+        }
+      }
+      await sleep(250);
+
+      const openingMessage = getStringFlag(flags, ['message']);
+      let createdThread: ModuleTypes.Thread | undefined;
+      if (openingMessage) {
+        const title = getStringFlag(flags, ['title']) ?? `Start #${channel.name}`;
+        await client.createThread(channel.id, title, openingMessage);
+        await sleep(250);
+        createdThread = findCreatedThread(client, channel.id, title, beforeThreadIds);
+      }
+
+      const room = client
+        .listRoomConfigs()
+        .find(row => row.channelId === channel!.id);
+      const payload = {
+        ok: true,
+        reused,
+        room: toChannelDto(channel),
+        config: room ? toRoomConfigDto(room) : null,
+        members: roomMembers(client, channel.id),
+        thread: createdThread ? toThreadDto(createdThread) : null,
+        next: [
+          `agenttalk room info ${channel.name} --json`,
+          `agenttalk room members ${channel.name} --json`,
+          `agenttalk threads ${channel.name} --json`,
+        ],
+      };
+
+      if (wantsJson(flags)) {
+        writeJson(payload);
+        return;
+      }
+
+      writeStdout(`${reused ? 'using existing' : 'started'} room #${channel.name} (${channel.id.toString()})`);
+      writeStdout(`members: ${payload.members.map(member => member.handle ?? member.memberIdentity).join(', ')}`);
+      if (createdThread) {
+        writeStdout(`thread: ${createdThread.id.toString()} ${createdThread.title}`);
+      }
+      return;
+    }
+
+    const channelRef = positionals[1];
+    if (!channelRef) {
+      throw new Error(`room ${subcommand} requires <channel-id-or-name>`);
+    }
+
+    const channelId = await resolveChannelId(client, channelRef);
+    const channel = findVisibleChannel(client, channelId);
+
+    if (subcommand === 'info') {
+      const config = client
+        .listRoomConfigs()
+        .find(row => row.channelId === channelId);
+      const currentMember = isCurrentChannelMember(client, channelId);
+      const currentRole = client
+        .listChannelRoles()
+        .find(
+          row =>
+            row.channelId === channelId &&
+            row.memberIdentity.toHexString() === client.identityHex
+        );
+      const receipt = latestRoomRemovalReceipt(client, channelId);
+      const payload = {
+        ok: true,
+        room: channel ? toChannelDto(channel) : { id: channelId.toString() },
+        config: config ? toRoomConfigDto(config) : null,
+        access: {
+          member: currentMember,
+          role: currentRole?.role ?? null,
+          denied: !currentMember,
+          message: currentMember
+            ? null
+            : accessDeniedMessage({
+                operation: 'room info',
+                channelName: channel?.name ?? receipt?.channelName,
+                channelId,
+                receipt,
+              }),
+          removalReceipt: receipt ? toRoomRemovalReceiptDto(receipt) : null,
+        },
+        members: currentMember ? roomMembers(client, channelId) : [],
+      };
+
+      if (wantsJson(flags)) {
+        writeJson(payload);
+        return;
+      }
+
+      writeStdout(`room ${payload.room.id}${channel ? ` #${channel.name}` : ''}`);
+      if (config) {
+        writeStdout(
+          `visibility:${config.visibility} join:${config.joinPolicy} password:${config.password ? 'yes' : 'no'}`
+        );
+      }
+      writeStdout(`member:${currentMember ? 'yes' : 'no'} role:${currentRole?.role ?? 'none'}`);
+      if (!currentMember) {
+        writeStdout(payload.access.message!);
+      }
+      return;
+    }
+
+    if (subcommand === 'members') {
+      if (!isCurrentChannelMember(client, channelId)) {
+        const payload = accessDeniedPayload({
+          operation: 'room members',
+          channel,
+          channelId,
+          receipt: latestRoomRemovalReceipt(client, channelId),
+        });
+        process.exitCode = 1;
+        if (wantsJson(flags)) {
+          writeJson(payload);
+        } else {
+          writeStderr(payload.message);
+        }
+        return;
+      }
+
+      const members = roomMembers(client, channelId);
+      if (wantsJson(flags)) {
+        writeJson({
+          ok: true,
+          room: channel ? toChannelDto(channel) : { id: channelId.toString() },
+          members,
+        });
+        return;
+      }
+
+      for (const member of members) {
+        writeStdout(
+          `${member.role}\t${member.handle ?? member.memberIdentity}\t${member.displayName ?? ''}\tjoined:${member.joinedAt}`
+        );
+      }
+      return;
+    }
+
+    if (subcommand === 'config') {
+      const existing = client
+        .listRoomConfigs()
+        .find(row => row.channelId === channelId);
+      const options = parseRoomOptions(flags);
+      const visibility =
+        options.visibility ??
+        assertChoice(existing?.visibility, 'visibility', ['public', 'private'] as const, 'public');
+      const joinPolicy =
+        options.joinPolicy ??
+        assertChoice(
+          existing?.joinPolicy,
+          'join-policy',
+          ['open', 'password', 'invite'] as const,
+          'open'
+        );
+      const password = options.password ?? '';
+
+      if (joinPolicy === 'password' && !password) {
+        throw new Error('room config with --join-policy password requires --password');
+      }
+
+      await client.setRoomConfig(channelId, {
+        visibility,
+        joinPolicy,
+        password,
+      });
+      await sleep(250);
+
+      const updated = client
+        .listRoomConfigs()
+        .find(row => row.channelId === channelId);
+      writeJson({
+        ok: true,
+        room: updated
+          ? toRoomConfigDto(updated)
+          : { channelId: channelId.toString(), visibility, joinPolicy },
+      });
+      return;
+    }
+
+    if (subcommand === 'role') {
+      const accountRef = positionals[2];
+      const roleRaw = getStringFlag(flags, ['role']) ?? positionals[3];
+      if (!accountRef || !roleRaw) {
+        throw new Error('room role requires <handle-or-identity> --role owner|mod|member');
+      }
+
+      const role = assertChoice(roleRaw, 'role', ['owner', 'mod', 'member'] as const);
+      const memberIdentity = await resolveAccountIdentity(client, accountRef);
+      await client.setRoomRole(channelId, memberIdentity, role);
+      await sleep(250);
+
+      writeJson({
+        ok: true,
+        channelId: channelId.toString(),
+        memberIdentity: memberIdentity.toHexString(),
+        role,
+      });
+      return;
+    }
+
+    if (subcommand === 'kick' || subcommand === 'remove') {
+      const accountRef = positionals[2];
+      if (!accountRef) {
+        throw new Error(`room ${subcommand} requires <handle-or-identity>`);
+      }
+
+      const memberIdentity = await resolveAccountIdentity(client, accountRef);
+      const reason =
+        getStringFlag(flags, ['reason']) ??
+        `removed by ${client.identityHex.slice(0, 12)}`;
+      await client.kickFromRoom(channelId, memberIdentity, reason);
+      await sleep(250);
+      const receipt = client
+        .listRoomRemovalReceipts(channelId)
+        .find(row => row.removedIdentity.toHexString() === memberIdentity.toHexString());
+      writeJson({
+        ok: true,
+        action: 'remove',
+        channelId: channelId.toString(),
+        memberIdentity: memberIdentity.toHexString(),
+        reason,
+        removalReceipt: receipt ? toRoomRemovalReceiptDto(receipt) : null,
+      });
+      return;
+    }
+
+    throw new Error(`Unknown room command: ${subcommand}`);
+  } finally {
+    client.disconnect();
+  }
 }
 
 async function commandSignup(flags: Flags, positionals: string[], state: AgenttalkState) {
@@ -463,7 +2415,7 @@ async function commandSignup(flags: Flags, positionals: string[], state: Agentta
   const bio = getStringFlag(flags, ['bio']) ?? '';
   const showToken = getBooleanFlag(flags, ['show-token']);
 
-  const { client, state: resolvedState } = await connectClient(flags, state);
+  const { client, state: resolvedState } = await connectClient(flags, state, 'identity');
 
   try {
     await client.signUp({ name, role, bio });
@@ -491,7 +2443,7 @@ async function commandSignup(flags: Flags, positionals: string[], state: Agentta
 
 async function commandWhoami(flags: Flags, state: AgenttalkState) {
   const showToken = getBooleanFlag(flags, ['show-token']);
-  const { client } = await connectClient(flags, state);
+  const { client } = await connectClient(flags, state, 'identity');
 
   try {
     const me = client
@@ -518,10 +2470,17 @@ async function commandWhoami(flags: Flags, state: AgenttalkState) {
 }
 
 async function commandChannels(flags: Flags, state: AgenttalkState) {
-  const outputJson = getBooleanFlag(flags, ['json']);
-  const { client } = await connectClient(flags, state);
+  const outputJson = wantsJson(flags);
+  const { client } = await connectClient(flags, state, 'rooms');
 
   try {
+    const query = getStringFlag(flags, ['query', 'q']);
+    await client.requestChannelDirectory({
+      query,
+      name: getStringFlag(flags, ['name']),
+      limit: directoryLimitFromFlags(flags),
+    });
+    await sleep(DIRECTORY_SYNC_DELAY_MS);
     const channels = client.listChannels().map(toChannelDto);
 
     if (outputJson) {
@@ -540,20 +2499,40 @@ async function commandChannels(flags: Flags, state: AgenttalkState) {
 async function commandCreateChannel(flags: Flags, state: AgenttalkState) {
   const name = getStringFlag(flags, ['name']);
   const topic = getStringFlag(flags, ['topic']) ?? '';
+  const roomOptions = parseRoomOptions(flags);
 
   if (!name) {
     throw new Error('create-channel requires --name <name>');
   }
 
-  const { client } = await connectClient(flags, state);
+  if (roomOptions.joinPolicy === 'password' && !roomOptions.password) {
+    throw new Error('create-channel with --join-policy password requires --password');
+  }
+
+  const { client } = await connectClient(flags, state, 'rooms');
 
   try {
-    await client.createChannel(name, topic);
-    const created = client.listChannels().find(row => row.name === name);
+    if (roomOptions.visibility || roomOptions.joinPolicy || roomOptions.password) {
+      await client.createRoom(name, topic, roomOptions);
+    } else {
+      await client.createChannel(name, topic);
+    }
+    await sleep(250);
+    await client.requestChannelDirectory({
+      name: normalizeChannelRef(name).trim().toLowerCase(),
+      limit: 1n,
+    });
+    await sleep(DIRECTORY_SYNC_DELAY_MS);
+    const normalizedName = normalizeChannelRef(name).trim().toLowerCase();
+    const created = client.listChannels().find(row => row.name === normalizedName);
+    const room = created
+      ? client.listRoomConfigs().find(row => row.channelId === created.id)
+      : undefined;
 
     writeJson({
       ok: true,
       channel: created ? toChannelDto(created) : { id: null, name, topic },
+      room: room ? toRoomConfigDto(room) : null,
     });
   } finally {
     client.disconnect();
@@ -571,13 +2550,13 @@ async function commandJoinOrLeave(
     throw new Error(`${command} requires <channel-id-or-name>`);
   }
 
-  const { client } = await connectClient(flags, state);
+  const { client } = await connectClient(flags, state, 'rooms');
 
   try {
-    const channelId = resolveChannelId(client, channelRef);
+    const channelId = await resolveChannelId(client, channelRef);
 
     if (command === 'join') {
-      await client.joinChannel(channelId);
+      await client.joinChannel(channelId, getStringFlag(flags, ['password']));
     } else {
       await client.leaveChannel(channelId);
     }
@@ -593,13 +2572,25 @@ async function commandJoinOrLeave(
 }
 
 async function commandThreads(flags: Flags, positionals: string[], state: AgenttalkState) {
-  const outputJson = getBooleanFlag(flags, ['json']);
+  const outputJson = wantsJson(flags);
   const channelRef = positionals[0];
 
-  const { client } = await connectClient(flags, state);
+  const { client } = await connectClient(flags, state, 'rooms');
 
   try {
-    const channelId = channelRef ? resolveChannelId(client, channelRef) : undefined;
+    const channelId = channelRef ? await resolveChannelId(client, channelRef) : undefined;
+    if (channelId && !isCurrentChannelMember(client, channelId)) {
+      const channel = findVisibleChannel(client, channelId);
+      const payload = accessDeniedPayload({
+        operation: 'threads',
+        channel,
+        channelId,
+        receipt: latestRoomRemovalReceipt(client, channelId),
+      });
+      writeAccessDeniedResult(payload, flags);
+      return;
+    }
+
     const threads = client.listThreads(channelId).map(toThreadDto);
 
     if (outputJson) {
@@ -634,10 +2625,10 @@ async function commandCreateThread(
     throw new Error('create-thread requires --title <title> and --message <text>');
   }
 
-  const { client } = await connectClient(flags, state);
+  const { client } = await connectClient(flags, state, 'rooms');
 
   try {
-    const channelId = resolveChannelId(client, channelRef);
+    const channelId = await resolveChannelId(client, channelRef);
     const beforeIds = new Set(
       client.listThreads(channelId).map(row => row.id.toString())
     );
@@ -668,10 +2659,11 @@ async function commandSend(flags: Flags, positionals: string[], state: Agenttalk
   }
 
   const threadId = parseRequiredBigInt(threadIdRaw, 'thread-id');
-  const { client } = await connectClient(flags, state);
+  const { client } = await connectClient(flags, state, 'rooms');
 
   try {
-    await client.sendThreadMessage(threadId, message);
+    await client.watchThread(threadId);
+    await client.sendThreadMessage(threadId, message, parseRichMessageInput(flags));
     writeJson({
       ok: true,
       threadId: threadId.toString(),
@@ -682,8 +2674,465 @@ async function commandSend(flags: Flags, positionals: string[], state: Agenttalk
   }
 }
 
+async function commandConversation(
+  flags: Flags,
+  positionals: string[],
+  state: AgenttalkState
+) {
+  const subcommand = positionals[0] ?? 'list';
+  const { client } = await connectClient(flags, state, 'direct');
+
+  try {
+    if (subcommand === 'list') {
+      const conversations = client.listConversations().map(row => ({
+        ...toConversationDto(row),
+        memberCount: client.listConversationMembers(row.id).length,
+      }));
+
+      if (wantsJson(flags)) {
+        writeJson(conversations);
+        return;
+      }
+
+      for (const conversation of conversations) {
+        writeStdout(
+          `${conversation.id}\t${conversation.kind}\tmembers:${conversation.memberCount}\t${conversation.title}\tlast:${conversation.lastActivity}`
+        );
+      }
+      return;
+    }
+
+    if (subcommand === 'start') {
+      const targetRef = positionals[1] ?? getStringFlag(flags, ['to', 'target']);
+      if (!targetRef) {
+        throw new Error('conversation start requires <handle-or-identity>');
+      }
+
+      const beforeIds = new Set(
+        client.listConversations().map(row => row.id.toString())
+      );
+      const title = getStringFlag(flags, ['title']) ?? '';
+      const openingMessage = getStringFlag(flags, ['message']) ?? '';
+      const targetIdentity = await resolveAccountIdentity(client, targetRef);
+
+      await client.createDirectConversation(targetIdentity, title, openingMessage);
+      await sleep(250);
+
+      const created = findCreatedConversation(client, beforeIds, title || undefined);
+      writeJson({
+        ok: true,
+        conversation: created ? toConversationDto(created) : null,
+        members: created
+          ? client.listConversationMembers(created.id).map(toConversationMemberDto)
+          : [],
+      });
+      return;
+    }
+
+    if (subcommand === 'group') {
+      const title = getStringFlag(flags, ['title']);
+      if (!title) {
+        throw new Error('conversation group requires --title <title>');
+      }
+
+      const refs = parseAccountRefs(
+        getStringFlag(flags, ['members']),
+        positionals.slice(1)
+      );
+      const memberIdentities = await resolveAccountIdentities(client, refs);
+      const beforeIds = new Set(
+        client.listConversations().map(row => row.id.toString())
+      );
+
+      await client.createGroupConversation(
+        title,
+        memberIdentities,
+        getStringFlag(flags, ['message']) ?? ''
+      );
+      await sleep(250);
+
+      const created = findCreatedConversation(client, beforeIds, title);
+      writeJson({
+        ok: true,
+        conversation: created ? toConversationDto(created) : null,
+        members: created
+          ? client.listConversationMembers(created.id).map(toConversationMemberDto)
+          : [],
+      });
+      return;
+    }
+
+    if (subcommand === 'add') {
+      const conversationIdRaw = positionals[1];
+      const accountRef = positionals[2];
+      if (!conversationIdRaw || !accountRef) {
+        throw new Error('conversation add requires <conversation-id> <handle-or-identity>');
+      }
+
+      const conversationId = parseRequiredBigInt(conversationIdRaw, 'conversation-id');
+      const role = assertChoice(
+        getStringFlag(flags, ['role']) ?? 'member',
+        'role',
+        ['mod', 'member'] as const
+      );
+      const memberIdentity = await resolveAccountIdentity(client, accountRef);
+
+      await client.addConversationMember(conversationId, memberIdentity, role);
+      await sleep(250);
+
+      writeJson({
+        ok: true,
+        conversationId: conversationId.toString(),
+        memberIdentity: memberIdentity.toHexString(),
+        role,
+        members: client
+          .listConversationMembers(conversationId)
+          .map(toConversationMemberDto),
+      });
+      return;
+    }
+
+    if (subcommand === 'send') {
+      const conversationIdRaw = positionals[1];
+      const message = getStringFlag(flags, ['message']);
+      if (!conversationIdRaw || !message) {
+        throw new Error('conversation send requires <conversation-id> --message <text>');
+      }
+
+      const conversationId = parseRequiredBigInt(conversationIdRaw, 'conversation-id');
+      await client.sendConversationMessage(
+        conversationId,
+        message,
+        parseRichMessageInput(flags)
+      );
+      await sleep(250);
+
+      writeJson({
+        ok: true,
+        conversationId: conversationId.toString(),
+        text: message,
+      });
+      return;
+    }
+
+    if (subcommand === 'messages') {
+      const conversationIdRaw = positionals[1];
+      if (!conversationIdRaw) {
+        throw new Error('conversation messages requires <conversation-id>');
+      }
+
+      const conversationId = parseRequiredBigInt(conversationIdRaw, 'conversation-id');
+      const limit = Math.min(getIntFlag(flags, ['limit'], 50), 100);
+      const requestedAfterSequence = getBigIntFlag(flags, ['after', 'after-sequence']);
+      const beforeSequence = getBigIntFlag(flags, ['before', 'before-sequence']);
+      if (requestedAfterSequence && beforeSequence) {
+        throw new Error('conversation messages accepts --after or --before, not both');
+      }
+      const afterSequence = beforeSequence
+        ? undefined
+        : requestedAfterSequence ?? client.conversationReadSequence(conversationId);
+      await client.requestConversationMessages({
+        conversationId,
+        afterSequence,
+        beforeSequence,
+        limit: BigInt(limit),
+      });
+      await sleep(250);
+      const messages = client
+        .listRequestedConversationMessages(conversationId)
+        .map(toConversationMessageDto);
+      const readThrough = beforeSequence ? 0n : maxConversationSequence(messages);
+      if (readThrough > 0n) {
+        await client.markConversationRead(conversationId, readThrough);
+      }
+
+      if (wantsJson(flags)) {
+        writeJson({
+          ok: true,
+          messages,
+          page: {
+            limit,
+            count: messages.length,
+            afterSequence: afterSequence?.toString() ?? null,
+            beforeSequence: beforeSequence?.toString() ?? null,
+            previousBeforeSequence: messages[0]?.sequence ?? null,
+            nextAfterSequence: messages[messages.length - 1]?.sequence ?? null,
+          },
+        });
+        return;
+      }
+
+      for (const message of messages) {
+        writeStdout(
+          `[${message.sentAt}] ${message.author} (${message.kind}): ${message.text}`
+        );
+      }
+      return;
+    }
+
+    if (subcommand === 'leave') {
+      const conversationIdRaw = positionals[1];
+      if (!conversationIdRaw) {
+        throw new Error('conversation leave requires <conversation-id>');
+      }
+
+      const conversationId = parseRequiredBigInt(conversationIdRaw, 'conversation-id');
+      await client.leaveConversation(conversationId);
+      writeJson({ ok: true, conversationId: conversationId.toString() });
+      return;
+    }
+
+    throw new Error(`Unknown conversation command: ${subcommand}`);
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandTask(flags: Flags, positionals: string[], state: AgenttalkState) {
+  const subcommand = positionals[0] ?? 'list';
+  const { client } = await connectClient(flags, state, 'ops');
+
+  try {
+    if (subcommand === 'create') {
+      const channelRef = positionals[1];
+      const title = getStringFlag(flags, ['title']);
+      const description = getStringFlag(flags, ['description', 'message']);
+      if (!channelRef || !title || !description) {
+        throw new Error(
+          'task create requires <channel-id-or-name> --title <title> --description <text>'
+        );
+      }
+
+      const channelId = await resolveChannelId(client, channelRef);
+      const priority = assertChoice(
+        getStringFlag(flags, ['priority']) ?? 'normal',
+        'priority',
+        ['low', 'normal', 'high', 'urgent'] as const
+      );
+      const assignedToRef = getStringFlag(flags, ['assign', 'assigned-to']);
+      const assignedTo = assignedToRef
+        ? await resolveAccountIdentity(client, assignedToRef)
+        : undefined;
+      await client.createTask(
+        channelId,
+        title,
+        description,
+        priority,
+        assignedTo,
+        getStringFlag(flags, ['correlation-id', 'correlationId'])
+      );
+      await sleep(250);
+
+      const created = client
+        .listTasks(channelId)
+        .find(row => row.title === title && row.createdBy.toHexString() === client.identityHex);
+      writeJson({
+        ok: true,
+        task: created
+          ? toTaskDto(created)
+          : { channelId: channelId.toString(), title, description, priority },
+      });
+      return;
+    }
+
+    if (subcommand === 'claim') {
+      const taskIdRaw = positionals[1];
+      if (!taskIdRaw) {
+        throw new Error('task claim requires <task-id>');
+      }
+
+      const taskId = parseRequiredBigInt(taskIdRaw, 'task-id');
+      await client.claimTask(taskId);
+      await sleep(250);
+      writeJson({
+        ok: true,
+        taskId: taskId.toString(),
+        task: client.listTasks().find(row => row.id === taskId)
+          ? toTaskDto(client.listTasks().find(row => row.id === taskId)!)
+          : null,
+        claims: client.listTaskClaims(taskId).map(toTaskClaimDto),
+      });
+      return;
+    }
+
+    if (subcommand === 'status') {
+      const taskIdRaw = positionals[1];
+      const statusRaw = getStringFlag(flags, ['status']) ?? positionals[2];
+      if (!taskIdRaw || !statusRaw) {
+        throw new Error('task status requires <task-id> --status <status>');
+      }
+
+      const status = assertChoice(
+        statusRaw,
+        'status',
+        ['open', 'claimed', 'in_progress', 'blocked', 'done', 'cancelled'] as const
+      );
+      const taskId = parseRequiredBigInt(taskIdRaw, 'task-id');
+      await client.updateTaskStatus(taskId, status);
+      await sleep(250);
+      const updated = client.listTasks().find(row => row.id === taskId);
+      writeJson({
+        ok: true,
+        taskId: taskId.toString(),
+        status,
+        task: updated ? toTaskDto(updated) : null,
+      });
+      return;
+    }
+
+    if (subcommand === 'list') {
+      const channelRef = positionals[1];
+      const channelId = channelRef ? await resolveChannelId(client, channelRef) : undefined;
+      const tasks = client.listTasks(channelId).map(task => ({
+        ...toTaskDto(task),
+        claims: client.listTaskClaims(task.id).map(toTaskClaimDto),
+      }));
+
+      if (wantsJson(flags)) {
+        writeJson(tasks);
+        return;
+      }
+
+      for (const task of tasks) {
+        writeStdout(
+          `${task.id}\tchannel:${task.channelId}\t${task.status}\t${task.priority}\t${task.title}`
+        );
+      }
+      return;
+    }
+
+    throw new Error(`Unknown task command: ${subcommand}`);
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandHandoff(
+  flags: Flags,
+  positionals: string[],
+  state: AgenttalkState
+) {
+  const subcommand = positionals[0] ?? 'list';
+  const { client } = await connectClient(flags, state, 'ops');
+
+  try {
+    if (subcommand === 'create') {
+      const channelRef = positionals[1];
+      const summary = getStringFlag(flags, ['summary', 'message']);
+      if (!channelRef || !summary) {
+        throw new Error('handoff create requires <channel-id-or-name> --summary <text>');
+      }
+
+      const channelId = await resolveChannelId(client, channelRef);
+      const toRef = getStringFlag(flags, ['to']);
+      await client.createHandoff(
+        channelId,
+        summary,
+        toRef ? await resolveAccountIdentity(client, toRef) : undefined,
+        getStringFlag(flags, ['context-json', 'contextJson'])
+      );
+      await sleep(250);
+      const created = client
+        .listHandoffs(channelId)
+        .find(row => row.summary === summary && row.fromIdentity.toHexString() === client.identityHex);
+      writeJson({
+        ok: true,
+        handoff: created
+          ? toHandoffDto(created)
+          : { channelId: channelId.toString(), summary },
+      });
+      return;
+    }
+
+    if (subcommand === 'accept') {
+      const handoffIdRaw = positionals[1];
+      if (!handoffIdRaw) {
+        throw new Error('handoff accept requires <handoff-id>');
+      }
+
+      const handoffId = parseRequiredBigInt(handoffIdRaw, 'handoff-id');
+      await client.acceptHandoff(handoffId);
+      await sleep(250);
+      const updated = client.listHandoffs().find(row => row.id === handoffId);
+      writeJson({
+        ok: true,
+        handoffId: handoffId.toString(),
+        handoff: updated ? toHandoffDto(updated) : null,
+      });
+      return;
+    }
+
+    if (subcommand === 'list') {
+      const channelRef = positionals[1];
+      const channelId = channelRef ? await resolveChannelId(client, channelRef) : undefined;
+      const handoffs = client.listHandoffs(channelId).map(toHandoffDto);
+
+      if (wantsJson(flags)) {
+        writeJson(handoffs);
+        return;
+      }
+
+      for (const handoff of handoffs) {
+        writeStdout(
+          `${handoff.id}\tchannel:${handoff.channelId}\t${handoff.status}\t${handoff.summary}`
+        );
+      }
+      return;
+    }
+
+    throw new Error(`Unknown handoff command: ${subcommand}`);
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function commandEvent(flags: Flags, positionals: string[], state: AgenttalkState) {
+  const subcommand = positionals[0] ?? 'emit';
+  if (subcommand !== 'emit') {
+    throw new Error(`Unknown event command: ${subcommand}`);
+  }
+
+  const kind = assertChoice(
+    getStringFlag(flags, ['kind']) ?? positionals[1],
+    'kind',
+    ['typing', 'heartbeat', 'mention', 'joined_thread', 'joined_conversation', 'status'] as const
+  );
+
+  const { client } = await connectClient(flags, state, 'ops');
+
+  try {
+    const channelRef = getStringFlag(flags, ['channel']);
+    const channelId = channelRef ? await resolveChannelId(client, channelRef) : undefined;
+    const threadRaw = getStringFlag(flags, ['thread-id', 'threadId']);
+    const conversationRaw = getStringFlag(flags, ['conversation-id', 'conversationId']);
+    const targetRef = getStringFlag(flags, ['target', 'to']);
+
+    await client.emitAgentEvent({
+      kind,
+      channelId,
+      threadId: threadRaw ? parseRequiredBigInt(threadRaw, 'thread-id') : undefined,
+      conversationId: conversationRaw
+        ? parseRequiredBigInt(conversationRaw, 'conversation-id')
+        : undefined,
+      targetIdentity: targetRef ? await resolveAccountIdentity(client, targetRef) : undefined,
+      text: getStringFlag(flags, ['text', 'message']),
+      metadataJson: getStringFlag(flags, ['metadata-json', 'metadataJson']),
+    });
+
+    writeJson({
+      ok: true,
+      kind,
+      channelId: channelId?.toString() ?? null,
+      threadId: threadRaw ?? null,
+      conversationId: conversationRaw ?? null,
+    });
+  } finally {
+    client.disconnect();
+  }
+}
+
 async function commandDoctor(flags: Flags, state: AgenttalkState) {
-  const outputJson = getBooleanFlag(flags, ['json']);
+  const outputJson = wantsJson(flags);
   const config = resolveConnectConfig(flags, state);
   const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
 
@@ -707,7 +3156,7 @@ async function commandDoctor(flags: Flags, state: AgenttalkState) {
   let client: AgentRealtimeClient | null = null;
 
   try {
-    const connected = await connectClient(flags, state);
+    const connected = await connectClient(flags, state, 'ops');
     client = connected.client;
     const currentClient = client;
     identity = currentClient.identityHex;
@@ -717,6 +3166,8 @@ async function commandDoctor(flags: Flags, state: AgenttalkState) {
       detail: `connected to ${connected.state.databaseName} as ${identity.slice(0, 12)}...`,
     });
 
+    await currentClient.requestChannelDirectory({ limit: 20n });
+    await sleep(DIRECTORY_SYNC_DELAY_MS);
     const channels = currentClient.listChannels();
     channelCount = channels.length;
     checks.push({
@@ -793,8 +3244,107 @@ async function waitForThreadMessage(
   });
 }
 
+async function waitForConversationMessages({
+  client,
+  conversationId,
+  max,
+  timeoutMs,
+  includeOwn = false,
+}: {
+  client: AgentRealtimeClient;
+  conversationId?: bigint;
+  max: number;
+  timeoutMs: number;
+  includeOwn?: boolean;
+}) {
+  const messages: ModuleTypes.ConversationMessage[] = [];
+
+  if (timeoutMs <= 0 || max <= 0) {
+    return { messages, timedOut: false };
+  }
+
+  return new Promise<{ messages: ModuleTypes.ConversationMessage[]; timedOut: boolean }>(
+    resolve => {
+      let detach: () => void = () => {};
+      const finish = (timedOut: boolean) => {
+        clearTimeout(timer);
+        detach();
+        resolve({ messages, timedOut });
+      };
+
+      const timer = setTimeout(() => finish(true), timeoutMs);
+      const listen = conversationId
+        ? client.onConversationMessageInsert.bind(client)
+        : client.onUnreadConversationMessageInsert.bind(client);
+      detach = listen(row => {
+        if (conversationId && row.conversationId !== conversationId) {
+          return;
+        }
+        if (!includeOwn && row.authorIdentity.toHexString() === client.identityHex) {
+          return;
+        }
+
+        messages.push(row);
+        if (messages.length >= max) {
+          finish(false);
+        }
+      });
+    }
+  );
+}
+
+async function waitForThreadMessages({
+  client,
+  threadId,
+  max,
+  timeoutMs,
+  includeOwn = false,
+}: {
+  client: AgentRealtimeClient;
+  threadId: bigint;
+  max: number;
+  timeoutMs: number;
+  includeOwn?: boolean;
+}) {
+  const messages: ModuleTypes.Message[] = [];
+
+  if (timeoutMs <= 0 || max <= 0) {
+    return { messages, timedOut: false };
+  }
+
+  return new Promise<{ messages: ModuleTypes.Message[]; timedOut: boolean }>(
+    resolve => {
+      let detach: () => void = () => {};
+      const finish = (timedOut: boolean) => {
+        clearTimeout(timer);
+        detach();
+        resolve({ messages, timedOut });
+      };
+
+      const timer = setTimeout(() => finish(true), timeoutMs);
+      detach = client.onMessageInsert(row => {
+        if (row.threadId !== threadId) {
+          return;
+        }
+        if (
+          !includeOwn &&
+          row.authorIdentity &&
+          row.authorIdentity.toHexString() === client.identityHex
+        ) {
+          return;
+        }
+
+        messages.push(row);
+        if (messages.length >= max) {
+          finish(false);
+        }
+      });
+    }
+  );
+}
+
 async function commandSmoke(flags: Flags, state: AgenttalkState) {
-  const outputJson = getBooleanFlag(flags, ['json']);
+  const outputJson = wantsJson(flags);
   const seed = Date.now();
   const smokeName = getStringFlag(flags, ['name']) ?? `agent-smoke-${seed}`;
   const channelName = normalizeChannelRef(
@@ -806,15 +3356,19 @@ async function commandSmoke(flags: Flags, state: AgenttalkState) {
   const watchTimeoutMs = getIntFlag(flags, ['watch-timeout-ms'], 5000);
   const steps: Array<{ name: string; ok: boolean; detail: string }> = [];
 
-  const { client } = await connectClient(flags, state);
+  const { client } = await connectClient(flags, state, 'ops');
 
   try {
     await client.signUp({ name: smokeName, role: 'agent', bio: 'agenttalk smoke test' });
     steps.push({ name: 'signup', ok: true, detail: `signed up as ${smokeName}` });
 
+    await client.requestChannelDirectory({ name: channelName, limit: 1n });
+    await sleep(DIRECTORY_SYNC_DELAY_MS);
     let channel = client.listChannels().find(row => row.name === channelName);
     if (!channel) {
       await client.createChannel(channelName, 'Created by agenttalk smoke');
+      await client.requestChannelDirectory({ name: channelName, limit: 1n });
+      await sleep(DIRECTORY_SYNC_DELAY_MS);
       channel = client.listChannels().find(row => row.name === channelName);
       steps.push({
         name: 'channel:create',
@@ -910,7 +3464,12 @@ async function commandWatch(flags: Flags, positionals: string[], state: Agenttal
   const threadId = parseRequiredBigInt(threadIdRaw, 'thread-id');
   const jsonl = getBooleanFlag(flags, ['jsonl']);
 
-  const { client, state: resolvedState } = await connectClient(flags, state);
+  const { client, state: resolvedState } = await connectClient(
+    flags,
+    state,
+    'rooms'
+  );
+  await client.watchThread(threadId);
 
   const header = {
     event: 'ready',
@@ -965,10 +3524,10 @@ async function commandWatch(flags: Flags, positionals: string[], state: Agenttal
   await new Promise<void>(() => undefined);
 }
 
-function resolveCommandChannelId(
+async function resolveCommandChannelId(
   client: AgentRealtimeClient,
   payload: Record<string, unknown>
-): bigint {
+): Promise<bigint> {
   const byId = payload.channel_id;
   if (byId !== undefined) {
     return parseRequiredBigInt(String(byId), 'channel_id');
@@ -982,8 +3541,32 @@ function resolveCommandChannelId(
   throw new Error('command requires channel_id or channel');
 }
 
+async function commandRepairAccess(flags: Flags, state: AgenttalkState) {
+  const outputJson = wantsJson(flags);
+  const { client } = await connectClient(flags, state, 'rooms');
+
+  try {
+    await client.repairAccessState();
+    await client.requestChannelDirectory({ limit: 20n });
+    await sleep(DIRECTORY_SYNC_DELAY_MS);
+    const result = {
+      ok: true,
+      identity: client.identityHex,
+      channels: client.listChannels().map(toChannelDto),
+    };
+
+    if (outputJson) {
+      writeJson(result);
+    } else {
+      writeStdout(`repair-access: ok (${result.channels.length} visible channels)`);
+    }
+  } finally {
+    client.disconnect();
+  }
+}
+
 async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
-  const { client, state: resolvedState } = await connectClient(flags, state);
+  const { client, state: resolvedState } = await connectClient(flags, state, 'all');
 
   const subscribedThreads = new Set<string>();
 
@@ -1006,6 +3589,17 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
     statePath: STATE_PATH,
     commands: [
       'ping',
+      'init',
+      'find',
+      'chat',
+      'reply',
+      'inbox',
+      'transcript',
+      'create_account',
+      'bootstrap_operator_account',
+      'set_account_type',
+      'list_account_entitlements',
+      'search_accounts',
       'list_channels',
       'create_channel',
       'join_channel',
@@ -1016,6 +3610,23 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
       'send',
       'subscribe_thread',
       'unsubscribe_thread',
+      'list_conversations',
+      'create_direct_conversation',
+      'create_group_conversation',
+      'add_conversation_member',
+      'list_conversation_messages',
+      'mark_conversation_read',
+      'send_conversation',
+      'subscribe_conversation',
+      'unsubscribe_conversation',
+      'list_tasks',
+      'create_task',
+      'claim_task',
+      'update_task_status',
+      'list_handoffs',
+      'create_handoff',
+      'accept_handoff',
+      'emit_event',
     ],
   });
 
@@ -1030,6 +3641,19 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
     });
   });
 
+  const subscribedConversations = new Set<string>();
+  const detachConversation = client.onConversationMessageInsert(row => {
+    const conversationId = row.conversationId.toString();
+    if (!subscribedConversations.has(conversationId)) {
+      return;
+    }
+
+    send('message', {
+      conversationMessage: toConversationMessageDto(row),
+    });
+    void client.markConversationRead(row.conversationId, row.sequence ?? row.id);
+  });
+
   const rl = readline.createInterface({
     input: process.stdin,
     crlfDelay: Infinity,
@@ -1037,6 +3661,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
 
   const cleanup = () => {
     detach();
+    detachConversation();
     rl.close();
     client.disconnect();
     process.exit(0);
@@ -1077,7 +3702,440 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
           return;
         }
 
+        if (command === 'init') {
+          const handle = String(payload.handle ?? '').trim();
+          if (!handle) {
+            throw new Error('init requires handle');
+          }
+
+          const role = payload.role === 'human' ? 'human' : 'agent';
+          const displayName = String(payload.display_name ?? payload.displayName ?? handle);
+          const bio = String(payload.bio ?? '');
+          const normalizedHandle = normalizeAccountRef(handle);
+          await client.requestAccountDirectory({ handle: normalizedHandle, limit: 1n });
+          await sleep(DIRECTORY_SYNC_DELAY_MS);
+          const existingByHandle = client.searchAccounts({ handle: normalizedHandle })[0];
+          if (
+            existingByHandle &&
+            existingByHandle.identity.toHexString() !== client.identityHex
+          ) {
+            throw new Error(`Account handle is already owned: ${normalizedHandle}`);
+          }
+
+          await client.createAccount({ handle: normalizedHandle, displayName, role, bio });
+          await client.requestAccountDirectory({ handle: normalizedHandle, limit: 1n });
+          await sleep(DIRECTORY_SYNC_DELAY_MS);
+          send(
+            'ok',
+            {
+              account:
+                client.searchAccounts({ handle: normalizedHandle })[0]
+                  ? toAccountDto(client.searchAccounts({ handle: normalizedHandle })[0])
+                  : null,
+              next: [
+                `agenttalk chat @some-agent --message "hello" --json`,
+                `agenttalk inbox --wait 30s --json`,
+              ],
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'find') {
+          const query = String(payload.query ?? payload.handle ?? '').trim();
+          if (!query) {
+            throw new Error('find requires query or handle');
+          }
+          const normalized = maybeAccountHandle(query);
+          let rows: ModuleTypes.Account[] = [];
+          if (normalized) {
+            await client.requestAccountDirectory({ handle: normalized, limit: 1n });
+            await sleep(DIRECTORY_SYNC_DELAY_MS);
+            rows = client.searchAccounts({ handle: normalized });
+          }
+          if (rows.length === 0) {
+            await client.requestAccountDirectory({
+              query,
+              limit: directoryLimitFromValue(payload.limit),
+            });
+            await sleep(DIRECTORY_SYNC_DELAY_MS);
+            rows = client.searchAccounts({ query });
+          }
+          send(
+            'ok',
+            {
+              accounts: rows.map(toAccountDto),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'chat') {
+          const target = String(payload.target ?? payload.to ?? '').trim();
+          const text = String(payload.text ?? payload.message ?? '').trim();
+          if (!target || !text) {
+            throw new Error('chat requires target and text');
+          }
+
+          const targetIdentity = await resolveAccountIdentity(client, target);
+          let conversation = payload.new
+            ? undefined
+            : findReusableDirectConversation(client, targetIdentity);
+          const reused = Boolean(conversation);
+          if (!conversation) {
+            const beforeIds = new Set(
+              client.listConversations().map(row => row.id.toString())
+            );
+            await client.createDirectConversation(
+              targetIdentity,
+              typeof payload.title === 'string' ? payload.title : '',
+              ''
+            );
+            await sleep(250);
+            conversation = findCreatedConversation(client, beforeIds);
+          }
+          if (!conversation) {
+            throw new Error('Could not resolve conversation');
+          }
+
+          await client.sendConversationMessage(conversation.id, text, {
+            kind:
+              typeof payload.kind === 'string'
+                ? assertChoice(payload.kind, 'kind', [
+                    'chat',
+                    'task',
+                    'handoff',
+                    'tool_result',
+                    'approval_request',
+                    'status',
+                    'system',
+                  ] as const)
+                : undefined,
+            metadataJson:
+              typeof payload.metadata_json === 'string' ? payload.metadata_json : undefined,
+            correlationId:
+              typeof payload.correlation_id === 'string' ? payload.correlation_id : undefined,
+          });
+          if (payload.emit_event === true || payload.mention_event === true) {
+            await client.emitAgentEvent({
+              kind: 'mention',
+              conversationId: conversation.id,
+              targetIdentity,
+              text,
+            });
+          }
+          send(
+            'ok',
+            {
+              reused,
+              conversation: toConversationDto(conversation),
+              next: conversationNextCommands(conversation.id.toString()),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'reply') {
+          const conversationIdRaw = payload.conversation_id ?? payload.conversationId;
+          const text = String(payload.text ?? payload.message ?? '').trim();
+          if (conversationIdRaw === undefined || !text) {
+            throw new Error('reply requires conversation_id and text');
+          }
+
+          const conversationId = parseRequiredBigInt(
+            String(conversationIdRaw),
+            'conversation_id'
+          );
+          await client.sendConversationMessage(conversationId, text, {
+            kind:
+              typeof payload.kind === 'string'
+                ? assertChoice(payload.kind, 'kind', [
+                    'chat',
+                    'task',
+                    'handoff',
+                    'tool_result',
+                    'approval_request',
+                    'status',
+                    'system',
+                  ] as const)
+                : undefined,
+          });
+          send(
+            'ok',
+            {
+              conversationId: conversationId.toString(),
+              next: conversationNextCommands(conversationId.toString()),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'inbox') {
+          const max =
+            Number.isInteger(payload.max) && Number(payload.max) > 0
+              ? Number(payload.max)
+              : 10;
+          const messages = recentConversationMessages(client, max);
+          for (const conversationId of new Set(messages.map(message => message.conversationId))) {
+            const conversationMax = maxConversationSequence(
+              messages.filter(message => message.conversationId === conversationId)
+            );
+            if (conversationMax > 0n) {
+              await client.markConversationRead(BigInt(conversationId), conversationMax);
+            }
+          }
+          send('ok', { messages }, id);
+          return;
+        }
+
+        if (command === 'transcript') {
+          const conversationIdRaw = payload.conversation_id ?? payload.conversationId;
+          const threadIdRaw = payload.thread_id ?? payload.threadId;
+          const limit =
+            Number.isInteger(payload.limit) && Number(payload.limit) > 0
+              ? Math.min(Number(payload.limit), 100)
+              : 50;
+          if (conversationIdRaw !== undefined) {
+            const conversationId = parseRequiredBigInt(
+              String(conversationIdRaw),
+              'conversation_id'
+            );
+            const afterSequence =
+              payload.after_sequence !== undefined || payload.after !== undefined
+                ? parseRequiredBigInt(
+                    String(payload.after_sequence ?? payload.after),
+                    'after_sequence'
+                  )
+                : undefined;
+            const beforeSequence =
+              payload.before_sequence !== undefined || payload.before !== undefined
+                ? parseRequiredBigInt(
+                    String(payload.before_sequence ?? payload.before),
+                    'before_sequence'
+                  )
+                : undefined;
+            if (afterSequence && beforeSequence) {
+              throw new Error('transcript accepts after_sequence or before_sequence, not both');
+            }
+            const conversation = client
+              .listConversations()
+              .find(row => row.id === conversationId);
+            await client.requestConversationMessages({
+              conversationId,
+              afterSequence,
+              beforeSequence,
+              limit: BigInt(limit),
+            });
+            await sleep(250);
+            const messages = client
+              .listRequestedConversationMessages(conversationId)
+              .map(toConversationMessageDto);
+            send(
+              'ok',
+              {
+                conversation: conversation ? toConversationDto(conversation) : null,
+                messages,
+                page: {
+                  limit,
+                  count: messages.length,
+                  afterSequence: afterSequence?.toString() ?? null,
+                  beforeSequence: beforeSequence?.toString() ?? null,
+                  previousBeforeSequence: messages[0]?.sequence ?? null,
+                  nextAfterSequence: messages[messages.length - 1]?.sequence ?? null,
+                },
+              },
+              id
+            );
+            return;
+          }
+          if (threadIdRaw !== undefined) {
+            const threadId = parseRequiredBigInt(String(threadIdRaw), 'thread_id');
+            await client.watchThread(threadId);
+            const afterId =
+              payload.after_id !== undefined
+                ? parseRequiredBigInt(String(payload.after_id), 'after_id')
+                : undefined;
+            const beforeId =
+              payload.before_id !== undefined
+                ? parseRequiredBigInt(String(payload.before_id), 'before_id')
+                : undefined;
+            if (afterId && beforeId) {
+              throw new Error('thread transcript accepts after_id or before_id, not both');
+            }
+            const messages = client
+              .listMessages(threadId)
+              .filter(row => (afterId ? row.id > afterId : true))
+              .filter(row => (beforeId ? row.id < beforeId : true));
+            const pageRows = beforeId ? messages.slice(-limit) : messages.slice(0, limit);
+            const page = pageRows.map(toMessageDto);
+            send(
+              'ok',
+              {
+                threadId: threadId.toString(),
+                messages: page,
+                page: {
+                  limit,
+                  count: page.length,
+                  afterId: afterId?.toString() ?? null,
+                  beforeId: beforeId?.toString() ?? null,
+                  previousBeforeId: page[0]?.id ?? null,
+                  nextAfterId: page[page.length - 1]?.id ?? null,
+                },
+              },
+              id
+            );
+            return;
+          }
+          throw new Error('transcript requires conversation_id or thread_id');
+        }
+
+        if (command === 'create_account') {
+          const handle = String(payload.handle ?? '').trim();
+          if (!handle) {
+            throw new Error('create_account requires handle');
+          }
+
+          const role = payload.role === 'human' ? 'human' : 'agent';
+          const displayName = String(payload.display_name ?? payload.displayName ?? handle);
+          const bio = String(payload.bio ?? '');
+          await client.createAccount({ handle, displayName, role, bio });
+          const normalizedHandle = normalizeAccountRef(handle);
+          await client.requestAccountDirectory({ handle: normalizedHandle, limit: 1n });
+          await sleep(DIRECTORY_SYNC_DELAY_MS);
+
+          send(
+            'ok',
+            {
+              account:
+                client.searchAccounts({ handle: normalizedHandle })[0]
+                  ? toAccountDto(
+                      client.searchAccounts({ handle: normalizedHandle })[0]
+                    )
+                  : null,
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'bootstrap_operator_account') {
+          await client.bootstrapOperatorAccount();
+          await sleep(250);
+          send(
+            'ok',
+            {
+              entitlement: client.currentAccountEntitlement()
+                ? toAccountEntitlementDto(client.currentAccountEntitlement()!)
+                : null,
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'set_account_type') {
+          const handle = String(payload.handle ?? '').trim();
+          const typeRaw = String(payload.account_type ?? payload.accountType ?? payload.type ?? '').trim();
+          if (!handle || !typeRaw) {
+            throw new Error('set_account_type requires handle and account_type');
+          }
+          const accountType: AccountType = assertChoice(
+            typeRaw,
+            'account_type',
+            ['free', 'group', 'pro', 'operator'] as const
+          );
+          const groupChatAllowed =
+            typeof payload.group_chat_allowed === 'boolean'
+              ? payload.group_chat_allowed
+              : typeof payload.groupChatAllowed === 'boolean'
+                ? payload.groupChatAllowed
+                : accountType === 'group' || accountType === 'pro' || accountType === 'operator';
+          await client.setAccountType({
+            handle: normalizeAccountRef(handle),
+            accountType,
+            groupChatAllowed,
+          });
+          await sleep(250);
+          send(
+            'ok',
+            {
+              entitlement:
+                client
+                  .listAccountEntitlements()
+                  .find(row => row.handle === normalizeAccountRef(handle))
+                  ? toAccountEntitlementDto(
+                      client
+                        .listAccountEntitlements()
+                        .find(row => row.handle === normalizeAccountRef(handle))!
+                    )
+                  : null,
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'list_account_entitlements') {
+          send(
+            'ok',
+            {
+              entitlements: client.listAccountEntitlements().map(toAccountEntitlementDto),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'search_accounts') {
+          const role =
+            payload.role === 'agent' || payload.role === 'human'
+              ? payload.role
+              : undefined;
+          const online =
+            typeof payload.online === 'boolean' ? payload.online : undefined;
+          const handle =
+            typeof payload.handle === 'string'
+              ? normalizeAccountRef(payload.handle)
+              : undefined;
+          await client.requestAccountDirectory({
+            query: typeof payload.query === 'string' ? payload.query : undefined,
+            handle,
+            role,
+            online,
+            limit: directoryLimitFromValue(payload.limit),
+          });
+          await sleep(DIRECTORY_SYNC_DELAY_MS);
+          send(
+            'ok',
+            {
+              accounts: client
+                .searchAccounts({
+                  query: typeof payload.query === 'string' ? payload.query : undefined,
+                  handle,
+                  role,
+                  online,
+                })
+                .map(toAccountDto),
+            },
+            id
+          );
+          return;
+        }
+
         if (command === 'list_channels') {
+          await client.requestChannelDirectory({
+            query: typeof payload.query === 'string' ? payload.query : undefined,
+            name:
+              typeof payload.name === 'string'
+                ? normalizeChannelRef(payload.name).trim().toLowerCase()
+                : undefined,
+            limit: directoryLimitFromValue(payload.limit),
+          });
+          await sleep(DIRECTORY_SYNC_DELAY_MS);
           send(
             'ok',
             {
@@ -1095,13 +4153,42 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
             throw new Error('create_channel requires name');
           }
 
-          await client.createChannel(name, topic);
-          const created = client.listChannels().find(row => row.name === name);
+          const roomOptions: RoomOptions = {
+            visibility:
+              payload.visibility === 'public' || payload.visibility === 'private'
+                ? payload.visibility
+                : undefined,
+            joinPolicy:
+              payload.join_policy === 'open' ||
+              payload.join_policy === 'password' ||
+              payload.join_policy === 'invite'
+                ? payload.join_policy
+                : undefined,
+            password:
+              typeof payload.password === 'string' ? payload.password : undefined,
+          };
+
+          if (roomOptions.visibility || roomOptions.joinPolicy || roomOptions.password) {
+            await client.createRoom(name, topic, roomOptions);
+          } else {
+            await client.createChannel(name, topic);
+          }
+          const normalizedName = normalizeChannelRef(name).trim().toLowerCase();
+          await client.requestChannelDirectory({ name: normalizedName, limit: 1n });
+          await sleep(DIRECTORY_SYNC_DELAY_MS);
+          const created = client.listChannels().find(row => row.name === normalizedName);
 
           send(
             'ok',
             {
               channel: created ? toChannelDto(created) : { id: null, name, topic },
+              room: created
+                ? client.listRoomConfigs().find(row => row.channelId === created.id)
+                  ? toRoomConfigDto(
+                      client.listRoomConfigs().find(row => row.channelId === created.id)!
+                    )
+                  : null
+                : null,
             },
             id
           );
@@ -1109,14 +4196,17 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
         }
 
         if (command === 'join_channel') {
-          const channelId = resolveCommandChannelId(client, payload);
-          await client.joinChannel(channelId);
+          const channelId = await resolveCommandChannelId(client, payload);
+          await client.joinChannel(
+            channelId,
+            typeof payload.password === 'string' ? payload.password : undefined
+          );
           send('ok', { channelId: channelId.toString() }, id);
           return;
         }
 
         if (command === 'leave_channel') {
-          const channelId = resolveCommandChannelId(client, payload);
+          const channelId = await resolveCommandChannelId(client, payload);
           await client.leaveChannel(channelId);
           send('ok', { channelId: channelId.toString() }, id);
           return;
@@ -1125,7 +4215,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
         if (command === 'list_threads') {
           const channelId =
             payload.channel_id !== undefined || payload.channel !== undefined
-              ? resolveCommandChannelId(client, payload)
+              ? await resolveCommandChannelId(client, payload)
               : undefined;
 
           send(
@@ -1139,7 +4229,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
         }
 
         if (command === 'create_thread') {
-          const channelId = resolveCommandChannelId(client, payload);
+          const channelId = await resolveCommandChannelId(client, payload);
           const title = String(payload.title ?? '');
           const openingMessage = String(payload.opening_message ?? '');
 
@@ -1171,6 +4261,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
           }
 
           const threadId = parseRequiredBigInt(String(threadIdRaw), 'thread_id');
+          await client.watchThread(threadId);
 
           send(
             'ok',
@@ -1191,7 +4282,39 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
           }
 
           const threadId = parseRequiredBigInt(String(threadIdRaw), 'thread_id');
-          await client.sendThreadMessage(threadId, text);
+          await client.watchThread(threadId);
+          await client.sendThreadMessage(threadId, text, {
+            kind:
+              typeof payload.kind === 'string'
+                ? assertChoice(payload.kind, 'kind', [
+                    'chat',
+                    'task',
+                    'handoff',
+                    'tool_result',
+                    'approval_request',
+                    'status',
+                    'system',
+                  ] as const)
+                : undefined,
+            replyToMessageId:
+              payload.reply_to_message_id !== undefined
+                ? parseRequiredBigInt(String(payload.reply_to_message_id), 'reply_to_message_id')
+                : undefined,
+            correlationId:
+              typeof payload.correlation_id === 'string' ? payload.correlation_id : undefined,
+            metadataJson:
+              typeof payload.metadata_json === 'string' ? payload.metadata_json : undefined,
+            artifactUrl:
+              typeof payload.artifact_url === 'string' ? payload.artifact_url : undefined,
+            artifactMimeType:
+              typeof payload.artifact_mime_type === 'string'
+                ? payload.artifact_mime_type
+                : undefined,
+            clientRequestId:
+              typeof payload.client_request_id === 'string'
+                ? payload.client_request_id
+                : undefined,
+          });
 
           send(
             'ok',
@@ -1213,6 +4336,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
           const threadId = parseRequiredBigInt(String(threadIdRaw), 'thread_id');
           const threadIdText = threadId.toString();
 
+          await client.watchThread(threadId);
           subscribedThreads.add(threadIdText);
 
           const snapshot = client.listMessages(threadId).map(toMessageDto);
@@ -1233,8 +4357,537 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
           const threadId = parseRequiredBigInt(String(threadIdRaw), 'thread_id');
           const threadIdText = threadId.toString();
 
+          await client.unwatchThread(threadId);
           subscribedThreads.delete(threadIdText);
           send('ok', { threadId: threadIdText, subscribed: false }, id);
+          return;
+        }
+
+        if (command === 'list_conversations') {
+          send(
+            'ok',
+            {
+              conversations: client.listConversations().map(toConversationDto),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'create_direct_conversation') {
+          const target = String(payload.target ?? payload.to ?? '').trim();
+          if (!target) {
+            throw new Error('create_direct_conversation requires target');
+          }
+
+          const beforeIds = new Set(
+            client.listConversations().map(row => row.id.toString())
+          );
+          const title = String(payload.title ?? '');
+          await client.createDirectConversation(
+            await resolveAccountIdentity(client, target),
+            title,
+            String(payload.opening_message ?? payload.message ?? '')
+          );
+          await sleep(250);
+          const created = findCreatedConversation(client, beforeIds, title || undefined);
+          send(
+            'ok',
+            {
+              conversation: created ? toConversationDto(created) : null,
+              members: created
+                ? client.listConversationMembers(created.id).map(toConversationMemberDto)
+                : [],
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'create_group_conversation') {
+          const title = String(payload.title ?? '').trim();
+          if (!title) {
+            throw new Error('create_group_conversation requires title');
+          }
+
+          const memberRefs = Array.isArray(payload.members)
+            ? payload.members.map(String)
+            : parseAccountRefs(
+                typeof payload.members === 'string' ? payload.members : undefined
+              );
+          const beforeIds = new Set(
+            client.listConversations().map(row => row.id.toString())
+          );
+          await client.createGroupConversation(
+            title,
+            await resolveAccountIdentities(client, memberRefs),
+            String(payload.opening_message ?? payload.message ?? '')
+          );
+          await sleep(250);
+          const created = findCreatedConversation(client, beforeIds, title);
+          send(
+            'ok',
+            {
+              conversation: created ? toConversationDto(created) : null,
+              members: created
+                ? client.listConversationMembers(created.id).map(toConversationMemberDto)
+                : [],
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'add_conversation_member') {
+          const conversationIdRaw = payload.conversation_id;
+          const memberRef = String(payload.member ?? payload.account ?? '').trim();
+          if (conversationIdRaw === undefined || !memberRef) {
+            throw new Error('add_conversation_member requires conversation_id and member');
+          }
+
+          const conversationId = parseRequiredBigInt(
+            String(conversationIdRaw),
+            'conversation_id'
+          );
+          const role =
+            payload.role === 'mod' || payload.role === 'member'
+              ? payload.role
+              : 'member';
+          await client.addConversationMember(
+            conversationId,
+            await resolveAccountIdentity(client, memberRef),
+            role
+          );
+          await sleep(250);
+          send(
+            'ok',
+            {
+              conversationId: conversationId.toString(),
+              members: client
+                .listConversationMembers(conversationId)
+                .map(toConversationMemberDto),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'list_conversation_messages') {
+          const conversationIdRaw = payload.conversation_id;
+          if (conversationIdRaw === undefined) {
+            throw new Error('list_conversation_messages requires conversation_id');
+          }
+
+          const conversationId = parseRequiredBigInt(
+            String(conversationIdRaw),
+            'conversation_id'
+          );
+          const limit =
+            Number.isInteger(payload.limit) && Number(payload.limit) > 0
+              ? Math.min(Number(payload.limit), 100)
+              : 50;
+          const requestedAfter =
+            payload.after_sequence !== undefined || payload.after !== undefined
+              ? parseRequiredBigInt(
+                  String(payload.after_sequence ?? payload.after),
+                  'after_sequence'
+                )
+              : undefined;
+          const beforeSequence =
+            payload.before_sequence !== undefined || payload.before !== undefined
+              ? parseRequiredBigInt(
+                  String(payload.before_sequence ?? payload.before),
+                  'before_sequence'
+                )
+              : undefined;
+          if (requestedAfter && beforeSequence) {
+            throw new Error('list_conversation_messages accepts after_sequence or before_sequence, not both');
+          }
+          const afterSequence = beforeSequence
+            ? undefined
+            : requestedAfter ?? client.conversationReadSequence(conversationId);
+          await client.requestConversationMessages({
+            conversationId,
+            afterSequence,
+            beforeSequence,
+            limit: BigInt(limit),
+          });
+          await sleep(250);
+          const messages = client
+            .listRequestedConversationMessages(conversationId)
+            .map(toConversationMessageDto);
+          if (!beforeSequence) {
+            const readThrough = maxConversationSequence(messages);
+            if (readThrough > 0n) {
+              await client.markConversationRead(conversationId, readThrough);
+            }
+          }
+          send(
+            'ok',
+            {
+              messages,
+              page: {
+                limit,
+                count: messages.length,
+                afterSequence: afterSequence?.toString() ?? null,
+                beforeSequence: beforeSequence?.toString() ?? null,
+                previousBeforeSequence: messages[0]?.sequence ?? null,
+                nextAfterSequence: messages[messages.length - 1]?.sequence ?? null,
+              },
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'mark_conversation_read') {
+          const conversationIdRaw = payload.conversation_id;
+          if (conversationIdRaw === undefined) {
+            throw new Error('mark_conversation_read requires conversation_id');
+          }
+          const conversationId = parseRequiredBigInt(
+            String(conversationIdRaw),
+            'conversation_id'
+          );
+          const sequence =
+            payload.sequence !== undefined
+              ? parseRequiredBigInt(String(payload.sequence), 'sequence')
+              : undefined;
+          await client.markConversationRead(conversationId, sequence);
+          send(
+            'ok',
+            {
+              conversationId: conversationId.toString(),
+              sequence:
+                sequence?.toString() ??
+                client.conversationReadSequence(conversationId).toString(),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'send_conversation') {
+          const conversationIdRaw = payload.conversation_id;
+          const text = String(payload.text ?? '').trim();
+          if (conversationIdRaw === undefined || !text) {
+            throw new Error('send_conversation requires conversation_id and text');
+          }
+
+          const conversationId = parseRequiredBigInt(
+            String(conversationIdRaw),
+            'conversation_id'
+          );
+          await client.sendConversationMessage(conversationId, text, {
+            kind:
+              typeof payload.kind === 'string'
+                ? assertChoice(payload.kind, 'kind', [
+                    'chat',
+                    'task',
+                    'handoff',
+                    'tool_result',
+                    'approval_request',
+                    'status',
+                    'system',
+                  ] as const)
+                : undefined,
+            correlationId:
+              typeof payload.correlation_id === 'string' ? payload.correlation_id : undefined,
+            metadataJson:
+              typeof payload.metadata_json === 'string' ? payload.metadata_json : undefined,
+            artifactUrl:
+              typeof payload.artifact_url === 'string' ? payload.artifact_url : undefined,
+            artifactMimeType:
+              typeof payload.artifact_mime_type === 'string'
+                ? payload.artifact_mime_type
+                : undefined,
+            clientRequestId:
+              typeof payload.client_request_id === 'string'
+                ? payload.client_request_id
+                : undefined,
+          });
+          send('ok', { conversationId: conversationId.toString(), text }, id);
+          return;
+        }
+
+        if (command === 'subscribe_conversation') {
+          const conversationIdRaw = payload.conversation_id;
+          if (conversationIdRaw === undefined) {
+            throw new Error('subscribe_conversation requires conversation_id');
+          }
+
+          const conversationId = parseRequiredBigInt(
+            String(conversationIdRaw),
+            'conversation_id'
+          );
+          const conversationIdText = conversationId.toString();
+          const afterSequence =
+            payload.after_sequence !== undefined || payload.after !== undefined
+              ? parseRequiredBigInt(
+                  String(payload.after_sequence ?? payload.after),
+                  'after_sequence'
+                )
+              : client.conversationReadSequence(conversationId);
+          const limit =
+            Number.isInteger(payload.limit) && Number(payload.limit) > 0
+              ? Math.min(Number(payload.limit), 100)
+              : 50;
+          await client.requestConversationMessages({
+            conversationId,
+            afterSequence,
+            limit: BigInt(limit),
+          });
+          await sleep(250);
+          subscribedConversations.add(conversationIdText);
+          const snapshot = client
+            .listRequestedConversationMessages(conversationId)
+            .map(toConversationMessageDto);
+          for (const message of snapshot) {
+            send('snapshot', { conversationMessage: message });
+          }
+          const readThrough = maxConversationSequence(snapshot);
+          if (readThrough > 0n) {
+            await client.markConversationRead(conversationId, readThrough);
+            await client.requestConversationMessages({
+              conversationId,
+              afterSequence: readThrough,
+              limit: BigInt(limit),
+            });
+          }
+          send(
+            'ok',
+            {
+              conversationId: conversationIdText,
+              subscribed: true,
+              afterSequence: (readThrough > 0n ? readThrough : afterSequence).toString(),
+              limit,
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'unsubscribe_conversation') {
+          const conversationIdRaw = payload.conversation_id;
+          if (conversationIdRaw === undefined) {
+            throw new Error('unsubscribe_conversation requires conversation_id');
+          }
+
+          const conversationId = parseRequiredBigInt(
+            String(conversationIdRaw),
+            'conversation_id'
+          );
+          subscribedConversations.delete(conversationId.toString());
+          await client.clearConversationMessageRequest(conversationId);
+          send('ok', { conversationId: conversationId.toString(), subscribed: false }, id);
+          return;
+        }
+
+        if (command === 'list_tasks') {
+          const channelId =
+            payload.channel_id !== undefined || payload.channel !== undefined
+              ? await resolveCommandChannelId(client, payload)
+              : undefined;
+          send(
+            'ok',
+            {
+              tasks: client.listTasks(channelId).map(toTaskDto),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'create_task') {
+          const channelId = await resolveCommandChannelId(client, payload);
+          const title = String(payload.title ?? '').trim();
+          const description = String(payload.description ?? payload.message ?? '').trim();
+          if (!title || !description) {
+            throw new Error('create_task requires title and description');
+          }
+
+          const priority =
+            payload.priority === 'low' ||
+            payload.priority === 'normal' ||
+            payload.priority === 'high' ||
+            payload.priority === 'urgent'
+              ? payload.priority
+              : 'normal';
+          const assignRef =
+            typeof payload.assign === 'string'
+              ? payload.assign
+              : typeof payload.assigned_to === 'string'
+                ? payload.assigned_to
+                : undefined;
+          await client.createTask(
+            channelId,
+            title,
+            description,
+            priority,
+            assignRef ? await resolveAccountIdentity(client, assignRef) : undefined,
+            typeof payload.correlation_id === 'string' ? payload.correlation_id : undefined
+          );
+          await sleep(250);
+          send(
+            'ok',
+            {
+              tasks: client.listTasks(channelId).map(toTaskDto),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'claim_task') {
+          const taskIdRaw = payload.task_id;
+          if (taskIdRaw === undefined) {
+            throw new Error('claim_task requires task_id');
+          }
+
+          const taskId = parseRequiredBigInt(String(taskIdRaw), 'task_id');
+          await client.claimTask(taskId);
+          await sleep(250);
+          send(
+            'ok',
+            {
+              taskId: taskId.toString(),
+              task: client.listTasks().find(row => row.id === taskId)
+                ? toTaskDto(client.listTasks().find(row => row.id === taskId)!)
+                : null,
+              claims: client.listTaskClaims(taskId).map(toTaskClaimDto),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'update_task_status') {
+          const taskIdRaw = payload.task_id;
+          const statusRaw = String(payload.status ?? '');
+          if (taskIdRaw === undefined || !statusRaw) {
+            throw new Error('update_task_status requires task_id and status');
+          }
+
+          const taskId = parseRequiredBigInt(String(taskIdRaw), 'task_id');
+          const status = assertChoice(statusRaw, 'status', [
+            'open',
+            'claimed',
+            'in_progress',
+            'blocked',
+            'done',
+            'cancelled',
+          ] as const);
+          await client.updateTaskStatus(taskId, status);
+          await sleep(250);
+          send(
+            'ok',
+            {
+              taskId: taskId.toString(),
+              status,
+              task: client.listTasks().find(row => row.id === taskId)
+                ? toTaskDto(client.listTasks().find(row => row.id === taskId)!)
+                : null,
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'list_handoffs') {
+          const channelId =
+            payload.channel_id !== undefined || payload.channel !== undefined
+              ? await resolveCommandChannelId(client, payload)
+              : undefined;
+          send(
+            'ok',
+            {
+              handoffs: client.listHandoffs(channelId).map(toHandoffDto),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'create_handoff') {
+          const channelId = await resolveCommandChannelId(client, payload);
+          const summary = String(payload.summary ?? payload.message ?? '').trim();
+          if (!summary) {
+            throw new Error('create_handoff requires summary');
+          }
+
+          const toRef = typeof payload.to === 'string' ? payload.to : undefined;
+          await client.createHandoff(
+            channelId,
+            summary,
+            toRef ? await resolveAccountIdentity(client, toRef) : undefined,
+            typeof payload.context_json === 'string' ? payload.context_json : undefined
+          );
+          await sleep(250);
+          send(
+            'ok',
+            {
+              handoffs: client.listHandoffs(channelId).map(toHandoffDto),
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'accept_handoff') {
+          const handoffIdRaw = payload.handoff_id;
+          if (handoffIdRaw === undefined) {
+            throw new Error('accept_handoff requires handoff_id');
+          }
+
+          const handoffId = parseRequiredBigInt(String(handoffIdRaw), 'handoff_id');
+          await client.acceptHandoff(handoffId);
+          await sleep(250);
+          send(
+            'ok',
+            {
+              handoffId: handoffId.toString(),
+              handoff: client.listHandoffs().find(row => row.id === handoffId)
+                ? toHandoffDto(client.listHandoffs().find(row => row.id === handoffId)!)
+                : null,
+            },
+            id
+          );
+          return;
+        }
+
+        if (command === 'emit_event') {
+          const kind = assertChoice(String(payload.kind ?? ''), 'kind', [
+            'typing',
+            'heartbeat',
+            'mention',
+            'joined_thread',
+            'joined_conversation',
+            'status',
+          ] as const);
+          const channelId =
+            payload.channel_id !== undefined || payload.channel !== undefined
+              ? await resolveCommandChannelId(client, payload)
+              : undefined;
+          await client.emitAgentEvent({
+            kind,
+            channelId,
+            threadId:
+              payload.thread_id !== undefined
+                ? parseRequiredBigInt(String(payload.thread_id), 'thread_id')
+                : undefined,
+            conversationId:
+              payload.conversation_id !== undefined
+                ? parseRequiredBigInt(String(payload.conversation_id), 'conversation_id')
+                : undefined,
+            targetIdentity:
+              typeof payload.target === 'string'
+                ? await resolveAccountIdentity(client, payload.target)
+                : undefined,
+            text: typeof payload.text === 'string' ? payload.text : undefined,
+            metadataJson:
+              typeof payload.metadata_json === 'string' ? payload.metadata_json : undefined,
+          });
+          send('ok', { kind }, id);
           return;
         }
 
@@ -1255,13 +4908,85 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
 }
 
 async function main() {
-  const [command = 'help', ...rest] = process.argv.slice(2);
-  const { flags, positionals } = parseArgs(rest);
+  const rawArgs = process.argv.slice(2);
+  const leadingFlags: string[] = [];
+  const leadingValueFlags = new Set([
+    'host',
+    'db',
+    'database',
+    'token',
+    'retries',
+    'retry-base-ms',
+    'connect-timeout-ms',
+    'subscription-profile',
+    'profile',
+  ]);
+  while (rawArgs[0]?.startsWith('--')) {
+    const flag = rawArgs.shift()!;
+    leadingFlags.push(flag);
+    const flagName = flag.slice(2);
+    if (
+      !flag.includes('=') &&
+      leadingValueFlags.has(flagName) &&
+      rawArgs[0] &&
+      !rawArgs[0].startsWith('--')
+    ) {
+      leadingFlags.push(rawArgs.shift()!);
+    }
+  }
+
+  const [command = 'help', ...rest] = rawArgs;
+  const { flags, positionals } = parseArgs([...rest, ...leadingFlags]);
   configureRuntime(command, flags);
   const state = await loadState();
 
   if (command === 'help' || command === '--help') {
     printHelp();
+    return;
+  }
+
+  if (command === 'init') {
+    await commandInit(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'find') {
+    await commandFind(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'chat') {
+    await commandChat(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'reply') {
+    await commandReply(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'group') {
+    await commandGroup(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'inbox') {
+    await commandInbox(flags, state);
+    return;
+  }
+
+  if (command === 'listen') {
+    await commandListen(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'transcript') {
+    await commandTranscript(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'account' || command === 'accounts') {
+    await commandAccount(flags, positionals, state);
     return;
   }
 
@@ -1295,6 +5020,11 @@ async function main() {
     return;
   }
 
+  if (command === 'room' || command === 'rooms') {
+    await commandRoom(flags, positionals, state);
+    return;
+  }
+
   if (command === 'join') {
     await commandJoinOrLeave('join', flags, positionals, state);
     return;
@@ -1320,14 +5050,39 @@ async function main() {
     return;
   }
 
+  if (command === 'conversation' || command === 'conversations') {
+    await commandConversation(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'task' || command === 'tasks') {
+    await commandTask(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'handoff' || command === 'handoffs') {
+    await commandHandoff(flags, positionals, state);
+    return;
+  }
+
+  if (command === 'event' || command === 'events') {
+    await commandEvent(flags, positionals, state);
+    return;
+  }
+
   if (command === 'watch') {
     await commandWatch(flags, positionals, state);
     return;
   }
 
-  if (command === 'run') {
+  if (command === 'repair-access') {
+    await commandRepairAccess(flags, state);
+    return;
+  }
+
+  if (command === 'run' || command === 'serve') {
     if (!getBooleanFlag(flags, ['jsonl'])) {
-      throw new Error('run requires --jsonl');
+      throw new Error(`${command} requires --jsonl`);
     }
 
     await commandRunJsonl(flags, state);
@@ -1341,3 +5096,4 @@ main().catch(error => {
   writeStderr(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
+

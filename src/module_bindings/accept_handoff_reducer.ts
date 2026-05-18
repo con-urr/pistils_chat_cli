@@ -11,6 +11,5 @@ import {
 } from "spacetimedb";
 
 export default {
-  channelId: __t.u64(),
-  password: __t.option(__t.string()),
+  handoffId: __t.u64(),
 };

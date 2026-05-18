@@ -10,6 +10,107 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const Account = __t.object("Account", {
+  handle: __t.string(),
+  identity: __t.identity(),
+  displayName: __t.string(),
+  role: __t.string(),
+  bio: __t.option(__t.string()),
+  online: __t.bool(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  lastSeen: __t.timestamp(),
+});
+export type Account = __Infer<typeof Account>;
+
+export const AccountDirectoryRequest = __t.object("AccountDirectoryRequest", {
+  key: __t.string(),
+  requesterIdentity: __t.identity(),
+  query: __t.option(__t.string()),
+  handle: __t.option(__t.string()),
+  role: __t.option(__t.string()),
+  online: __t.option(__t.bool()),
+  limit: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type AccountDirectoryRequest = __Infer<typeof AccountDirectoryRequest>;
+
+export const AccountEntitlement = __t.object("AccountEntitlement", {
+  handle: __t.string(),
+  identity: __t.identity(),
+  accountType: __t.string(),
+  groupChatAllowed: __t.bool(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  updatedBy: __t.option(__t.identity()),
+});
+export type AccountEntitlement = __Infer<typeof AccountEntitlement>;
+
+export const AgentEvent = __t.object("AgentEvent", {
+  id: __t.u64(),
+  kind: __t.string(),
+  actorIdentity: __t.identity(),
+  channelId: __t.option(__t.u64()),
+  threadId: __t.option(__t.u64()),
+  conversationId: __t.option(__t.u64()),
+  targetIdentity: __t.option(__t.identity()),
+  text: __t.option(__t.string()),
+  metadataJson: __t.option(__t.string()),
+  emittedAt: __t.timestamp(),
+});
+export type AgentEvent = __Infer<typeof AgentEvent>;
+
+export const AgentInstallation = __t.object("AgentInstallation", {
+  identity: __t.identity(),
+  ownerIdentity: __t.identity(),
+  workspaceId: __t.option(__t.u64()),
+  label: __t.string(),
+  clientKind: __t.string(),
+  status: __t.string(),
+  createdAt: __t.timestamp(),
+  expiresAt: __t.option(__t.timestamp()),
+});
+export type AgentInstallation = __Infer<typeof AgentInstallation>;
+
+export const AgentSession = __t.object("AgentSession", {
+  identity: __t.identity(),
+  ownerIdentity: __t.identity(),
+  workspaceId: __t.option(__t.u64()),
+  clientKind: __t.string(),
+  status: __t.string(),
+  connectedAt: __t.timestamp(),
+  lastSeen: __t.timestamp(),
+});
+export type AgentSession = __Infer<typeof AgentSession>;
+
+export const AgentTask = __t.object("AgentTask", {
+  id: __t.u64(),
+  channelId: __t.u64(),
+  title: __t.string(),
+  description: __t.string(),
+  status: __t.string(),
+  priority: __t.string(),
+  createdBy: __t.identity(),
+  assignedTo: __t.option(__t.identity()),
+  correlationId: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type AgentTask = __Infer<typeof AgentTask>;
+
+export const CapabilityGrant = __t.object("CapabilityGrant", {
+  id: __t.u64(),
+  granteeIdentity: __t.identity(),
+  workspaceId: __t.option(__t.u64()),
+  channelId: __t.option(__t.u64()),
+  capability: __t.string(),
+  grantedBy: __t.identity(),
+  createdAt: __t.timestamp(),
+  expiresAt: __t.option(__t.timestamp()),
+  revokedAt: __t.option(__t.timestamp()),
+});
+export type CapabilityGrant = __Infer<typeof CapabilityGrant>;
+
 export const Channel = __t.object("Channel", {
   id: __t.u64(),
   name: __t.string(),
@@ -19,6 +120,16 @@ export const Channel = __t.object("Channel", {
 });
 export type Channel = __Infer<typeof Channel>;
 
+export const ChannelDirectoryRequest = __t.object("ChannelDirectoryRequest", {
+  key: __t.string(),
+  requesterIdentity: __t.identity(),
+  query: __t.option(__t.string()),
+  name: __t.option(__t.string()),
+  limit: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type ChannelDirectoryRequest = __Infer<typeof ChannelDirectoryRequest>;
+
 export const ChannelMember = __t.object("ChannelMember", {
   id: __t.u64(),
   channelId: __t.u64(),
@@ -26,6 +137,102 @@ export const ChannelMember = __t.object("ChannelMember", {
   joinedAt: __t.timestamp(),
 });
 export type ChannelMember = __Infer<typeof ChannelMember>;
+
+export const ChannelRole = __t.object("ChannelRole", {
+  key: __t.string(),
+  channelId: __t.u64(),
+  memberIdentity: __t.identity(),
+  role: __t.string(),
+  setBy: __t.option(__t.identity()),
+  updatedAt: __t.timestamp(),
+});
+export type ChannelRole = __Infer<typeof ChannelRole>;
+
+export const ChannelWorkspace = __t.object("ChannelWorkspace", {
+  id: __t.u64(),
+  channelId: __t.u64(),
+  workspaceId: __t.u64(),
+  linkedAt: __t.timestamp(),
+});
+export type ChannelWorkspace = __Infer<typeof ChannelWorkspace>;
+
+export const Conversation = __t.object("Conversation", {
+  id: __t.u64(),
+  kind: __t.string(),
+  title: __t.string(),
+  createdBy: __t.identity(),
+  createdAt: __t.timestamp(),
+  lastActivity: __t.timestamp(),
+});
+export type Conversation = __Infer<typeof Conversation>;
+
+export const ConversationMember = __t.object("ConversationMember", {
+  id: __t.u64(),
+  conversationId: __t.u64(),
+  memberIdentity: __t.identity(),
+  role: __t.string(),
+  joinedAt: __t.timestamp(),
+});
+export type ConversationMember = __Infer<typeof ConversationMember>;
+
+export const ConversationMessage = __t.object("ConversationMessage", {
+  id: __t.u64(),
+  conversationId: __t.u64(),
+  authorIdentity: __t.identity(),
+  authorLabel: __t.string(),
+  authorKind: __t.string(),
+  kind: __t.string(),
+  text: __t.string(),
+  replyToMessageId: __t.option(__t.u64()),
+  correlationId: __t.option(__t.string()),
+  clientRequestId: __t.option(__t.string()),
+  metadataJson: __t.option(__t.string()),
+  artifactUrl: __t.option(__t.string()),
+  artifactMimeType: __t.option(__t.string()),
+  sent: __t.timestamp(),
+  sequence: __t.u64(),
+});
+export type ConversationMessage = __Infer<typeof ConversationMessage>;
+
+export const ConversationMessageRequest = __t.object("ConversationMessageRequest", {
+  key: __t.string(),
+  requesterIdentity: __t.identity(),
+  conversationId: __t.u64(),
+  afterSequence: __t.option(__t.u64()),
+  beforeSequence: __t.option(__t.u64()),
+  limit: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type ConversationMessageRequest = __Infer<typeof ConversationMessageRequest>;
+
+export const ConversationReadCursor = __t.object("ConversationReadCursor", {
+  key: __t.string(),
+  conversationId: __t.u64(),
+  memberIdentity: __t.identity(),
+  lastReadSequence: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type ConversationReadCursor = __Infer<typeof ConversationReadCursor>;
+
+export const ConversationSequence = __t.object("ConversationSequence", {
+  conversationId: __t.u64(),
+  nextSequence: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type ConversationSequence = __Infer<typeof ConversationSequence>;
+
+export const Handoff = __t.object("Handoff", {
+  id: __t.u64(),
+  channelId: __t.u64(),
+  fromIdentity: __t.identity(),
+  toIdentity: __t.option(__t.identity()),
+  summary: __t.string(),
+  contextJson: __t.option(__t.string()),
+  status: __t.string(),
+  createdAt: __t.timestamp(),
+  acceptedAt: __t.option(__t.timestamp()),
+});
+export type Handoff = __Infer<typeof Handoff>;
 
 export const Message = __t.object("Message", {
   id: __t.u64(),
@@ -39,6 +246,100 @@ export const Message = __t.object("Message", {
 });
 export type Message = __Infer<typeof Message>;
 
+export const Principal = __t.object("Principal", {
+  identity: __t.identity(),
+  ownerIdentity: __t.option(__t.identity()),
+  kind: __t.string(),
+  displayName: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  lastSeen: __t.timestamp(),
+});
+export type Principal = __Infer<typeof Principal>;
+
+export const PublicAccountDirectory = __t.object("PublicAccountDirectory", {});
+export type PublicAccountDirectory = __Infer<typeof PublicAccountDirectory>;
+
+export const PublicChannelDirectory = __t.object("PublicChannelDirectory", {});
+export type PublicChannelDirectory = __Infer<typeof PublicChannelDirectory>;
+
+export const RateLimitBucket = __t.object("RateLimitBucket", {
+  bucketKey: __t.string(),
+  senderIdentity: __t.identity(),
+  action: __t.string(),
+  bucket: __t.u64(),
+  count: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type RateLimitBucket = __Infer<typeof RateLimitBucket>;
+
+export const RequestLog = __t.object("RequestLog", {
+  requestKey: __t.string(),
+  senderIdentity: __t.identity(),
+  action: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type RequestLog = __Infer<typeof RequestLog>;
+
+export const RevokedIdentity = __t.object("RevokedIdentity", {
+  identity: __t.identity(),
+  reason: __t.string(),
+  revokedBy: __t.option(__t.identity()),
+  revokedAt: __t.timestamp(),
+});
+export type RevokedIdentity = __Infer<typeof RevokedIdentity>;
+
+export const RichMessage = __t.object("RichMessage", {
+  id: __t.u64(),
+  legacyMessageId: __t.option(__t.u64()),
+  channelId: __t.u64(),
+  threadId: __t.u64(),
+  authorIdentity: __t.option(__t.identity()),
+  authorLabel: __t.string(),
+  authorKind: __t.string(),
+  kind: __t.string(),
+  text: __t.string(),
+  replyToMessageId: __t.option(__t.u64()),
+  correlationId: __t.option(__t.string()),
+  clientRequestId: __t.option(__t.string()),
+  metadataJson: __t.option(__t.string()),
+  artifactUrl: __t.option(__t.string()),
+  artifactMimeType: __t.option(__t.string()),
+  sent: __t.timestamp(),
+});
+export type RichMessage = __Infer<typeof RichMessage>;
+
+export const RoomConfig = __t.object("RoomConfig", {
+  channelId: __t.u64(),
+  ownerIdentity: __t.identity(),
+  visibility: __t.string(),
+  joinPolicy: __t.string(),
+  password: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type RoomConfig = __Infer<typeof RoomConfig>;
+
+export const RoomRemovalReceipt = __t.object("RoomRemovalReceipt", {
+  id: __t.u64(),
+  channelId: __t.u64(),
+  channelName: __t.string(),
+  removedIdentity: __t.identity(),
+  removedBy: __t.identity(),
+  reason: __t.string(),
+  removedAt: __t.timestamp(),
+});
+export type RoomRemovalReceipt = __Infer<typeof RoomRemovalReceipt>;
+
+export const TaskClaim = __t.object("TaskClaim", {
+  id: __t.u64(),
+  taskId: __t.u64(),
+  claimantIdentity: __t.identity(),
+  status: __t.string(),
+  claimedAt: __t.timestamp(),
+  releasedAt: __t.option(__t.timestamp()),
+});
+export type TaskClaim = __Infer<typeof TaskClaim>;
+
 export const Thread = __t.object("Thread", {
   id: __t.u64(),
   channelId: __t.u64(),
@@ -49,6 +350,16 @@ export const Thread = __t.object("Thread", {
 });
 export type Thread = __Infer<typeof Thread>;
 
+export const ThreadWatch = __t.object("ThreadWatch", {
+  id: __t.u64(),
+  watcherIdentity: __t.identity(),
+  threadId: __t.u64(),
+  channelId: __t.u64(),
+  lastSeenMessageId: __t.option(__t.u64()),
+  watchedAt: __t.timestamp(),
+});
+export type ThreadWatch = __Infer<typeof ThreadWatch>;
+
 export const User = __t.object("User", {
   identity: __t.identity(),
   name: __t.option(__t.string()),
@@ -58,4 +369,128 @@ export const User = __t.object("User", {
   lastSeen: __t.timestamp(),
 });
 export type User = __Infer<typeof User>;
+
+export const VisibleAccount = __t.object("VisibleAccount", {});
+export type VisibleAccount = __Infer<typeof VisibleAccount>;
+
+export const VisibleAccountEntitlement = __t.object("VisibleAccountEntitlement", {});
+export type VisibleAccountEntitlement = __Infer<typeof VisibleAccountEntitlement>;
+
+export const VisibleAgentEvent = __t.object("VisibleAgentEvent", {});
+export type VisibleAgentEvent = __Infer<typeof VisibleAgentEvent>;
+
+export const VisibleAgentSession = __t.object("VisibleAgentSession", {});
+export type VisibleAgentSession = __Infer<typeof VisibleAgentSession>;
+
+export const VisibleCapabilityGrant = __t.object("VisibleCapabilityGrant", {});
+export type VisibleCapabilityGrant = __Infer<typeof VisibleCapabilityGrant>;
+
+export const VisibleChannel = __t.object("VisibleChannel", {});
+export type VisibleChannel = __Infer<typeof VisibleChannel>;
+
+export const VisibleChannelMember = __t.object("VisibleChannelMember", {});
+export type VisibleChannelMember = __Infer<typeof VisibleChannelMember>;
+
+export const VisibleChannelRole = __t.object("VisibleChannelRole", {});
+export type VisibleChannelRole = __Infer<typeof VisibleChannelRole>;
+
+export const VisibleConversation = __t.object("VisibleConversation", {});
+export type VisibleConversation = __Infer<typeof VisibleConversation>;
+
+export const VisibleConversationMember = __t.object("VisibleConversationMember", {});
+export type VisibleConversationMember = __Infer<typeof VisibleConversationMember>;
+
+export const VisibleConversationMessage = __t.object("VisibleConversationMessage", {});
+export type VisibleConversationMessage = __Infer<typeof VisibleConversationMessage>;
+
+export const VisibleConversationReadCursor = __t.object("VisibleConversationReadCursor", {});
+export type VisibleConversationReadCursor = __Infer<typeof VisibleConversationReadCursor>;
+
+export const VisibleHandoff = __t.object("VisibleHandoff", {});
+export type VisibleHandoff = __Infer<typeof VisibleHandoff>;
+
+export const VisibleMessage = __t.object("VisibleMessage", {});
+export type VisibleMessage = __Infer<typeof VisibleMessage>;
+
+export const VisibleRateLimitBucket = __t.object("VisibleRateLimitBucket", {});
+export type VisibleRateLimitBucket = __Infer<typeof VisibleRateLimitBucket>;
+
+export const VisibleRequestedAccountDirectory = __t.object("VisibleRequestedAccountDirectory", {});
+export type VisibleRequestedAccountDirectory = __Infer<typeof VisibleRequestedAccountDirectory>;
+
+export const VisibleRequestedChannelDirectory = __t.object("VisibleRequestedChannelDirectory", {});
+export type VisibleRequestedChannelDirectory = __Infer<typeof VisibleRequestedChannelDirectory>;
+
+export const VisibleRequestedConversationMessage = __t.object("VisibleRequestedConversationMessage", {});
+export type VisibleRequestedConversationMessage = __Infer<typeof VisibleRequestedConversationMessage>;
+
+export const VisibleRichMessage = __t.object("VisibleRichMessage", {});
+export type VisibleRichMessage = __Infer<typeof VisibleRichMessage>;
+
+export const VisibleRoomConfig = __t.object("VisibleRoomConfig", {});
+export type VisibleRoomConfig = __Infer<typeof VisibleRoomConfig>;
+
+export const VisibleRoomRemovalReceipt = __t.object("VisibleRoomRemovalReceipt", {});
+export type VisibleRoomRemovalReceipt = __Infer<typeof VisibleRoomRemovalReceipt>;
+
+export const VisibleTask = __t.object("VisibleTask", {});
+export type VisibleTask = __Infer<typeof VisibleTask>;
+
+export const VisibleTaskClaim = __t.object("VisibleTaskClaim", {});
+export type VisibleTaskClaim = __Infer<typeof VisibleTaskClaim>;
+
+export const VisibleThread = __t.object("VisibleThread", {});
+export type VisibleThread = __Infer<typeof VisibleThread>;
+
+export const VisibleThreadWatch = __t.object("VisibleThreadWatch", {});
+export type VisibleThreadWatch = __Infer<typeof VisibleThreadWatch>;
+
+export const VisibleUnreadConversationMessage = __t.object("VisibleUnreadConversationMessage", {});
+export type VisibleUnreadConversationMessage = __Infer<typeof VisibleUnreadConversationMessage>;
+
+export const VisibleUser = __t.object("VisibleUser", {});
+export type VisibleUser = __Infer<typeof VisibleUser>;
+
+export const VisibleWatchedMessage = __t.object("VisibleWatchedMessage", {});
+export type VisibleWatchedMessage = __Infer<typeof VisibleWatchedMessage>;
+
+export const VisibleWorkspace = __t.object("VisibleWorkspace", {});
+export type VisibleWorkspace = __Infer<typeof VisibleWorkspace>;
+
+export const VisibleWorkspaceChannel = __t.object("VisibleWorkspaceChannel", {});
+export type VisibleWorkspaceChannel = __Infer<typeof VisibleWorkspaceChannel>;
+
+export const VisibleWorkspaceMember = __t.object("VisibleWorkspaceMember", {});
+export type VisibleWorkspaceMember = __Infer<typeof VisibleWorkspaceMember>;
+
+export const Workspace = __t.object("Workspace", {
+  id: __t.u64(),
+  slug: __t.string(),
+  name: __t.string(),
+  createdBy: __t.option(__t.identity()),
+  createdAt: __t.timestamp(),
+});
+export type Workspace = __Infer<typeof Workspace>;
+
+export const WorkspaceInvite = __t.object("WorkspaceInvite", {
+  code: __t.string(),
+  workspaceId: __t.u64(),
+  workspaceRole: __t.string(),
+  createdBy: __t.identity(),
+  maxUses: __t.u64(),
+  acceptedUses: __t.u64(),
+  createdAt: __t.timestamp(),
+  expiresAt: __t.option(__t.timestamp()),
+  revokedAt: __t.option(__t.timestamp()),
+});
+export type WorkspaceInvite = __Infer<typeof WorkspaceInvite>;
+
+export const WorkspaceMember = __t.object("WorkspaceMember", {
+  id: __t.u64(),
+  workspaceId: __t.u64(),
+  memberIdentity: __t.identity(),
+  role: __t.string(),
+  joinedAt: __t.timestamp(),
+});
+export type WorkspaceMember = __Infer<typeof WorkspaceMember>;
 

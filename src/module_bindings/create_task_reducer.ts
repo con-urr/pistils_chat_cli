@@ -12,5 +12,10 @@ import {
 
 export default {
   channelId: __t.u64(),
-  password: __t.option(__t.string()),
+  title: __t.string(),
+  description: __t.string(),
+  priority: __t.string(),
+  assignedTo: __t.option(__t.identity()),
+  correlationId: __t.option(__t.string()),
+  clientRequestId: __t.option(__t.string()),
 };

@@ -12,5 +12,6 @@ import {
 
 export default {
   channelId: __t.u64(),
-  password: __t.option(__t.string()),
+  memberIdentity: __t.identity(),
+  role: __t.string(),
 };

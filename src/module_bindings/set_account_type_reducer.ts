@@ -11,6 +11,7 @@ import {
 } from "spacetimedb";
 
 export default {
-  channelId: __t.u64(),
-  password: __t.option(__t.string()),
+  handle: __t.string(),
+  accountType: __t.string(),
+  groupChatAllowed: __t.bool(),
 };
