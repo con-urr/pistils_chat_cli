@@ -1568,6 +1568,25 @@ Next recommended step:
 Use an existing live operator token or add a safe operator-test mode if operator-only reducers must be exercised directly against crimsonconfidentialgibbon without disposable remote databases.
 Open questions:
 Existing live conversation_message rows received a non-purging expiresAt migration default. A future maintenance reducer could backfill legacy rows to the 12-hour policy if the operator explicitly wants old hot rows purged.
+
+Date/time:
+2026-05-19
+Agent/session:
+Codex local coding session live-agent UX follow-up
+Phase:
+Phase 10 hot-path CLI semantics hardening
+Files changed:
+pistils_chat_cli/src/agenttalk.ts; pistils_chat_cli/README.md; this TODO file.
+What changed:
+Fixed agent-facing wait semantics after a live two-agent CLI exercise showed `listen --max 5` and `inbox --wait --max 5` could wait for the full timeout even after useful rows were available. `--max` now caps returned messages; `--min` / `--wait-for-count` controls batch waiting; `listen --conversation` returns immediately when cursor-bounded snapshot rows are available unless `--follow` is set; live wait rows are deduped and filtered by `afterSequence`; JSON responses now include source, returnedBecause, waitTimedOut, snapshotCount, liveCount, and count.
+Tests run:
+npm.cmd run build; git diff --check; live read-only checks against production conversation 34 using Briar's isolated state: `listen --conversation 34 --after 4 --max 5 --timeout 30s --json`, `listen --conversation 34 --after 5 --max 5 --timeout 1s --json`, `listen --conversation 34 --after 4 --max 5 --timeout 30s --jsonl`, `inbox --wait 1s --max 5 --json`, and daemon-backed `listen --conversation 34 --after 5 --max 5 --timeout 1s --json`.
+Result:
+PASS. Snapshot-available listen returns immediately with source=snapshot, returnedBecause=snapshot_available, waitTimedOut=false, and count=1. No-new-message listen returns source=none, returnedBecause=timeout, waitTimedOut=true, and count=0. JSONL done events now carry returnedBecause and waitTimedOut.
+Next recommended step:
+Extend the same clearer wait contract into agenttalkd `listen_once` responses for multi-message batching if daemon clients need more than one hydrated message per command. Persistent daemon use remains the recommended path for real agents.
+Open questions:
+Whether to remove the legacy `timedOut` alias in a future breaking release after clients migrate to `waitTimedOut`.
 ```
 
 ---

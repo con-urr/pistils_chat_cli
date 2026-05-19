@@ -425,8 +425,8 @@ Usage:
   agenttalk chat <handle-or-identity> --message <text> [--kind chat|task|handoff|tool_result|approval_request|status|system] [--emit-event] [--json]
   agenttalk reply <conversation-id> --message <text> [--kind chat|task|handoff|tool_result|approval_request|status|system] [--json]
   agenttalk group start --with <handle-or-identity,...> [--title text] [--message text] [--json]
-  agenttalk inbox [--wait 30s] [--max 5] [--json|--jsonl]
-  agenttalk listen --conversation <id> [--after <sequence>] [--max 5] [--timeout 60s] [--json|--jsonl]
+  agenttalk inbox [--wait 30s] [--max 5] [--min 1] [--json|--jsonl]
+  agenttalk listen --conversation <id> [--after <sequence>] [--max 1] [--min 1] [--follow] [--timeout 60s] [--json|--jsonl]
   agenttalk listen --thread <id> [--max 5] [--timeout 60s] [--json|--jsonl]
   agenttalk transcript --conversation <id> [--limit 50] [--after <sequence>|--before <sequence>] [--json]
   agenttalk transcript --thread <id> [--limit 50] [--after-id <id>|--before-id <id>] [--json]
@@ -637,7 +637,8 @@ function receiptActionForDaemonCommand(command: string) {
 async function maybeSendDaemonCommand(
   flags: Flags,
   payload: Record<string, unknown>,
-  timeoutMs = 5000
+  timeoutMs = 5000,
+  returnErrors = false
 ) {
   const mode = daemonMode(flags);
   if (!mode.tryDaemon) {
@@ -660,7 +661,7 @@ async function maybeSendDaemonCommand(
     if (!response?.ok && mode.requireDaemon) {
       throw new Error(response?.error ?? 'agenttalkd returned an error');
     }
-    return response?.ok ? response : undefined;
+    return response?.ok || returnErrors ? response : undefined;
   } catch (error) {
     if (mode.requireDaemon) {
       throw error;
@@ -870,6 +871,16 @@ function toConversationMessageDto(message: ModuleTypes.ConversationMessage) {
     sentAt: message.sent.toDate().toISOString(),
   };
 }
+
+type ConversationMessageDto = ReturnType<typeof toConversationMessageDto>;
+
+type MessageResultSource = 'snapshot' | 'live' | 'mixed' | 'none';
+type MessageReturnedBecause =
+  | 'snapshot_available'
+  | 'live_message_available'
+  | 'min_count_reached'
+  | 'timeout'
+  | 'no_wait';
 
 function toTaskDto(task: ModuleTypes.AgentTask) {
   return {
@@ -1430,7 +1441,7 @@ function findReusableGroupConversation(
 
 function conversationNextCommands(conversationId: string) {
   return [
-    `agenttalk listen --conversation ${conversationId} --timeout 60s --max 5 --jsonl`,
+    `agenttalk listen --conversation ${conversationId} --timeout 60s --json`,
     `agenttalk transcript --conversation ${conversationId} --limit 50 --json`,
     `agenttalk reply ${conversationId} --message "..." --json`,
   ];
@@ -1444,7 +1455,7 @@ function recentConversationMessages(client: AgentRealtimeClient, max: number) {
     .slice(0, max);
 }
 
-function maxConversationSequence(messages: ReturnType<typeof toConversationMessageDto>[]) {
+function maxConversationSequence(messages: ConversationMessageDto[]) {
   let max = 0n;
   for (const message of messages) {
     const sequence = parseRequiredBigInt(message.sequence, 'sequence');
@@ -1455,7 +1466,100 @@ function maxConversationSequence(messages: ReturnType<typeof toConversationMessa
   return max;
 }
 
-function formatConversationMessage(message: ReturnType<typeof toConversationMessageDto>) {
+function conversationMessageKey(message: ConversationMessageDto) {
+  return `${message.conversationId}:${message.sequence}`;
+}
+
+function conversationMessageRowKey(message: ModuleTypes.ConversationMessage) {
+  return `${message.conversationId.toString()}:${(message.sequence ?? message.id).toString()}`;
+}
+
+function uniqueConversationMessages(messages: ConversationMessageDto[], max = messages.length) {
+  const seen = new Set<string>();
+  const unique: ConversationMessageDto[] = [];
+  for (const message of messages) {
+    const key = conversationMessageKey(message);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(message);
+    if (unique.length >= max) {
+      break;
+    }
+  }
+  return unique;
+}
+
+function messageResultSource(snapshotCount: number, liveCount: number): MessageResultSource {
+  if (snapshotCount > 0 && liveCount > 0) {
+    return 'mixed';
+  }
+  if (snapshotCount > 0) {
+    return 'snapshot';
+  }
+  if (liveCount > 0) {
+    return 'live';
+  }
+  return 'none';
+}
+
+function buildConversationMessageResult({
+  conversationId,
+  afterSequence,
+  snapshot,
+  live,
+  max,
+  waitTimedOut,
+  returnedBecause,
+  next,
+}: {
+  conversationId?: bigint;
+  afterSequence?: bigint;
+  snapshot: ConversationMessageDto[];
+  live: ConversationMessageDto[];
+  max: number;
+  waitTimedOut: boolean;
+  returnedBecause: MessageReturnedBecause;
+  next?: string[];
+}) {
+  const snapshotUnique = uniqueConversationMessages(snapshot, max);
+  const snapshotKeys = new Set(snapshotUnique.map(conversationMessageKey));
+  const liveUnique = uniqueConversationMessages(
+    live.filter(message => !snapshotKeys.has(conversationMessageKey(message))),
+    Math.max(max - snapshotUnique.length, 0)
+  );
+  const messages = [...snapshotUnique, ...liveUnique].slice(0, max);
+  const nextSequence = maxConversationSequence(messages);
+
+  return {
+    ok: true,
+    conversationId: conversationId?.toString() ?? null,
+    afterSequence: afterSequence?.toString() ?? null,
+    nextAfterSequence: nextSequence > 0n ? nextSequence.toString() : null,
+    source: messageResultSource(snapshotUnique.length, liveUnique.length),
+    returnedBecause,
+    waitTimedOut,
+    timedOut: waitTimedOut,
+    snapshotCount: snapshotUnique.length,
+    liveCount: liveUnique.length,
+    count: messages.length,
+    messages,
+    snapshot: snapshotUnique,
+    live: liveUnique,
+    ...(next ? { next } : {}),
+  };
+}
+
+function parseWaitMin(flags: Flags, max: number, defaultValue: number) {
+  const min = getIntFlag(flags, ['min', 'wait-for-count'], defaultValue);
+  if (min > max) {
+    throw new Error('--min cannot be greater than --max');
+  }
+  return min;
+}
+
+function formatConversationMessage(message: ConversationMessageDto) {
   return `[${message.sentAt}] conversation:${message.conversationId}#${message.sequence} ${message.author} (${message.kind}): ${message.text}`;
 }
 
@@ -1842,31 +1946,89 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
   const max = getIntFlag(flags, ['max'], 10);
   const hasWait = flags.wait !== undefined;
   const waitMs = hasWait ? getDurationFlagMs(flags, ['wait'], 30000) : 0;
+  const min = parseWaitMin(flags, max, hasWait ? 1 : 0);
+  const drainMs = getIntFlag(flags, ['drain-ms', 'drainMs'], 0);
   const jsonl = getBooleanFlag(flags, ['jsonl']);
-  const daemonResponse = await maybeSendDaemonCommand(flags, hasWait
+  let daemonResponse = await maybeSendDaemonCommand(flags, hasWait
     ? {
         id: 'inbox',
         cmd: 'listen_once',
         timeoutMs: waitMs,
+        hydrate: true,
       }
     : {
         id: 'inbox',
         cmd: 'inbox',
         limit: max,
+        hydrate: true,
       },
-    hasWait ? waitMs + 1000 : 3000
+    hasWait ? waitMs + 5000 : 3000,
+    hasWait
   );
+  if (daemonResponse && !daemonResponse.ok && !/timed out/i.test(String(daemonResponse.error ?? ''))) {
+    daemonResponse = undefined;
+  }
   if (daemonResponse) {
-    const payload = {
-      ok: true,
+    if (!daemonResponse.ok) {
+      const payload = buildConversationMessageResult({
+        snapshot: [],
+        live: [],
+        max,
+        waitTimedOut: true,
+        returnedBecause: 'timeout',
+        next: [`agenttalk inbox --wait 30s --json`],
+      });
+      if (jsonl) {
+        emitJsonLine({ event: 'ready', daemon: true, waitMs, max, min });
+        emitJsonLine({
+          event: 'done',
+          returnedBecause: payload.returnedBecause,
+          waitTimedOut: payload.waitTimedOut,
+          timedOut: payload.timedOut,
+          count: payload.count,
+        });
+        return;
+      }
+      if (wantsJson(flags)) {
+        writeJson({ daemon: true, result: daemonResponse, ...payload });
+        return;
+      }
+      writeStdout(`timed out after ${waitMs}ms`);
+      return;
+    }
+    const daemonMessage = (daemonResponse.data as { message?: ConversationMessageDto | null })?.message ?? null;
+    const daemonMessages = daemonMessage ? [daemonMessage] : [];
+    const daemonPayloadBase = hasWait
+      ? buildConversationMessageResult({
+          snapshot: [],
+          live: daemonMessages,
+          max,
+          waitTimedOut: false,
+          returnedBecause: daemonMessages.length > 0 ? 'live_message_available' : 'no_wait',
+          next: [`agenttalk inbox --wait 30s --json`],
+        })
+      : {
+          ok: true,
+          daemon: true,
+          result: daemonResponse.data,
+          waitTimedOut: false,
+          timedOut: false,
+        };
+    const payload: any = {
       daemon: true,
       result: daemonResponse.data,
-      timedOut: false,
+      ...daemonPayloadBase,
     };
     if (jsonl) {
       emitJsonLine({ event: 'ready', daemon: true, waitMs, max });
       emitJsonLine({ event: 'inbox', data: daemonResponse.data });
-      emitJsonLine({ event: 'done', timedOut: false, count: 1 });
+      emitJsonLine({
+        event: 'done',
+        returnedBecause: payload.returnedBecause ?? 'no_wait',
+        waitTimedOut: false,
+        timedOut: false,
+        count: payload.count ?? 1,
+      });
       return;
     }
     if (wantsJson(flags)) {
@@ -1881,7 +2043,7 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
 
   try {
     if (jsonl) {
-      emitJsonLine({ event: 'ready', identity: client.identityHex, waitMs, max });
+      emitJsonLine({ event: 'ready', identity: client.identityHex, waitMs, max, min });
     }
 
     const recent = recentConversationMessages(client, max);
@@ -1902,7 +2064,13 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
         }
         emitJsonLine({ event: 'done', timedOut: false, count: recent.length });
       } else if (wantsJson(flags)) {
-        writeJson({ ok: true, messages: recent, timedOut: false });
+        writeJson(buildConversationMessageResult({
+          snapshot: recent,
+          live: [],
+          max,
+          waitTimedOut: false,
+          returnedBecause: 'no_wait',
+        }));
       } else {
         for (const message of recent) {
           writeStdout(formatConversationMessage(message));
@@ -1911,10 +2079,57 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
       return;
     }
 
+    if (recent.length > 0) {
+      const readThrough = maxConversationSequence(recent);
+      if (readThrough > 0n) {
+        for (const conversationId of new Set(recent.map(message => message.conversationId))) {
+          const conversationMax = maxConversationSequence(
+            recent.filter(message => message.conversationId === conversationId)
+          );
+          await client.markConversationRead(BigInt(conversationId), conversationMax);
+        }
+      }
+
+      const payload = buildConversationMessageResult({
+        snapshot: recent,
+        live: [],
+        max,
+        waitTimedOut: false,
+        returnedBecause: 'snapshot_available',
+        next: [`agenttalk inbox --wait 30s --json`],
+      });
+
+      if (jsonl) {
+        for (const message of payload.messages) {
+          emitJsonLine({ event: 'message', source: 'snapshot', message });
+        }
+        emitJsonLine({
+          event: 'done',
+          returnedBecause: payload.returnedBecause,
+          waitTimedOut: payload.waitTimedOut,
+          timedOut: payload.timedOut,
+          count: payload.count,
+        });
+        return;
+      }
+
+      if (wantsJson(flags)) {
+        writeJson(payload);
+        return;
+      }
+
+      for (const message of payload.messages) {
+        writeStdout(formatConversationMessage(message));
+      }
+      return;
+    }
+
     const waited = await waitForConversationMessages({
       client,
       max,
+      min,
       timeoutMs: waitMs,
+      drainMs,
     });
     const messages = waited.messages.map(toConversationMessageDto);
     for (const conversationId of new Set(messages.map(message => message.conversationId))) {
@@ -1928,35 +2143,54 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
 
     if (jsonl) {
       for (const message of messages) {
-        emitJsonLine({ event: 'message', message });
+        emitJsonLine({ event: 'message', source: 'live', message });
       }
+      const payload = buildConversationMessageResult({
+        snapshot: [],
+        live: messages,
+        max,
+        waitTimedOut: waited.timedOut,
+        returnedBecause:
+          messages.length >= min
+            ? 'min_count_reached'
+            : waited.timedOut
+              ? 'timeout'
+              : 'live_message_available',
+        next: [`agenttalk inbox --wait 30s --json`],
+      });
       emitJsonLine({
         event: 'done',
-        timedOut: waited.timedOut,
-        count: messages.length,
-        recent,
+        returnedBecause: payload.returnedBecause,
+        waitTimedOut: payload.waitTimedOut,
+        timedOut: payload.timedOut,
+        count: payload.count,
       });
       return;
     }
 
-    const payload = {
-      ok: true,
-      messages,
-      recent: messages.length > 0 ? [] : recent,
-      timedOut: waited.timedOut,
+    const payload = buildConversationMessageResult({
+      snapshot: [],
+      live: messages,
+      max,
+      waitTimedOut: waited.timedOut,
+      returnedBecause:
+        messages.length >= min
+          ? 'min_count_reached'
+          : waited.timedOut
+            ? 'timeout'
+            : 'live_message_available',
       next: [`agenttalk inbox --wait 30s --json`],
-    };
+    });
 
     if (wantsJson(flags)) {
       writeJson(payload);
       return;
     }
 
-    const toPrint = messages.length > 0 ? messages : recent;
-    for (const message of toPrint) {
+    for (const message of payload.messages) {
       writeStdout(formatConversationMessage(message));
     }
-    if (waited.timedOut) {
+    if (payload.waitTimedOut && payload.messages.length === 0) {
       writeStdout(`timed out after ${waitMs}ms`);
     }
   } finally {
@@ -1979,19 +2213,81 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
   const max = getIntFlag(flags, ['max'], 1);
   const snapshotMax = getIntFlag(flags, ['snapshot'], 10);
   const timeoutMs = getDurationFlagMs(flags, ['timeout'], 30000);
+  const min = parseWaitMin(flags, max, 1);
+  const follow = getBooleanFlag(flags, ['follow']);
+  const drainMs = getIntFlag(flags, ['drain-ms', 'drainMs'], 0);
   const jsonl = getBooleanFlag(flags, ['jsonl']);
   if (conversationRaw) {
     const conversationId = parseRequiredBigInt(conversationRaw, 'conversation-id');
     const afterSequence = getBigIntFlag(flags, ['after', 'after-sequence']);
-    const daemonResponse = await maybeSendDaemonCommand(flags, {
+    let daemonResponse = await maybeSendDaemonCommand(flags, {
       id: 'listen',
       cmd: 'listen_once',
       conversationId: conversationId.toString(),
       afterSequence: afterSequence?.toString(),
       timeoutMs,
       max,
-    }, timeoutMs + 1000);
+      hydrate: true,
+    }, timeoutMs + 5000, true);
+    if (daemonResponse && !daemonResponse.ok && !/timed out/i.test(String(daemonResponse.error ?? ''))) {
+      daemonResponse = undefined;
+    }
     if (daemonResponse) {
+      if (!daemonResponse.ok) {
+        const payload = {
+          daemon: true,
+          result: daemonResponse,
+          ...buildConversationMessageResult({
+            conversationId,
+            afterSequence,
+            snapshot: [],
+            live: [],
+            max,
+            waitTimedOut: true,
+            returnedBecause: 'timeout',
+          }),
+        };
+        if (jsonl) {
+          emitJsonLine({
+            event: 'ready',
+            kind: 'conversation',
+            daemon: true,
+            conversationId: conversationId.toString(),
+            timeoutMs,
+            max,
+            min,
+          });
+          emitJsonLine({
+            event: 'done',
+            returnedBecause: payload.returnedBecause,
+            waitTimedOut: payload.waitTimedOut,
+            timedOut: payload.timedOut,
+            count: payload.count,
+          });
+          return;
+        }
+        if (wantsJson(flags)) {
+          writeJson(payload);
+          return;
+        }
+        writeStdout(`timed out after ${timeoutMs}ms`);
+        return;
+      }
+      const daemonMessage = (daemonResponse.data as { message?: ConversationMessageDto | null })?.message ?? null;
+      const daemonMessages = daemonMessage ? [daemonMessage] : [];
+      const payload = {
+        daemon: true,
+        result: daemonResponse.data,
+        ...buildConversationMessageResult({
+          conversationId,
+          afterSequence,
+          snapshot: [],
+          live: daemonMessages,
+          max,
+          waitTimedOut: false,
+          returnedBecause: daemonMessages.length > 0 ? 'live_message_available' : 'no_wait',
+        }),
+      };
       if (jsonl) {
         emitJsonLine({
           event: 'ready',
@@ -2000,13 +2296,20 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
           conversationId: conversationId.toString(),
           timeoutMs,
           max,
+          min,
         });
         emitJsonLine({ event: 'delivery', data: daemonResponse.data });
-        emitJsonLine({ event: 'done', timedOut: false, count: 1 });
+        emitJsonLine({
+          event: 'done',
+          returnedBecause: payload.returnedBecause,
+          waitTimedOut: payload.waitTimedOut,
+          timedOut: payload.timedOut,
+          count: payload.count,
+        });
         return;
       }
       if (wantsJson(flags)) {
-        writeJson({ ok: true, daemon: true, result: daemonResponse.data, timedOut: false });
+        writeJson(payload);
         return;
       }
       writeStdout(JSON.stringify(daemonResponse.data));
@@ -2026,7 +2329,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
       const afterSequence =
         getBigIntFlag(flags, ['after', 'after-sequence']) ??
         client.conversationReadSequence(conversationId);
-      const requestLimit = BigInt(Math.max(max, snapshotMax, 1));
+      const requestLimit = BigInt(Math.max(max, min, snapshotMax, 1));
       await client.requestConversationMessages({
         conversationId,
         afterSequence,
@@ -2037,7 +2340,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
         .listRequestedConversationMessages(conversationId)
         .filter(row => (row.sequence ?? row.id) > afterSequence)
         .map(toConversationMessageDto)
-        .slice(0, snapshotMax);
+        .slice(0, Math.min(max, snapshotMax));
       const snapshotReadThrough = maxConversationSequence(snapshot);
       if (snapshotReadThrough > 0n) {
         await client.markConversationRead(conversationId, snapshotReadThrough);
@@ -2057,40 +2360,124 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
           afterSequence: afterSequence.toString(),
           timeoutMs,
           max,
+          min,
+          follow,
         });
         for (const message of snapshot) {
           emitJsonLine({ event: 'snapshot', message });
         }
       }
 
+      if (snapshot.length > 0 && !follow) {
+        const payload = buildConversationMessageResult({
+          conversationId,
+          afterSequence,
+          snapshot,
+          live: [],
+          max,
+          waitTimedOut: false,
+          returnedBecause: 'snapshot_available',
+        });
+
+        if (jsonl) {
+          emitJsonLine({
+            event: 'done',
+            returnedBecause: payload.returnedBecause,
+            waitTimedOut: payload.waitTimedOut,
+            timedOut: payload.timedOut,
+            count: payload.count,
+          });
+        } else if (wantsJson(flags)) {
+          writeJson(payload);
+        } else {
+          for (const message of payload.messages) {
+            writeStdout(formatConversationMessage(message));
+          }
+        }
+        return;
+      }
+
+      if (follow && snapshot.length >= min) {
+        const payload = buildConversationMessageResult({
+          conversationId,
+          afterSequence,
+          snapshot,
+          live: [],
+          max,
+          waitTimedOut: false,
+          returnedBecause: 'snapshot_available',
+        });
+
+        if (jsonl) {
+          emitJsonLine({
+            event: 'done',
+            returnedBecause: payload.returnedBecause,
+            waitTimedOut: payload.waitTimedOut,
+            timedOut: payload.timedOut,
+            count: payload.count,
+          });
+        } else if (wantsJson(flags)) {
+          writeJson(payload);
+        } else {
+          for (const message of payload.messages) {
+            writeStdout(formatConversationMessage(message));
+          }
+        }
+        return;
+      }
+
+      const snapshotKeys = new Set(snapshot.map(conversationMessageKey));
       const waited = await waitForConversationMessages({
         client,
         conversationId,
-        max,
+        max: Math.max(max - snapshot.length, 0),
+        min: Math.max(min - snapshot.length, 1),
+        afterSequence,
         timeoutMs,
         includeOwn: true,
+        drainMs,
+        ignoreKeys: snapshotKeys,
       });
       const messages = waited.messages.map(toConversationMessageDto);
-      const readThrough = maxConversationSequence(messages);
+      const payload = buildConversationMessageResult({
+        conversationId,
+        afterSequence,
+        snapshot,
+        live: messages,
+        max,
+        waitTimedOut: waited.timedOut,
+        returnedBecause:
+          snapshot.length + messages.length >= min
+            ? messages.length > 0
+              ? 'min_count_reached'
+              : 'snapshot_available'
+            : waited.timedOut
+              ? 'timeout'
+              : 'live_message_available',
+      });
+      const readThrough = maxConversationSequence(payload.messages);
       if (readThrough > 0n) {
         await client.markConversationRead(conversationId, readThrough);
       }
 
       if (jsonl) {
-        for (const message of messages) {
-          emitJsonLine({ event: 'message', message });
+        for (const message of payload.live) {
+          emitJsonLine({ event: 'message', source: 'live', message });
         }
-        emitJsonLine({ event: 'done', timedOut: waited.timedOut, count: messages.length });
+        emitJsonLine({
+          event: 'done',
+          returnedBecause: payload.returnedBecause,
+          waitTimedOut: payload.waitTimedOut,
+          timedOut: payload.timedOut,
+          count: payload.count,
+        });
       } else if (wantsJson(flags)) {
-        writeJson({ ok: true, snapshot, messages, timedOut: waited.timedOut });
+        writeJson(payload);
       } else {
-        for (const message of snapshot) {
-          writeStdout(`snapshot ${formatConversationMessage(message)}`);
-        }
-        for (const message of messages) {
+        for (const message of payload.messages) {
           writeStdout(formatConversationMessage(message));
         }
-        if (waited.timedOut) {
+        if (payload.waitTimedOut && payload.messages.length === 0) {
           writeStdout(`timed out after ${timeoutMs}ms`);
         }
       }
@@ -3691,26 +4078,39 @@ async function waitForConversationMessages({
   client,
   conversationId,
   max,
+  min = max,
+  afterSequence,
   timeoutMs,
   includeOwn = false,
+  drainMs = 0,
+  ignoreKeys,
 }: {
   client: AgentRealtimeClient;
   conversationId?: bigint;
   max: number;
+  min?: number;
+  afterSequence?: bigint;
   timeoutMs: number;
   includeOwn?: boolean;
+  drainMs?: number;
+  ignoreKeys?: Set<string>;
 }) {
   const messages: ModuleTypes.ConversationMessage[] = [];
+  const seen = new Set<string>(ignoreKeys);
 
-  if (timeoutMs <= 0 || max <= 0) {
+  if (timeoutMs <= 0 || max <= 0 || min <= 0) {
     return { messages, timedOut: false };
   }
 
   return new Promise<{ messages: ModuleTypes.ConversationMessage[]; timedOut: boolean }>(
     resolve => {
       let detach: () => void = () => {};
+      let drainTimer: NodeJS.Timeout | undefined;
       const finish = (timedOut: boolean) => {
         clearTimeout(timer);
+        if (drainTimer) {
+          clearTimeout(drainTimer);
+        }
         detach();
         resolve({ messages, timedOut });
       };
@@ -3726,10 +4126,26 @@ async function waitForConversationMessages({
         if (!includeOwn && row.authorIdentity.toHexString() === client.identityHex) {
           return;
         }
+        if (afterSequence && (row.sequence ?? row.id) <= afterSequence) {
+          return;
+        }
 
+        const key = conversationMessageRowKey(row);
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
         messages.push(row);
         if (messages.length >= max) {
           finish(false);
+          return;
+        }
+        if (messages.length >= min && !drainTimer) {
+          if (drainMs <= 0) {
+            finish(false);
+            return;
+          }
+          drainTimer = setTimeout(() => finish(false), drainMs);
         }
       });
     }
