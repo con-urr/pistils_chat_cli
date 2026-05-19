@@ -1,6 +1,6 @@
 # AgentTalk Alpha Backend + CLI Readiness TODO
 
-Last updated by agent: 2026-05-19, current phase: Phase 15 / validation and follow-ups.
+Last updated by agent: 2026-05-19, current phase: Phase 16 / hardening fixes.
 
 **Working title:** Bring AgentTalk / Pistils Chat CLI + SpaceTimeDB backend to alpha/private-beta readiness before MCP implementation.
 
@@ -1280,13 +1280,46 @@ AgentTalk realtime messages are ephemeral. The hot realtime store keeps messages
 
 ---
 
+# Phase 16 - Post-alpha hardening fixes
+
+## Goal
+
+Close the hardening gaps found after the alpha foundation pass, especially around agentId membership semantics, daemon consistency, narrow subscriptions, and bounded cleanup behavior.
+
+## TODO
+
+- [x] Update conversation membership semantics to allow the current sender identity or the current sender's `agentId`.
+- [x] Audit and update membership-dependent paths including conversation visibility, role lookup, manager checks, requested messages, mark-read, visible members, and leave behavior.
+- [x] Add a test/operator path to bind a second identity to the same `agentId` for multi-device smoke coverage.
+- [x] Fix `agenttalk run --jsonl` startup by using a profile that includes the watched-message accessors it calls.
+- [x] Hydrate daemon `inbox` and `listen_once` responses into `{ delivery, message }` items by default, with `hydrate: false` for ultra-light callers.
+- [x] Make daemon `send_direct` always call backend `send_direct_message` so receipt action and idempotency namespace stay stable.
+- [x] Hard-disable archive surfaces behind `ARCHIVE_FEATURE_ENABLED = false` and remove archive operator profiles from user-facing client docs/help.
+- [x] Scope daemon pipe path by state directory, host, and database name to avoid local daemon collisions.
+- [x] Support `AGENTTALK_TOKEN` in `agenttalkd`, preferred before `SPACETIMEDB_TOKEN`.
+- [x] Batch retention cleanup with a fixed per-table delete cap and expose cleanup stats.
+- [x] Convert group start/send paths to receipt-based waiting.
+- [x] Add smoke coverage for daemon `send_direct`, daemon inbox/listen hydration, duplicate `clientRequestId`, multi-identity same-agent access, and `run --jsonl` startup.
+- [~] Keep `visible_agent_event` out of daemon/direct hot profiles; replacing the view with targeted event rows remains a future optimization.
+
+## Acceptance criteria
+
+- [x] A second identity bound to the same `agentId` can request messages, send in the conversation, and mark read by agentId membership.
+- [x] `agenttalk run --jsonl` can start and respond to `ping`.
+- [x] Daemon receive commands return usable hydrated message text by default.
+- [x] Duplicate daemon `send_direct` requests use stable `send_direct_message` receipts.
+- [x] Retention cleanup deletes at most the configured batch size per table per run and records stats.
+- [x] Archive hooks are dormant and do not appear as a normal user-facing profile.
+
+---
+
 # Current phase
 
 Update this as work progresses.
 
 ```text
-Current phase: Phase 15 - Documentation, smoke/load harness, and validation
-Current status: Backend/client/daemon implementation is build-validated and live-validated against local in-memory SpaceTimeDB dev databases, including forced daemon reconnect, daemon/client cache stats, load-harness reconnect, and short-retention cleanup proof.
+Current phase: Phase 16 - Hardening fixes from post-alpha review
+Current status: Backend/client/daemon implementation is build-validated, published to remote SpaceTimeDB maincloud/crimsonconfidentialgibbon, and remote-validated against disposable maincloud databases for alpha smoke, daemon IPC/hydration, run-jsonl startup, and retention cleanup. Live production smoke on crimsonconfidentialgibbon passed non-operator checks and stopped at the expected existing-operator bootstrap guard.
 Last updated by agent: 2026-05-19
 ```
 
@@ -1305,9 +1338,9 @@ npm.cmd run agenttalk:pkg:build
 npm.cmd run build (pistils_chat_cli)
 npx.cmd tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --types node --skipLibCheck scripts/load-test-persistent.ts scripts/smoke-alpha.ts scripts/smoke-retention.ts scripts/agenttalk.ts scripts/agenttalkd.ts
 Result:
-PASS on 2026-05-19 after adding client/daemon local cache stats and load-harness reconnect measurement.
+PASS on 2026-05-19 after Phase 16 hardening.
 Notes:
-SpaceTimeDB CLI was available at %LOCALAPPDATA%\SpacetimeDB\spacetime.exe but not on PATH. Injecting that directory into PATH allowed the repo's npm run spacetime:generate script to regenerate src/module_bindings. Generated bindings were synced to packages/agenttalk and pistils_chat_cli and all builds passed. Added visible_self_agent_profile after daemon stats exposed mixed-profile ordering in the SDK cache; regenerated/synced bindings again.
+SpaceTimeDB CLI was available at %LOCALAPPDATA%\SpacetimeDB\spacetime.exe but not on PATH. Injecting that directory into PATH allowed the repo's npm run spacetime:generate script to regenerate src/module_bindings. Generated bindings were synced to packages/agenttalk and pistils_chat_cli and all builds passed. Phase 16 regenerated bindings for bind_agent_identity, visible_retention_cleanup_stat, and conversation_member_member_agent_id.
 
 Last backend smoke command:
 spacetime publish agenttalk-alpha-19e3dc3ccba --server local --module-path spacetimedb --yes=all
@@ -1317,18 +1350,18 @@ Notes:
 Published updated module to local in-memory SpaceTimeDB at http://127.0.0.1:3000. Initial publish exposed a scheduled-table value bug; fixed retention cleanup scheduling to use ScheduleAt.interval. Later publishes added visible_self_agent_profile and operator retention policy reducers.
 
 Last CLI smoke command:
-npm run agenttalk:smoke-alpha -- --json
+npm.cmd run agenttalk:smoke-alpha -- --daemon --json
 Result:
-PASS on 2026-05-19 against disposable local DB agenttalk-alpha-19e3dc533a6.
+PASS on 2026-05-19 against disposable local DB agenttalk-hardening-daemon-19e3e5cb474.
 Notes:
-The script covers agentId creation, sequential and concurrent canonical direct reuse, send receipts, inbox delivery, duplicate clientRequestId, mark read, default group cap rejection, and operator-enabled group fanout delivery to non-senders.
+The script covers agentId creation, sequential and concurrent canonical direct reuse, send receipts, inbox delivery, duplicate clientRequestId, mark read, default group cap rejection, operator-enabled group fanout delivery to non-senders, multi-identity same-agent conversation access through memberAgentId, daemon send_direct duplicate idempotency with stable send_direct_message receipts, daemon listen_once hydration returning message text, and agenttalk run --jsonl startup/ping.
 
 Last retention smoke command:
 npm.cmd run agenttalk:smoke-retention -- --yes --json
 Result:
-PASS on 2026-05-19 against disposable local DB agenttalk-retention-19e3dc2e769.
+PASS on 2026-05-19 against disposable local DB agenttalk-hardening-retention-19e3e5e2953.
 Notes:
-The script bootstraps an operator, sets hot/delivery/client receipt retention to 1 second through set_retention_policy, sends a direct message, waits for expiry, runs run_retention_cleanup_now, verifies the expired message, delivery row, and send receipt are removed, sends again, verifies sequence advances from 1 to 2, and resets policy to defaults.
+The script bootstraps an operator, sets hot/delivery/client receipt retention to 1 second through set_retention_policy, sends a direct message, waits for expiry, runs run_retention_cleanup_now, verifies cleanup stats, verifies the expired message, delivery row, and send receipt are removed, sends again, verifies sequence advances from 1 to 2, and resets policy to defaults.
 
 Last daemon test command:
 npm.cmd run agenttalk -- daemon start --json; npm.cmd run agenttalk -- daemon status --json; npm.cmd run agenttalk -- chat <recipient> --message <text> --daemon --json; npm.cmd run agenttalk -- inbox --limit 3 --daemon --json; forced reconnect drill by killing local SpaceTimeDB, restarting and republishing, then running npm.cmd run agenttalk -- daemon doctor --json
@@ -1343,6 +1376,41 @@ Result:
 PASS on 2026-05-19 against disposable local DB agenttalk-cache-19e3dd353c2: sent=8 delivered=8 duplicates=0 errors=0, reconnect attempted=1 succeeded=1.
 Notes:
 Persistent scripted clients only; no LLM agents. Reconnect measurement used the new --reconnect path and reported reconnect latency p50/p95/p99 of 65ms in the local in-memory run.
+
+Last remote SpaceTimeDB publish:
+$env:PATH = "$env:LOCALAPPDATA\SpacetimeDB;" + $env:PATH; spacetime publish crimsonconfidentialgibbon --module-path spacetimedb --server maincloud --yes=all
+Result:
+PASS on 2026-05-19. The live remote database updated without --delete-data after adding migration defaults and preserving live column order for account, account_entitlement, conversation_member, and conversation_message. Current clients were disconnected because SpaceTimeDB classified the view/schema changes as client-breaking.
+Notes:
+Verified live remote schema with spacetime describe for conversation_delivery, client_request_receipt, direct_conversation_index, and retention_cleanup_stat. Legacy conversation_message.expires_at defaults to 2100-01-01 for existing live rows to avoid immediate purge; new sends still use reducer-computed 12-hour hot expiry.
+
+Last remote alpha smoke command:
+npm.cmd run agenttalk:smoke-alpha -- --host https://maincloud.spacetimedb.com --db agenttalk-remote-hardening-19e3e708b9c --json
+Result:
+PASS on 2026-05-19 against disposable maincloud DB agenttalk-remote-hardening-19e3e708b9c. The disposable DB was deleted after validation.
+Notes:
+Covered agentId account creation, canonical direct reuse, concurrent direct reuse, delivery inbox, duplicate clientRequestId dedupe, mark read, group cap rejection, group fanout delivery, multi-identity same-agent access, and run-jsonl startup. A live production smoke against crimsonconfidentialgibbon passed the same non-operator checks through group-cap rejection and then stopped at "An operator account already exists", which is expected because the live DB already has an operator identity.
+
+Last remote daemon smoke command:
+Published disposable maincloud DB agenttalk-remote-daemon-19e3e7127cf; ran agenttalk init; npm.cmd run agenttalk -- daemon start --json; npm.cmd run agenttalk:smoke-alpha -- --host https://maincloud.spacetimedb.com --db agenttalk-remote-daemon-19e3e7127cf --daemon --json; npm.cmd run agenttalk -- daemon stop --json.
+Result:
+PASS on 2026-05-19. The disposable DB and temp daemon state were deleted after validation.
+Notes:
+Covered daemon ping/stats availability, daemon send_direct idempotency using send_direct_message receipts, daemon listen_once hydration returning message text, and run-jsonl startup against remote maincloud.
+
+Last remote retention smoke command:
+Published disposable maincloud DB agenttalk-remote-retention-19e3e71737b; npm.cmd run agenttalk:smoke-retention -- --host https://maincloud.spacetimedb.com --db agenttalk-remote-retention-19e3e71737b --yes --allow-non-local --json.
+Result:
+PASS on 2026-05-19. The disposable DB was deleted after validation.
+Notes:
+Set retention to 1 second only on the disposable remote DB, verified message/delivery/receipt cleanup stats, verified sequence advanced from 1 to 2, and reset the retention policy before disconnecting.
+
+Last prod CLI client exercise:
+Used two isolated temp AGENTTALK_STATE_DIR identities against https://maincloud.spacetimedb.com / crimsonconfidentialgibbon with normal agenttalk CLI commands: init, whoami, doctor, find, chat --no-daemon, inbox --no-daemon, transcript --no-daemon, reply --no-daemon, daemon start/status, chat --daemon, inbox --daemon, reply --daemon, listen --daemon, transcript --daemon, daemon stop.
+Result:
+PASS on 2026-05-19 against live production DB crimsonconfidentialgibbon. Conversation 23 was created/reused by throwaway handles prod-cli-a-19e4012651d and prod-cli-b-19e4012651d. Transcript showed one-shot messages at sequences 1 and 2 and daemon messages at sequences 3, 4, and 5. daemon listen returned hydrated delivery/message text for sequence 5. Both daemons were stopped and local temp token state was deleted.
+Notes:
+This was a real prod-cloud CLI client flow, not the smoke harness. It intentionally created throwaway prod accounts and test conversation messages, but did not run operator, retention, archive, or destructive commands.
 ```
 
 ---
@@ -1481,6 +1549,25 @@ Next recommended step:
 Run an end-to-end completion audit against the original goal before marking the goal complete. Stop the local in-memory SpaceTimeDB process after validation.
 Open questions:
 Optional group-size greater than 2 simulation in the load harness remains a future enhancement; group fanout itself is covered by the alpha smoke.
+
+Date/time:
+2026-05-19
+Agent/session:
+Codex local coding session remote validation continuation
+Phase:
+Phase 16 remote publish and smoke validation
+Files changed:
+live-chat/spacetimedb/src/index.ts; live-chat/scripts/smoke-alpha.ts; live-chat/src/module_bindings/*; live-chat/packages/agenttalk/src/module_bindings/*; pistils_chat_cli/src/module_bindings/*; this TODO file.
+What changed:
+Adjusted schema for remote-compatible migration by preserving live column order and adding default annotations for new columns. Used a far-future default for legacy conversation_message.expiresAt so publishing does not immediately purge old live messages; reducer-created messages still receive the 12-hour hot expiry. Fixed smoke-alpha run-jsonl child process to inherit explicit host/db.
+Tests run:
+spacetime publish crimsonconfidentialgibbon --module-path spacetimedb --server maincloud --yes=all; spacetime describe live remote tables; npm.cmd run spacetime:generate; npm.cmd run build; npm.cmd run agenttalk:pkg:build; npm.cmd run build in pistils_chat_cli; script-level tsc; remote production smoke through non-operator checks; full alpha smoke on disposable maincloud DB; daemon alpha smoke on disposable maincloud DB; retention smoke on disposable maincloud DB.
+Result:
+PASS. Live remote database was updated without deleting data. Full remote smoke, remote daemon smoke, and remote retention smoke passed on disposable maincloud databases, which were deleted afterward. Live production smoke stopped only at the expected operator bootstrap guard because an operator already exists.
+Next recommended step:
+Use an existing live operator token or add a safe operator-test mode if operator-only reducers must be exercised directly against crimsonconfidentialgibbon without disposable remote databases.
+Open questions:
+Existing live conversation_message rows received a non-purging expiresAt migration default. A future maintenance reducer could backfill legacy rows to the 12-hour policy if the operator explicitly wants old hot rows purged.
 ```
 
 ---

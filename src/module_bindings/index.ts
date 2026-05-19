@@ -37,6 +37,7 @@ import {
 import AcceptHandoffReducer from "./accept_handoff_reducer";
 import AcceptWorkspaceInviteReducer from "./accept_workspace_invite_reducer";
 import AddConversationMemberReducer from "./add_conversation_member_reducer";
+import BindAgentIdentityReducer from "./bind_agent_identity_reducer";
 import BootstrapOperatorAccountReducer from "./bootstrap_operator_account_reducer";
 import ClaimTaskReducer from "./claim_task_reducer";
 import ClearAccountDirectoryRequestReducer from "./clear_account_directory_request_reducer";
@@ -112,6 +113,7 @@ import VisibleRateLimitBucketRow from "./visible_rate_limit_bucket_table";
 import VisibleRequestedAccountDirectoryRow from "./visible_requested_account_directory_table";
 import VisibleRequestedChannelDirectoryRow from "./visible_requested_channel_directory_table";
 import VisibleRequestedConversationMessageRow from "./visible_requested_conversation_message_table";
+import VisibleRetentionCleanupStatRow from "./visible_retention_cleanup_stat_table";
 import VisibleRetentionPolicyRow from "./visible_retention_policy_table";
 import VisibleRichMessageRow from "./visible_rich_message_table";
 import VisibleRoomConfigRow from "./visible_room_config_table";
@@ -307,6 +309,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleRequestedConversationMessageRow),
+  visible_retention_cleanup_stat: __table({
+    name: 'visible_retention_cleanup_stat',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleRetentionCleanupStatRow),
   visible_retention_policy: __table({
     name: 'visible_retention_policy',
     indexes: [
@@ -419,6 +428,7 @@ const reducersSchema = __reducers(
   __reducerSchema("accept_handoff", AcceptHandoffReducer),
   __reducerSchema("accept_workspace_invite", AcceptWorkspaceInviteReducer),
   __reducerSchema("add_conversation_member", AddConversationMemberReducer),
+  __reducerSchema("bind_agent_identity", BindAgentIdentityReducer),
   __reducerSchema("bootstrap_operator_account", BootstrapOperatorAccountReducer),
   __reducerSchema("claim_task", ClaimTaskReducer),
   __reducerSchema("clear_account_directory_request", ClearAccountDirectoryRequestReducer),

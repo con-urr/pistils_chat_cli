@@ -1,5 +1,6 @@
-#!/usr/bin/env node
-import { existsSync, promises as fs } from 'node:fs';
+﻿#!/usr/bin/env node
+import { existsSync, readFileSync, promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -236,6 +237,17 @@ async function loadState(): Promise<AgenttalkState> {
   }
 }
 
+function loadStateSync(): AgenttalkState {
+  try {
+    if (!existsSync(STATE_PATH)) {
+      return {};
+    }
+    return JSON.parse(readFileSync(STATE_PATH, 'utf8')) as AgenttalkState;
+  } catch {
+    return {};
+  }
+}
+
 async function saveState(state: AgenttalkState): Promise<void> {
   await fs.mkdir(STATE_DIR, { recursive: true });
   await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2) + '\n', 'utf8');
@@ -245,10 +257,17 @@ function daemonPipePath() {
   if (process.env.AGENTTALK_DAEMON_PIPE) {
     return process.env.AGENTTALK_DAEMON_PIPE;
   }
+  const state = loadStateSync();
+  const host = process.env.SPACETIMEDB_HOST ?? state.host ?? DEFAULT_HOST;
+  const databaseName = process.env.SPACETIMEDB_DB_NAME ?? state.databaseName ?? DEFAULT_DB;
+  const key = createHash('sha256')
+    .update(JSON.stringify({ stateDir: STATE_DIR, host, databaseName }))
+    .digest('hex')
+    .slice(0, 16);
   if (process.platform === 'win32') {
-    return '\\\\.\\pipe\\agenttalkd-default';
+    return `\\\\.\\pipe\\agenttalkd-${key}`;
   }
-  return path.join(os.tmpdir(), 'agenttalkd-default.sock');
+  return path.join(os.tmpdir(), `agenttalkd-${key}.sock`);
 }
 
 function sendDaemonCommand(payload: Record<string, unknown>, timeoutMs = 3000) {
@@ -465,7 +484,7 @@ Global flags:
   --retries <n>      connect retry attempts on transient failures (default: 2)
   --retry-base-ms <n> base backoff milliseconds (default: 300)
   --connect-timeout-ms <n> connection timeout milliseconds (default: 15000)
-  --subscription-profile <directory|identity|direct|direct-lite|daemon-direct|archive-operator|account-admin|rooms|ops|all>
+  --subscription-profile <directory|identity|direct|direct-lite|daemon-direct|account-admin|rooms|ops|all>
                      override the command's optimized realtime subscription set
 
 State file:
@@ -1033,7 +1052,6 @@ async function connectClient(
         'direct',
         'direct-lite',
         'daemon-direct',
-        'archive-operator',
         'account-admin',
         'rooms',
         'ops',
@@ -1204,6 +1222,24 @@ function findCreatedConversation(
   }
 
   return conversations[0];
+}
+
+async function waitForConversationById(
+  client: AgentRealtimeClient,
+  conversationId: bigint,
+  timeoutMs = 5000
+) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const row = client
+      .listConversations()
+      .find(conversation => conversation.id === conversationId);
+    if (row) {
+      return row;
+    }
+    await sleep(50);
+  }
+  return undefined;
 }
 
 function sameIdentityText(left: Identity, right: Identity) {
@@ -1746,12 +1782,19 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
       `Group: ${memberHandles.join(', ')}`;
 
     if (!conversation) {
-      const beforeIds = new Set(
-        client.listConversations().map(row => row.id.toString())
+      const createRequestId = await client.createGroupConversation(
+        title,
+        memberIdentities,
+        ''
       );
-      await client.createGroupConversation(title, memberIdentities, '');
-      await sleep(250);
-      conversation = findCreatedConversation(client, beforeIds, title);
+      const receipt = await client.waitForReceipt(
+        createRequestId,
+        5000,
+        'create_group_conversation'
+      );
+      conversation = receipt.conversationId
+        ? await waitForConversationById(client, receipt.conversationId)
+        : undefined;
     }
 
     if (!conversation) {
@@ -1759,12 +1802,12 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
     }
 
     if (message) {
-      await client.sendConversationMessage(
+      const sendRequestId = await client.sendConversationMessage(
         conversation.id,
         message,
         parseRichMessageInput(flags)
       );
-      await sleep(250);
+      await client.waitForReceipt(sendRequestId, 5000, 'send_conversation_message');
     }
 
     const payload = {
@@ -3108,18 +3151,19 @@ async function commandConversation(
         positionals.slice(1)
       );
       const memberIdentities = await resolveAccountIdentities(client, refs);
-      const beforeIds = new Set(
-        client.listConversations().map(row => row.id.toString())
-      );
-
-      await client.createGroupConversation(
+      const createRequestId = await client.createGroupConversation(
         title,
         memberIdentities,
         getStringFlag(flags, ['message']) ?? ''
       );
-      await sleep(250);
-
-      const created = findCreatedConversation(client, beforeIds, title);
+      const receipt = await client.waitForReceipt(
+        createRequestId,
+        5000,
+        'create_group_conversation'
+      );
+      const created = receipt.conversationId
+        ? await waitForConversationById(client, receipt.conversationId)
+        : undefined;
       writeJson({
         ok: true,
         conversation: created ? toConversationDto(created) : null,
@@ -3168,17 +3212,22 @@ async function commandConversation(
       }
 
       const conversationId = parseRequiredBigInt(conversationIdRaw, 'conversation-id');
-      await client.sendConversationMessage(
+      const requestId = await client.sendConversationMessage(
         conversationId,
         message,
         parseRichMessageInput(flags)
       );
-      await sleep(250);
+      const receipt = await client.waitForReceipt(
+        requestId,
+        5000,
+        'send_conversation_message'
+      );
 
       writeJson({
         ok: true,
         conversationId: conversationId.toString(),
         text: message,
+        receipt: toReceiptDto(receipt),
       });
       return;
     }
@@ -4056,7 +4105,7 @@ async function commandDaemon(flags: Flags, positionals: string[]) {
 }
 
 async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
-  const { client, state: resolvedState } = await connectClient(flags, state, 'daemon-direct');
+  const { client, state: resolvedState } = await connectClient(flags, state, 'ops');
 
   const subscribedThreads = new Set<string>();
 
@@ -4339,7 +4388,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
             String(conversationIdRaw),
             'conversation_id'
           );
-          await client.sendConversationMessage(conversationId, text, {
+          const requestId = await client.sendConversationMessage(conversationId, text, {
             kind:
               typeof payload.kind === 'string'
                 ? assertChoice(payload.kind, 'kind', [
@@ -4905,16 +4954,19 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
             : parseAccountRefs(
                 typeof payload.members === 'string' ? payload.members : undefined
               );
-          const beforeIds = new Set(
-            client.listConversations().map(row => row.id.toString())
-          );
-          await client.createGroupConversation(
+          const createRequestId = await client.createGroupConversation(
             title,
             await resolveAccountIdentities(client, memberRefs),
             String(payload.opening_message ?? payload.message ?? '')
           );
-          await sleep(250);
-          const created = findCreatedConversation(client, beforeIds, title);
+          const receipt = await client.waitForReceipt(
+            createRequestId,
+            5000,
+            'create_group_conversation'
+          );
+          const created = receipt.conversationId
+            ? await waitForConversationById(client, receipt.conversationId)
+            : undefined;
           send(
             'ok',
             {
@@ -4922,6 +4974,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
               members: created
                 ? client.listConversationMembers(created.id).map(toConversationMemberDto)
                 : [],
+              receipt: toReceiptDto(receipt),
             },
             id
           );
@@ -5068,7 +5121,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
             String(conversationIdRaw),
             'conversation_id'
           );
-          await client.sendConversationMessage(conversationId, text, {
+          const requestId = await client.sendConversationMessage(conversationId, text, {
             kind:
               typeof payload.kind === 'string'
                 ? assertChoice(payload.kind, 'kind', [
@@ -5096,7 +5149,20 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
                 ? payload.client_request_id
                 : undefined,
           });
-          send('ok', { conversationId: conversationId.toString(), text }, id);
+          const receipt = await client.waitForReceipt(
+            requestId,
+            5000,
+            'send_conversation_message'
+          );
+          send(
+            'ok',
+            {
+              conversationId: conversationId.toString(),
+              text,
+              receipt: toReceiptDto(receipt),
+            },
+            id
+          );
           return;
         }
 

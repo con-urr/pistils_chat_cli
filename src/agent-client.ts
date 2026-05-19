@@ -1,4 +1,4 @@
-import { Identity } from 'spacetimedb';
+﻿import { Identity } from 'spacetimedb';
 import { DbConnection } from './module_bindings';
 import type * as ModuleTypes from './module_bindings/types';
 
@@ -9,7 +9,6 @@ export type AgentSubscriptionProfile =
   | 'direct'
   | 'direct-lite'
   | 'daemon-direct'
-  | 'archive-operator'
   | 'account-admin'
   | 'rooms'
   | 'ops'
@@ -213,11 +212,7 @@ const DAEMON_DIRECT_SUBSCRIPTIONS = [
 const ACCOUNT_ADMIN_SUBSCRIPTIONS = [
   ...IDENTITY_SUBSCRIPTIONS,
   'SELECT * FROM visible_account_entitlement',
-];
-
-const ARCHIVE_OPERATOR_SUBSCRIPTIONS = [
-  ...ACCOUNT_ADMIN_SUBSCRIPTIONS,
-  'SELECT * FROM visible_archive_candidate_message',
+  'SELECT * FROM visible_retention_cleanup_stat',
 ];
 
 const ROOM_SUBSCRIPTIONS = [
@@ -253,7 +248,6 @@ const SUBSCRIPTION_PROFILES: Record<AgentSubscriptionProfile, string[]> = {
   direct: DIRECT_CONVERSATION_SUBSCRIPTIONS,
   'direct-lite': DAEMON_DIRECT_SUBSCRIPTIONS,
   'daemon-direct': DAEMON_DIRECT_SUBSCRIPTIONS,
-  'archive-operator': ARCHIVE_OPERATOR_SUBSCRIPTIONS,
   'account-admin': ACCOUNT_ADMIN_SUBSCRIPTIONS,
   rooms: ROOM_SUBSCRIPTIONS,
   ops: OPS_SUBSCRIPTIONS,
@@ -763,11 +757,29 @@ export class AgentRealtimeClient {
     openingMessage = '',
     clientRequestId?: string
   ) {
+    const requestId = clientRequestId ?? makeClientRequestId('conversation:create');
     await this.conn.reducers.createGroupConversation({
       title,
       memberIdentities,
       openingMessage,
-      clientRequestId: clientRequestId ?? makeClientRequestId('conversation:create'),
+      clientRequestId: requestId,
+    });
+    return requestId;
+  }
+
+  async bindAgentIdentity({
+    identity,
+    agentId,
+    deviceLabel,
+  }: {
+    identity: Identity;
+    agentId: string;
+    deviceLabel?: string;
+  }) {
+    await this.conn.reducers.bindAgentIdentity({
+      identity,
+      agentId,
+      deviceLabel,
     });
   }
 
@@ -1009,6 +1021,15 @@ export class AgentRealtimeClient {
       this.conn,
       'visible_retention_policy',
       'visibleRetentionPolicy'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  listRetentionCleanupStats() {
+    const accessor = findDbAccessor<ModuleTypes.RetentionCleanupStat>(
+      this.conn,
+      'visible_retention_cleanup_stat',
+      'visibleRetentionCleanupStat'
     );
     return accessor ? Array.from(accessor.iter()) : [];
   }

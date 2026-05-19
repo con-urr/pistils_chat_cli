@@ -379,6 +379,24 @@ export const RetentionCleanupJob = __t.object("RetentionCleanupJob", {
 });
 export type RetentionCleanupJob = __Infer<typeof RetentionCleanupJob>;
 
+export const RetentionCleanupStat = __t.object("RetentionCleanupStat", {
+  key: __t.string(),
+  lastRunAt: __t.timestamp(),
+  reason: __t.string(),
+  deliveryDeleted: __t.u64(),
+  receiptDeleted: __t.u64(),
+  accountDirectoryRequestDeleted: __t.u64(),
+  channelDirectoryRequestDeleted: __t.u64(),
+  conversationMessageRequestDeleted: __t.u64(),
+  archiveBatchRequestDeleted: __t.u64(),
+  rateLimitBucketDeleted: __t.u64(),
+  requestLogDeleted: __t.u64(),
+  agentEventDeleted: __t.u64(),
+  conversationMessageDeleted: __t.u64(),
+  capped: __t.bool(),
+});
+export type RetentionCleanupStat = __Infer<typeof RetentionCleanupStat>;
+
 export const RetentionPolicy = __t.object("RetentionPolicy", {
   key: __t.string(),
   hotMessageRetentionSeconds: __t.u64(),
@@ -561,6 +579,9 @@ export type VisibleRequestedChannelDirectory = __Infer<typeof VisibleRequestedCh
 
 export const VisibleRequestedConversationMessage = __t.object("VisibleRequestedConversationMessage", {});
 export type VisibleRequestedConversationMessage = __Infer<typeof VisibleRequestedConversationMessage>;
+
+export const VisibleRetentionCleanupStat = __t.object("VisibleRetentionCleanupStat", {});
+export type VisibleRetentionCleanupStat = __Infer<typeof VisibleRetentionCleanupStat>;
 
 export const VisibleRetentionPolicy = __t.object("VisibleRetentionPolicy", {});
 export type VisibleRetentionPolicy = __Infer<typeof VisibleRetentionPolicy>;

@@ -1,5 +1,6 @@
-#!/usr/bin/env node
-import { promises as fs } from 'node:fs';
+﻿#!/usr/bin/env node
+import { existsSync, readFileSync, promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -51,14 +52,36 @@ function writeJsonLine(stream: NodeJS.WritableStream, payload: unknown) {
   stream.write(JSON.stringify(payload, jsonReplacer) + '\n');
 }
 
+function loadStateSync(): AgenttalkState {
+  try {
+    if (!existsSync(STATE_PATH)) {
+      return {};
+    }
+    return JSON.parse(readFileSync(STATE_PATH, 'utf8')) as AgenttalkState;
+  } catch {
+    return {};
+  }
+}
+
+function daemonPipeKey() {
+  const state = loadStateSync();
+  const host = process.env.SPACETIMEDB_HOST ?? state.host ?? DEFAULT_HOST;
+  const databaseName = process.env.SPACETIMEDB_DB_NAME ?? state.databaseName ?? DEFAULT_DB;
+  return createHash('sha256')
+    .update(JSON.stringify({ stateDir: STATE_DIR, host, databaseName }))
+    .digest('hex')
+    .slice(0, 16);
+}
+
 function daemonPipePath() {
   if (process.env.AGENTTALK_DAEMON_PIPE) {
     return process.env.AGENTTALK_DAEMON_PIPE;
   }
+  const key = daemonPipeKey();
   if (process.platform === 'win32') {
-    return '\\\\.\\pipe\\agenttalkd-default';
+    return `\\\\.\\pipe\\agenttalkd-${key}`;
   }
-  return path.join(os.tmpdir(), 'agenttalkd-default.sock');
+  return path.join(os.tmpdir(), `agenttalkd-${key}.sock`);
 }
 
 async function loadState(): Promise<AgenttalkState> {
@@ -178,7 +201,7 @@ class AgenttalkDaemon {
     const state = await loadState();
     const host = process.env.SPACETIMEDB_HOST ?? state.host ?? DEFAULT_HOST;
     const databaseName = process.env.SPACETIMEDB_DB_NAME ?? state.databaseName ?? DEFAULT_DB;
-    const token = process.env.SPACETIMEDB_TOKEN ?? state.token;
+    const token = process.env.AGENTTALK_TOKEN ?? process.env.SPACETIMEDB_TOKEN ?? state.token;
     const client = await AgentRealtimeClient.connect({
       host,
       databaseName,
@@ -402,6 +425,27 @@ class AgenttalkDaemon {
     };
   }
 
+  private shouldHydrate(payload: Record<string, unknown>) {
+    return payload.hydrate !== false && payload.hydrate !== 'false';
+  }
+
+  private async hydrateDeliveryMessage(delivery: ModuleTypes.ConversationDelivery) {
+    await this.client.requestConversationMessages({
+      conversationId: delivery.conversationId,
+      afterSequence: delivery.sequence > 0n ? delivery.sequence - 1n : undefined,
+      limit: 5n,
+    });
+    await sleep(100);
+    const message = this.client
+      .listRequestedConversationMessages(delivery.conversationId)
+      .find(
+        row =>
+          row.id === delivery.messageId ||
+          (row.sequence ?? row.id) === delivery.sequence
+      );
+    return message ? conversationMessageDto(message) : null;
+  }
+
   async handle(payload: Record<string, unknown>): Promise<AgenttalkdResponse> {
     const id = String(payload.id ?? '');
     const cmd = String(payload.cmd ?? payload.command ?? '');
@@ -525,36 +569,6 @@ class AgenttalkDaemon {
         }
         const targetKey = this.accountCacheKey(target);
         const cachedConversationId = this.directCache.get(targetKey) ?? this.directCache.get(target);
-        if (cachedConversationId) {
-          const requestId = await this.client.sendConversationMessage(cachedConversationId, text, {
-            kind: typeof payload.kind === 'string' ? (payload.kind as RichKind) : undefined,
-            correlationId:
-              typeof payload.correlationId === 'string'
-                ? payload.correlationId
-                : typeof payload.correlation_id === 'string'
-                  ? payload.correlation_id
-                  : undefined,
-            metadataJson:
-              typeof payload.metadataJson === 'string'
-                ? payload.metadataJson
-                : typeof payload.metadata_json === 'string'
-                  ? payload.metadata_json
-                  : undefined,
-            clientRequestId:
-              typeof payload.clientRequestId === 'string'
-                ? payload.clientRequestId
-                : typeof payload.client_request_id === 'string'
-                  ? payload.client_request_id
-                  : undefined,
-          });
-          const receipt = await this.client.waitForReceipt(
-            requestId,
-            5000,
-            'send_conversation_message'
-          );
-          return { id, ok: true, data: { reused: true, receipt: this.rememberReceipt(receipt) } };
-        }
-
         const resolved = await this.resolveAccount(target);
         const requestId = await this.client.sendDirectMessage({
           targetIdentity: resolved.identity,
@@ -589,7 +603,14 @@ class AgenttalkDaemon {
           this.directCache.set(target, receipt.conversationId);
           this.directCache.set(resolved.identity.toHexString(), receipt.conversationId);
         }
-        return { id, ok: true, data: { reused: false, receipt: this.rememberReceipt(receipt) } };
+        return {
+          id,
+          ok: true,
+          data: {
+            reused: Boolean(cachedConversationId),
+            receipt: this.rememberReceipt(receipt),
+          },
+        };
       }
 
       if (cmd === 'inbox') {
@@ -597,14 +618,21 @@ class AgenttalkDaemon {
         const deliveries = this.client
           .listInboxDeliveries({ state: payload.state as 'unread' | 'delivered' | 'read' | undefined })
           .slice(0, limit);
+        const hydrate = this.shouldHydrate(payload);
+        const items = [];
         for (const delivery of deliveries) {
           this.rememberConversationSequence(delivery.conversationId, delivery.sequence);
+          items.push({
+            delivery: deliveryDto(delivery),
+            message: hydrate ? await this.hydrateDeliveryMessage(delivery) : null,
+          });
         }
         return {
           id,
           ok: true,
           data: {
             deliveries: deliveries.map(deliveryDto),
+            items,
           },
         };
       }
@@ -656,7 +684,16 @@ class AgenttalkDaemon {
           timeoutMs,
         });
         this.rememberConversationSequence(delivery.conversationId, delivery.sequence);
-        return { id, ok: true, data: { delivery: deliveryDto(delivery) } };
+        return {
+          id,
+          ok: true,
+          data: {
+            delivery: deliveryDto(delivery),
+            message: this.shouldHydrate(payload)
+              ? await this.hydrateDeliveryMessage(delivery)
+              : null,
+          },
+        };
       }
 
       if (cmd === 'mark_read') {
