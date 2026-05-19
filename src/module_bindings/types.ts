@@ -13,6 +13,7 @@ import {
 export const Account = __t.object("Account", {
   handle: __t.string(),
   identity: __t.identity(),
+  agentId: __t.option(__t.string()),
   displayName: __t.string(),
   role: __t.string(),
   bio: __t.option(__t.string()),
@@ -38,13 +39,26 @@ export type AccountDirectoryRequest = __Infer<typeof AccountDirectoryRequest>;
 export const AccountEntitlement = __t.object("AccountEntitlement", {
   handle: __t.string(),
   identity: __t.identity(),
+  agentId: __t.option(__t.string()),
   accountType: __t.string(),
   groupChatAllowed: __t.bool(),
+  maxGroupConversationMembers: __t.option(__t.u64()),
+  maxMessageBytes: __t.option(__t.u64()),
+  sendRatePerMinute: __t.option(__t.u64()),
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
   updatedBy: __t.option(__t.identity()),
 });
 export type AccountEntitlement = __Infer<typeof AccountEntitlement>;
+
+export const ActiveConnection = __t.object("ActiveConnection", {
+  connectionId: __t.connectionId(),
+  identity: __t.identity(),
+  agentId: __t.option(__t.string()),
+  connectedAt: __t.timestamp(),
+  lastSeen: __t.timestamp(),
+});
+export type ActiveConnection = __Infer<typeof ActiveConnection>;
 
 export const AgentEvent = __t.object("AgentEvent", {
   id: __t.u64(),
@@ -60,6 +74,17 @@ export const AgentEvent = __t.object("AgentEvent", {
 });
 export type AgentEvent = __Infer<typeof AgentEvent>;
 
+export const AgentIdentity = __t.object("AgentIdentity", {
+  identity: __t.identity(),
+  agentId: __t.string(),
+  deviceLabel: __t.option(__t.string()),
+  status: __t.string(),
+  createdAt: __t.timestamp(),
+  lastSeen: __t.timestamp(),
+  revokedAt: __t.option(__t.timestamp()),
+});
+export type AgentIdentity = __Infer<typeof AgentIdentity>;
+
 export const AgentInstallation = __t.object("AgentInstallation", {
   identity: __t.identity(),
   ownerIdentity: __t.identity(),
@@ -71,6 +96,19 @@ export const AgentInstallation = __t.object("AgentInstallation", {
   expiresAt: __t.option(__t.timestamp()),
 });
 export type AgentInstallation = __Infer<typeof AgentInstallation>;
+
+export const AgentProfile = __t.object("AgentProfile", {
+  agentId: __t.string(),
+  handle: __t.string(),
+  displayName: __t.string(),
+  role: __t.string(),
+  bio: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  lastSeen: __t.timestamp(),
+  online: __t.bool(),
+});
+export type AgentProfile = __Infer<typeof AgentProfile>;
 
 export const AgentSession = __t.object("AgentSession", {
   identity: __t.identity(),
@@ -97,6 +135,15 @@ export const AgentTask = __t.object("AgentTask", {
   updatedAt: __t.timestamp(),
 });
 export type AgentTask = __Infer<typeof AgentTask>;
+
+export const ArchiveBatchRequest = __t.object("ArchiveBatchRequest", {
+  key: __t.string(),
+  requesterIdentity: __t.identity(),
+  beforeSent: __t.option(__t.timestamp()),
+  limit: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type ArchiveBatchRequest = __Infer<typeof ArchiveBatchRequest>;
 
 export const CapabilityGrant = __t.object("CapabilityGrant", {
   id: __t.u64(),
@@ -156,6 +203,22 @@ export const ChannelWorkspace = __t.object("ChannelWorkspace", {
 });
 export type ChannelWorkspace = __Infer<typeof ChannelWorkspace>;
 
+export const ClientRequestReceipt = __t.object("ClientRequestReceipt", {
+  key: __t.string(),
+  senderAgentId: __t.string(),
+  senderIdentity: __t.identity(),
+  action: __t.string(),
+  clientRequestId: __t.string(),
+  status: __t.string(),
+  conversationId: __t.option(__t.u64()),
+  messageId: __t.option(__t.u64()),
+  sequence: __t.option(__t.u64()),
+  error: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  expiresAt: __t.timestamp(),
+});
+export type ClientRequestReceipt = __Infer<typeof ClientRequestReceipt>;
+
 export const Conversation = __t.object("Conversation", {
   id: __t.u64(),
   kind: __t.string(),
@@ -166,10 +229,27 @@ export const Conversation = __t.object("Conversation", {
 });
 export type Conversation = __Infer<typeof Conversation>;
 
+export const ConversationDelivery = __t.object("ConversationDelivery", {
+  key: __t.string(),
+  recipientAgentId: __t.string(),
+  recipientIdentity: __t.option(__t.identity()),
+  conversationId: __t.u64(),
+  messageId: __t.u64(),
+  sequence: __t.u64(),
+  senderAgentId: __t.string(),
+  senderIdentity: __t.identity(),
+  state: __t.string(),
+  sent: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  expiresAt: __t.timestamp(),
+});
+export type ConversationDelivery = __Infer<typeof ConversationDelivery>;
+
 export const ConversationMember = __t.object("ConversationMember", {
   id: __t.u64(),
   conversationId: __t.u64(),
   memberIdentity: __t.identity(),
+  memberAgentId: __t.option(__t.string()),
   role: __t.string(),
   joinedAt: __t.timestamp(),
 });
@@ -191,6 +271,9 @@ export const ConversationMessage = __t.object("ConversationMessage", {
   artifactMimeType: __t.option(__t.string()),
   sent: __t.timestamp(),
   sequence: __t.u64(),
+  expiresAt: __t.timestamp(),
+  archiveStatus: __t.string(),
+  archivedAt: __t.option(__t.timestamp()),
 });
 export type ConversationMessage = __Infer<typeof ConversationMessage>;
 
@@ -220,6 +303,15 @@ export const ConversationSequence = __t.object("ConversationSequence", {
   updatedAt: __t.timestamp(),
 });
 export type ConversationSequence = __Infer<typeof ConversationSequence>;
+
+export const DirectConversationIndex = __t.object("DirectConversationIndex", {
+  pairKey: __t.string(),
+  leftAgentId: __t.string(),
+  rightAgentId: __t.string(),
+  conversationId: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type DirectConversationIndex = __Infer<typeof DirectConversationIndex>;
 
 export const Handoff = __t.object("Handoff", {
   id: __t.u64(),
@@ -279,6 +371,37 @@ export const RequestLog = __t.object("RequestLog", {
   createdAt: __t.timestamp(),
 });
 export type RequestLog = __Infer<typeof RequestLog>;
+
+export const RetentionCleanupJob = __t.object("RetentionCleanupJob", {
+  scheduledId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+  reason: __t.string(),
+});
+export type RetentionCleanupJob = __Infer<typeof RetentionCleanupJob>;
+
+export const RetentionPolicy = __t.object("RetentionPolicy", {
+  key: __t.string(),
+  hotMessageRetentionSeconds: __t.u64(),
+  deliveryRetentionSeconds: __t.u64(),
+  clientReceiptRetentionSeconds: __t.u64(),
+  rateLimitBucketRetentionSeconds: __t.u64(),
+  directoryRequestRetentionSeconds: __t.u64(),
+  agentEventRetentionSeconds: __t.u64(),
+  updatedAt: __t.timestamp(),
+  updatedBy: __t.identity(),
+});
+export type RetentionPolicy = __Infer<typeof RetentionPolicy>;
+
+export const RetentionPolicyView = __t.object("RetentionPolicyView", {
+  key: __t.string(),
+  hotMessageRetentionSeconds: __t.u64(),
+  hotRetentionHours: __t.u64(),
+  deliveryRetentionSeconds: __t.u64(),
+  clientReceiptRetentionSeconds: __t.u64(),
+  archiveRequiredBeforePurge: __t.bool(),
+  archiveConfigured: __t.bool(),
+});
+export type RetentionPolicyView = __Infer<typeof RetentionPolicyView>;
 
 export const RevokedIdentity = __t.object("RevokedIdentity", {
   identity: __t.identity(),
@@ -379,8 +502,14 @@ export type VisibleAccountEntitlement = __Infer<typeof VisibleAccountEntitlement
 export const VisibleAgentEvent = __t.object("VisibleAgentEvent", {});
 export type VisibleAgentEvent = __Infer<typeof VisibleAgentEvent>;
 
+export const VisibleAgentProfile = __t.object("VisibleAgentProfile", {});
+export type VisibleAgentProfile = __Infer<typeof VisibleAgentProfile>;
+
 export const VisibleAgentSession = __t.object("VisibleAgentSession", {});
 export type VisibleAgentSession = __Infer<typeof VisibleAgentSession>;
+
+export const VisibleArchiveCandidateMessage = __t.object("VisibleArchiveCandidateMessage", {});
+export type VisibleArchiveCandidateMessage = __Infer<typeof VisibleArchiveCandidateMessage>;
 
 export const VisibleCapabilityGrant = __t.object("VisibleCapabilityGrant", {});
 export type VisibleCapabilityGrant = __Infer<typeof VisibleCapabilityGrant>;
@@ -394,6 +523,9 @@ export type VisibleChannelMember = __Infer<typeof VisibleChannelMember>;
 export const VisibleChannelRole = __t.object("VisibleChannelRole", {});
 export type VisibleChannelRole = __Infer<typeof VisibleChannelRole>;
 
+export const VisibleClientRequestReceipt = __t.object("VisibleClientRequestReceipt", {});
+export type VisibleClientRequestReceipt = __Infer<typeof VisibleClientRequestReceipt>;
+
 export const VisibleConversation = __t.object("VisibleConversation", {});
 export type VisibleConversation = __Infer<typeof VisibleConversation>;
 
@@ -406,8 +538,14 @@ export type VisibleConversationMessage = __Infer<typeof VisibleConversationMessa
 export const VisibleConversationReadCursor = __t.object("VisibleConversationReadCursor", {});
 export type VisibleConversationReadCursor = __Infer<typeof VisibleConversationReadCursor>;
 
+export const VisibleDirectConversation = __t.object("VisibleDirectConversation", {});
+export type VisibleDirectConversation = __Infer<typeof VisibleDirectConversation>;
+
 export const VisibleHandoff = __t.object("VisibleHandoff", {});
 export type VisibleHandoff = __Infer<typeof VisibleHandoff>;
+
+export const VisibleInboxDelivery = __t.object("VisibleInboxDelivery", {});
+export type VisibleInboxDelivery = __Infer<typeof VisibleInboxDelivery>;
 
 export const VisibleMessage = __t.object("VisibleMessage", {});
 export type VisibleMessage = __Infer<typeof VisibleMessage>;
@@ -424,6 +562,9 @@ export type VisibleRequestedChannelDirectory = __Infer<typeof VisibleRequestedCh
 export const VisibleRequestedConversationMessage = __t.object("VisibleRequestedConversationMessage", {});
 export type VisibleRequestedConversationMessage = __Infer<typeof VisibleRequestedConversationMessage>;
 
+export const VisibleRetentionPolicy = __t.object("VisibleRetentionPolicy", {});
+export type VisibleRetentionPolicy = __Infer<typeof VisibleRetentionPolicy>;
+
 export const VisibleRichMessage = __t.object("VisibleRichMessage", {});
 export type VisibleRichMessage = __Infer<typeof VisibleRichMessage>;
 
@@ -432,6 +573,9 @@ export type VisibleRoomConfig = __Infer<typeof VisibleRoomConfig>;
 
 export const VisibleRoomRemovalReceipt = __t.object("VisibleRoomRemovalReceipt", {});
 export type VisibleRoomRemovalReceipt = __Infer<typeof VisibleRoomRemovalReceipt>;
+
+export const VisibleSelfAgentProfile = __t.object("VisibleSelfAgentProfile", {});
+export type VisibleSelfAgentProfile = __Infer<typeof VisibleSelfAgentProfile>;
 
 export const VisibleTask = __t.object("VisibleTask", {});
 export type VisibleTask = __Infer<typeof VisibleTask>;

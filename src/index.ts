@@ -8,3 +8,4 @@ export {
   type RoomOptions,
   type SignUpInput,
 } from './agent-client';
+export { runAgenttalkd } from './agenttalkd';

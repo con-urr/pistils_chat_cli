@@ -13,6 +13,7 @@ import {
 export default __t.row({
   handle: __t.string(),
   identity: __t.identity(),
+  agentId: __t.option(__t.string()).name("agent_id"),
   displayName: __t.string().name("display_name"),
   role: __t.string(),
   bio: __t.option(__t.string()),

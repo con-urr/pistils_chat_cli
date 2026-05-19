@@ -7,6 +7,9 @@ export type AgentSubscriptionProfile =
   | 'directory'
   | 'identity'
   | 'direct'
+  | 'direct-lite'
+  | 'daemon-direct'
+  | 'archive-operator'
   | 'account-admin'
   | 'rooms'
   | 'ops'
@@ -19,6 +22,7 @@ export type AgentClientOptions = {
   subscriptionProfile?: AgentSubscriptionProfile;
   subscriptions?: string[];
   includeFullConversationHistory?: boolean;
+  onDisconnect?: (error?: Error) => void;
 };
 
 export type SignUpInput = {
@@ -42,6 +46,15 @@ export type AccountDirectoryRequest = {
   role?: AgentRole;
   online?: boolean;
   limit?: bigint;
+};
+
+export type RetentionPolicyInput = {
+  hotMessageRetentionSeconds?: bigint;
+  deliveryRetentionSeconds?: bigint;
+  clientReceiptRetentionSeconds?: bigint;
+  rateLimitBucketRetentionSeconds?: bigint;
+  directoryRequestRetentionSeconds?: bigint;
+  agentEventRetentionSeconds?: bigint;
 };
 
 export type ChannelDirectoryRequest = {
@@ -149,6 +162,12 @@ function uniqueSubscriptions(subscriptions: string[]) {
   return Array.from(new Set(subscriptions));
 }
 
+type ConnectionRuntimeState = {
+  connected: boolean;
+  disconnectedAt?: number;
+  lastDisconnectError?: Error;
+};
+
 const DIRECTORY_SUBSCRIPTIONS = ['SELECT * FROM visible_requested_account_directory'];
 const CHANNEL_DIRECTORY_SUBSCRIPTIONS = [
   'SELECT * FROM visible_requested_channel_directory',
@@ -157,20 +176,48 @@ const CHANNEL_DIRECTORY_SUBSCRIPTIONS = [
 const IDENTITY_SUBSCRIPTIONS = [
   ...DIRECTORY_SUBSCRIPTIONS,
   'SELECT * FROM visible_user',
+  'SELECT * FROM visible_self_agent_profile',
+  'SELECT * FROM visible_agent_profile',
+  'SELECT * FROM visible_retention_policy',
 ];
 
 const DIRECT_CONVERSATION_SUBSCRIPTIONS = [
   ...DIRECTORY_SUBSCRIPTIONS,
+  'SELECT * FROM visible_direct_conversation',
+  'SELECT * FROM visible_self_agent_profile',
+  'SELECT * FROM visible_agent_profile',
   'SELECT * FROM visible_conversation',
   'SELECT * FROM visible_conversation_member',
+  'SELECT * FROM visible_inbox_delivery',
   'SELECT * FROM visible_unread_conversation_message',
   'SELECT * FROM visible_requested_conversation_message',
   'SELECT * FROM visible_conversation_read_cursor',
+  'SELECT * FROM visible_client_request_receipt',
+  'SELECT * FROM visible_retention_policy',
+];
+
+const DAEMON_DIRECT_SUBSCRIPTIONS = [
+  ...DIRECTORY_SUBSCRIPTIONS,
+  'SELECT * FROM visible_self_agent_profile',
+  'SELECT * FROM visible_agent_profile',
+  'SELECT * FROM visible_direct_conversation',
+  'SELECT * FROM visible_conversation',
+  'SELECT * FROM visible_conversation_member',
+  'SELECT * FROM visible_inbox_delivery',
+  'SELECT * FROM visible_requested_conversation_message',
+  'SELECT * FROM visible_conversation_read_cursor',
+  'SELECT * FROM visible_client_request_receipt',
+  'SELECT * FROM visible_retention_policy',
 ];
 
 const ACCOUNT_ADMIN_SUBSCRIPTIONS = [
   ...IDENTITY_SUBSCRIPTIONS,
   'SELECT * FROM visible_account_entitlement',
+];
+
+const ARCHIVE_OPERATOR_SUBSCRIPTIONS = [
+  ...ACCOUNT_ADMIN_SUBSCRIPTIONS,
+  'SELECT * FROM visible_archive_candidate_message',
 ];
 
 const ROOM_SUBSCRIPTIONS = [
@@ -204,6 +251,9 @@ const SUBSCRIPTION_PROFILES: Record<AgentSubscriptionProfile, string[]> = {
   directory: DIRECTORY_SUBSCRIPTIONS,
   identity: IDENTITY_SUBSCRIPTIONS,
   direct: DIRECT_CONVERSATION_SUBSCRIPTIONS,
+  'direct-lite': DAEMON_DIRECT_SUBSCRIPTIONS,
+  'daemon-direct': DAEMON_DIRECT_SUBSCRIPTIONS,
+  'archive-operator': ARCHIVE_OPERATOR_SUBSCRIPTIONS,
   'account-admin': ACCOUNT_ADMIN_SUBSCRIPTIONS,
   rooms: ROOM_SUBSCRIPTIONS,
   ops: OPS_SUBSCRIPTIONS,
@@ -225,7 +275,12 @@ function subscriptionsForOptions(options: AgentClientOptions) {
 
 async function connectAndSubscribe(
   options: AgentClientOptions
-): Promise<{ conn: DbConnection; identity: Identity; token: string }> {
+): Promise<{
+  conn: DbConnection;
+  identity: Identity;
+  token: string;
+  state: ConnectionRuntimeState;
+}> {
   const host =
     options.host ??
     process.env.SPACETIMEDB_HOST ??
@@ -242,12 +297,16 @@ async function connectAndSubscribe(
     resolveConnect = resolve;
     rejectConnect = reject;
   });
+  const state: ConnectionRuntimeState = { connected: false };
 
   const conn = DbConnection.builder()
     .withUri(host)
     .withDatabaseName(databaseName)
     .withToken(options.token)
     .onConnect((_ctx: unknown, identity: Identity, token: string) => {
+      state.connected = true;
+      state.disconnectedAt = undefined;
+      state.lastDisconnectError = undefined;
       connectedIdentity = identity;
       connectedToken = token;
       resolveConnect?.();
@@ -255,6 +314,12 @@ async function connectAndSubscribe(
     .onConnectError((...args: any[]) => {
       const err = args[args.length - 1];
       rejectConnect?.(coerceError(err));
+    })
+    .onDisconnect((_ctx: unknown, error?: Error) => {
+      state.connected = false;
+      state.disconnectedAt = Date.now();
+      state.lastDisconnectError = error ? coerceError(error) : undefined;
+      options.onDisconnect?.(state.lastDisconnectError);
     })
     .build();
 
@@ -284,19 +349,26 @@ async function connectAndSubscribe(
     conn,
     identity: connectedIdentity,
     token: connectedToken,
+    state,
   };
 }
 
 export class AgentRealtimeClient {
+  private readonly accountHandleCache = new Map<string, ModuleTypes.Account>();
+  private readonly directConversationCache = new Map<string, ModuleTypes.DirectConversationIndex>();
+  private readonly conversationSequenceCache = new Map<string, bigint>();
+  private readonly receiptCache = new Map<string, ModuleTypes.ClientRequestReceipt>();
+
   private constructor(
     private readonly conn: DbConnection,
     private readonly currentIdentity: Identity,
-    private readonly currentToken: string
+    private readonly currentToken: string,
+    private readonly connectionState: ConnectionRuntimeState
   ) {}
 
   static async connect(options: AgentClientOptions = {}) {
-    const { conn, identity, token } = await connectAndSubscribe(options);
-    return new AgentRealtimeClient(conn, identity, token);
+    const { conn, identity, token, state } = await connectAndSubscribe(options);
+    return new AgentRealtimeClient(conn, identity, token, state);
   }
 
   get identity() {
@@ -311,8 +383,54 @@ export class AgentRealtimeClient {
     return this.currentIdentity.toHexString();
   }
 
+  get connected() {
+    return this.connectionState.connected;
+  }
+
+  get disconnectedAt() {
+    return this.connectionState.disconnectedAt;
+  }
+
+  get lastDisconnectError() {
+    return this.connectionState.lastDisconnectError;
+  }
+
   disconnect() {
+    this.connectionState.connected = false;
     this.conn.disconnect();
+  }
+
+  cacheStats() {
+    return {
+      handles: this.accountHandleCache.size,
+      directConversations: this.directConversationCache.size,
+      conversationSequences: this.conversationSequenceCache.size,
+      receipts: this.receiptCache.size,
+    };
+  }
+
+  private rememberAccount(row: ModuleTypes.Account) {
+    this.accountHandleCache.set(row.handle, row);
+    this.accountHandleCache.set(`@${row.handle}`, row);
+    this.accountHandleCache.set(row.identity.toHexString(), row);
+  }
+
+  private rememberDirectConversation(row: ModuleTypes.DirectConversationIndex) {
+    this.directConversationCache.set(row.pairKey, row);
+    this.directConversationCache.set(row.conversationId.toString(), row);
+  }
+
+  private rememberReceipt(row: ModuleTypes.ClientRequestReceipt) {
+    this.receiptCache.set(`${row.action}:${row.clientRequestId}`, row);
+    this.receiptCache.set(row.clientRequestId, row);
+  }
+
+  private rememberConversationSequence(conversationId: bigint, sequence: bigint) {
+    const key = conversationId.toString();
+    const existing = this.conversationSequenceCache.get(key) ?? 0n;
+    if (sequence > existing) {
+      this.conversationSequenceCache.set(key, sequence);
+    }
   }
 
   async signUp({ name, role = 'agent', bio = '' }: SignUpInput) {
@@ -356,6 +474,25 @@ export class AgentRealtimeClient {
 
   async bootstrapOperatorAccount() {
     await this.conn.reducers.bootstrapOperatorAccount({});
+  }
+
+  async setRetentionPolicy(input: RetentionPolicyInput) {
+    await this.conn.reducers.setRetentionPolicy({
+      hotMessageRetentionSeconds: input.hotMessageRetentionSeconds,
+      deliveryRetentionSeconds: input.deliveryRetentionSeconds,
+      clientReceiptRetentionSeconds: input.clientReceiptRetentionSeconds,
+      rateLimitBucketRetentionSeconds: input.rateLimitBucketRetentionSeconds,
+      directoryRequestRetentionSeconds: input.directoryRequestRetentionSeconds,
+      agentEventRetentionSeconds: input.agentEventRetentionSeconds,
+    });
+  }
+
+  async resetRetentionPolicy() {
+    await this.conn.reducers.resetRetentionPolicy({});
+  }
+
+  async runRetentionCleanupNow() {
+    await this.conn.reducers.runRetentionCleanupNow({});
   }
 
   async setAccountType({
@@ -589,12 +726,35 @@ export class AgentRealtimeClient {
     openingMessage = '',
     clientRequestId?: string
   ) {
+    const requestId = clientRequestId ?? makeClientRequestId('conversation:create');
     await this.conn.reducers.createDirectConversation({
       targetIdentity,
       title,
       openingMessage,
-      clientRequestId: clientRequestId ?? makeClientRequestId('conversation:create'),
+      clientRequestId: requestId,
     });
+    return requestId;
+  }
+
+  async openDirectConversation({
+    targetAgentId,
+    targetIdentity,
+    title,
+    clientRequestId,
+  }: {
+    targetAgentId?: string;
+    targetIdentity?: Identity;
+    title?: string;
+    clientRequestId?: string;
+  }) {
+    const requestId = clientRequestId ?? makeClientRequestId('direct:open');
+    await this.conn.reducers.openDirectConversation({
+      targetAgentId,
+      targetIdentity,
+      title,
+      clientRequestId: requestId,
+    });
+    return requestId;
   }
 
   async createGroupConversation(
@@ -632,6 +792,7 @@ export class AgentRealtimeClient {
     text: string,
     input: RichMessageInput = {}
   ) {
+    const requestId = input.clientRequestId ?? makeClientRequestId('conversation:send');
     await this.conn.reducers.sendConversationMessage({
       conversationId,
       text,
@@ -641,8 +802,45 @@ export class AgentRealtimeClient {
       metadataJson: input.metadataJson,
       artifactUrl: input.artifactUrl,
       artifactMimeType: input.artifactMimeType,
-      clientRequestId:
-        input.clientRequestId ?? makeClientRequestId('conversation:send'),
+      clientRequestId: requestId,
+    });
+    return requestId;
+  }
+
+  async sendDirectMessage({
+    targetAgentId,
+    targetIdentity,
+    text,
+    kind = 'chat',
+    metadataJson,
+    correlationId,
+    clientRequestId,
+  }: {
+    targetAgentId?: string;
+    targetIdentity?: Identity;
+    text: string;
+    kind?: RichMessageInput['kind'];
+    metadataJson?: string;
+    correlationId?: string;
+    clientRequestId?: string;
+  }) {
+    const requestId = clientRequestId ?? makeClientRequestId('direct:send');
+    await this.conn.reducers.sendDirectMessage({
+      targetAgentId,
+      targetIdentity,
+      text,
+      kind,
+      metadataJson,
+      correlationId,
+      clientRequestId: requestId,
+    });
+    return requestId;
+  }
+
+  async heartbeat(statusText?: string, clientKind = 'agenttalk') {
+    await this.conn.reducers.heartbeat({
+      statusText,
+      clientKind,
     });
   }
 
@@ -730,30 +928,89 @@ export class AgentRealtimeClient {
   }
 
   listAccounts() {
-    const accessor =
+    const accessors = [
       findDbAccessor<ModuleTypes.Account>(
         this.conn,
         'visible_requested_account_directory',
         'visibleRequestedAccountDirectory'
-      ) ??
+      ),
       findDbAccessor<ModuleTypes.Account>(
         this.conn,
         'public_account_directory',
         'publicAccountDirectory'
-      ) ??
+      ),
       findDbAccessor<ModuleTypes.Account>(
         this.conn,
         'visible_account',
         'visibleAccount'
-      );
+      ),
+    ].filter(Boolean) as Array<{ iter(): Iterable<ModuleTypes.Account> }>;
 
-    if (!accessor) {
+    if (accessors.length === 0) {
       return [];
     }
 
-    return Array.from(accessor.iter()).sort((left, right) =>
+    const byIdentity = new Map<string, ModuleTypes.Account>();
+    for (const accessor of accessors) {
+      for (const row of accessor.iter()) {
+        byIdentity.set(row.identity.toHexString(), row);
+      }
+    }
+
+    const rows = Array.from(byIdentity.values()).sort((left, right) =>
       left.handle.localeCompare(right.handle)
     );
+    for (const row of rows) {
+      this.rememberAccount(row);
+    }
+    return rows;
+  }
+
+  listAgentProfiles() {
+    const accessor = findDbAccessor<ModuleTypes.AgentProfile>(
+      this.conn,
+      'visible_agent_profile',
+      'visibleAgentProfile'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  listSelfAgentProfiles() {
+    const accessor = findDbAccessor<ModuleTypes.AgentProfile>(
+      this.conn,
+      'visible_self_agent_profile',
+      'visibleSelfAgentProfile'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  currentAgentProfile() {
+    const self = this.listSelfAgentProfiles()[0];
+    if (self) {
+      return self;
+    }
+    const profiles = this.listAgentProfiles();
+    const ownAccount = this.listAccounts().find(row =>
+      sameIdentity(row.identity, this.currentIdentity)
+    );
+    if (ownAccount?.agentId) {
+      const profile = profiles.find(row => row.agentId === ownAccount.agentId);
+      if (profile) {
+        return profile;
+      }
+    }
+    return ownAccount
+      ? profiles.find(row => row.handle === ownAccount.handle)
+      : profiles[0];
+  }
+
+  listRetentionPolicies() {
+    const accessor = findDbAccessor<ModuleTypes.RetentionPolicyView>(
+      this.conn,
+      'visible_retention_policy',
+      'visibleRetentionPolicy'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
   }
 
   listAccountEntitlements() {
@@ -1009,6 +1266,20 @@ export class AgentRealtimeClient {
     ).sort(byLastActivityDesc);
   }
 
+  listDirectConversations() {
+    const rows = Array.from(
+      getDbAccessor<ModuleTypes.DirectConversationIndex>(
+        this.conn,
+        'visible_direct_conversation',
+        'visibleDirectConversation'
+      ).iter()
+    );
+    for (const row of rows) {
+      this.rememberDirectConversation(row);
+    }
+    return rows;
+  }
+
   listConversationMembers(conversationId?: bigint) {
     return Array.from(
       getDbAccessor<ModuleTypes.ConversationMember>(
@@ -1077,6 +1348,205 @@ export class AgentRealtimeClient {
       .sort(byConversationSequenceAsc);
   }
 
+  listInboxDeliveries({
+    conversationId,
+    state,
+  }: {
+    conversationId?: bigint;
+    state?: 'unread' | 'delivered' | 'read';
+  } = {}) {
+    const rows = Array.from(
+      getDbAccessor<ModuleTypes.ConversationDelivery>(
+        this.conn,
+        'visible_inbox_delivery',
+        'visibleInboxDelivery'
+      ).iter()
+    );
+    const filtered = rows
+      .filter(row => (conversationId ? row.conversationId === conversationId : true))
+      .filter(row => (state ? row.state === state : true))
+      .sort((left, right) => {
+        const sent = right.sent.toDate().getTime() - left.sent.toDate().getTime();
+        if (sent !== 0) {
+          return sent;
+        }
+        return right.sequence > left.sequence ? 1 : right.sequence < left.sequence ? -1 : 0;
+      });
+    for (const row of filtered) {
+      this.rememberConversationSequence(row.conversationId, row.sequence);
+    }
+    return filtered;
+  }
+
+  listClientRequestReceipts(action?: string, clientRequestId?: string) {
+    const rows = Array.from(
+      getDbAccessor<ModuleTypes.ClientRequestReceipt>(
+        this.conn,
+        'visible_client_request_receipt',
+        'visibleClientRequestReceipt'
+      ).iter()
+    );
+    const filtered = rows
+      .filter(row => (action ? row.action === action : true))
+      .filter(row =>
+        clientRequestId ? row.clientRequestId === clientRequestId : true
+      )
+      .sort((left, right) => right.createdAt.toDate().getTime() - left.createdAt.toDate().getTime());
+    for (const row of filtered) {
+      this.rememberReceipt(row);
+      if (row.conversationId && row.sequence) {
+        this.rememberConversationSequence(row.conversationId, row.sequence);
+      }
+    }
+    return filtered;
+  }
+
+  waitForReceipt(
+    clientRequestId: string,
+    timeoutMs = 5000,
+    action?: string
+  ): Promise<ModuleTypes.ClientRequestReceipt> {
+    const existing = this.listClientRequestReceipts(action, clientRequestId)[0];
+    if (existing) {
+      return Promise.resolve(existing);
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Timed out waiting for receipt ${clientRequestId}`));
+      }, timeoutMs);
+
+      const visibleReceipt = getDbAccessor<ModuleTypes.ClientRequestReceipt>(
+        this.conn,
+        'visible_client_request_receipt',
+        'visibleClientRequestReceipt'
+      ) as unknown as {
+        onInsert(handler: (ctx: unknown, row: ModuleTypes.ClientRequestReceipt) => void): void;
+        onUpdate(handler: (ctx: unknown, oldRow: ModuleTypes.ClientRequestReceipt, row: ModuleTypes.ClientRequestReceipt) => void): void;
+        removeOnInsert(handler: (ctx: unknown, row: ModuleTypes.ClientRequestReceipt) => void): void;
+        removeOnUpdate(handler: (ctx: unknown, oldRow: ModuleTypes.ClientRequestReceipt, row: ModuleTypes.ClientRequestReceipt) => void): void;
+      };
+
+      const matches = (row: ModuleTypes.ClientRequestReceipt) =>
+        row.clientRequestId === clientRequestId && (!action || row.action === action);
+      const onInsert = (_ctx: unknown, row: ModuleTypes.ClientRequestReceipt) => {
+        if (matches(row)) {
+          this.rememberReceipt(row);
+          if (row.conversationId && row.sequence) {
+            this.rememberConversationSequence(row.conversationId, row.sequence);
+          }
+          cleanup();
+          resolve(row);
+        }
+      };
+      const onUpdate = (
+        _ctx: unknown,
+        _oldRow: ModuleTypes.ClientRequestReceipt,
+        row: ModuleTypes.ClientRequestReceipt
+      ) => {
+        if (matches(row)) {
+          this.rememberReceipt(row);
+          if (row.conversationId && row.sequence) {
+            this.rememberConversationSequence(row.conversationId, row.sequence);
+          }
+          cleanup();
+          resolve(row);
+        }
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        visibleReceipt.removeOnInsert(onInsert);
+        visibleReceipt.removeOnUpdate(onUpdate);
+      };
+
+      visibleReceipt.onInsert(onInsert);
+      visibleReceipt.onUpdate(onUpdate);
+    });
+  }
+
+  waitForDirectConversation(pairKey: string, timeoutMs = 5000) {
+    const existing = this.listDirectConversations().find(row => row.pairKey === pairKey);
+    if (existing) {
+      return Promise.resolve(existing);
+    }
+
+    return new Promise<ModuleTypes.DirectConversationIndex>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Timed out waiting for direct conversation ${pairKey}`));
+      }, timeoutMs);
+      const visibleDirect = getDbAccessor<ModuleTypes.DirectConversationIndex>(
+        this.conn,
+        'visible_direct_conversation',
+        'visibleDirectConversation'
+      ) as unknown as {
+        onInsert(handler: (ctx: unknown, row: ModuleTypes.DirectConversationIndex) => void): void;
+        removeOnInsert(handler: (ctx: unknown, row: ModuleTypes.DirectConversationIndex) => void): void;
+      };
+      const onInsert = (_ctx: unknown, row: ModuleTypes.DirectConversationIndex) => {
+        if (row.pairKey === pairKey) {
+          this.rememberDirectConversation(row);
+          cleanup();
+          resolve(row);
+        }
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        visibleDirect.removeOnInsert(onInsert);
+      };
+      visibleDirect.onInsert(onInsert);
+    });
+  }
+
+  waitForInboxDelivery({
+    afterSequence,
+    conversationId,
+    timeoutMs = 30000,
+  }: {
+    afterSequence?: bigint;
+    conversationId?: bigint;
+    timeoutMs?: number;
+  } = {}) {
+    const existing = this.listInboxDeliveries({ conversationId }).find(row =>
+      afterSequence ? row.sequence > afterSequence : true
+    );
+    if (existing) {
+      return Promise.resolve(existing);
+    }
+
+    return new Promise<ModuleTypes.ConversationDelivery>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('Timed out waiting for inbox delivery'));
+      }, timeoutMs);
+      const visibleDelivery = getDbAccessor<ModuleTypes.ConversationDelivery>(
+        this.conn,
+        'visible_inbox_delivery',
+        'visibleInboxDelivery'
+      ) as unknown as {
+        onInsert(handler: (ctx: unknown, row: ModuleTypes.ConversationDelivery) => void): void;
+        removeOnInsert(handler: (ctx: unknown, row: ModuleTypes.ConversationDelivery) => void): void;
+      };
+      const onInsert = (_ctx: unknown, row: ModuleTypes.ConversationDelivery) => {
+        if (conversationId && row.conversationId !== conversationId) {
+          return;
+        }
+        if (afterSequence && row.sequence <= afterSequence) {
+          return;
+        }
+        this.rememberConversationSequence(row.conversationId, row.sequence);
+        cleanup();
+        resolve(row);
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        visibleDelivery.removeOnInsert(onInsert);
+      };
+      visibleDelivery.onInsert(onInsert);
+    });
+  }
+
   listRequestedConversationMessages(conversationId?: bigint) {
     const rows = Array.from(
       getDbAccessor<ModuleTypes.ConversationMessage>(
@@ -1085,9 +1555,13 @@ export class AgentRealtimeClient {
         'visibleRequestedConversationMessage'
       ).iter()
     );
-    return rows
+    const filtered = rows
       .filter(row => (conversationId ? row.conversationId === conversationId : true))
       .sort(byConversationSequenceAsc);
+    for (const row of filtered) {
+      this.rememberConversationSequence(row.conversationId, row.sequence);
+    }
+    return filtered;
   }
 
   listConversationMessages(conversationId?: bigint) {

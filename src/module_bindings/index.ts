@@ -54,21 +54,30 @@ import CreateWorkspaceChannelReducer from "./create_workspace_channel_reducer";
 import CreateWorkspaceInviteReducer from "./create_workspace_invite_reducer";
 import EmitAgentEventReducer from "./emit_agent_event_reducer";
 import GrantCapabilityReducer from "./grant_capability_reducer";
+import HeartbeatReducer from "./heartbeat_reducer";
 import JoinChannelReducer from "./join_channel_reducer";
 import KickFromRoomReducer from "./kick_from_room_reducer";
 import LeaveChannelReducer from "./leave_channel_reducer";
 import LeaveConversationReducer from "./leave_conversation_reducer";
 import MarkConversationReadReducer from "./mark_conversation_read_reducer";
+import MarkMessagesArchiveFailedReducer from "./mark_messages_archive_failed_reducer";
+import MarkMessagesArchivedReducer from "./mark_messages_archived_reducer";
+import OpenDirectConversationReducer from "./open_direct_conversation_reducer";
 import RegisterAgentReducer from "./register_agent_reducer";
 import RepairAccessStateReducer from "./repair_access_state_reducer";
 import RequestAccountDirectoryReducer from "./request_account_directory_reducer";
+import RequestArchiveBatchReducer from "./request_archive_batch_reducer";
 import RequestChannelDirectoryReducer from "./request_channel_directory_reducer";
 import RequestConversationMessagesReducer from "./request_conversation_messages_reducer";
+import ResetRetentionPolicyReducer from "./reset_retention_policy_reducer";
 import RevokeCapabilityReducer from "./revoke_capability_reducer";
+import RunRetentionCleanupNowReducer from "./run_retention_cleanup_now_reducer";
 import SendConversationMessageReducer from "./send_conversation_message_reducer";
+import SendDirectMessageReducer from "./send_direct_message_reducer";
 import SendThreadMessageReducer from "./send_thread_message_reducer";
 import SetAccountTypeReducer from "./set_account_type_reducer";
 import SetProfileReducer from "./set_profile_reducer";
+import SetRetentionPolicyReducer from "./set_retention_policy_reducer";
 import SetRoomConfigReducer from "./set_room_config_reducer";
 import SetRoomRoleReducer from "./set_room_role_reducer";
 import UnwatchThreadReducer from "./unwatch_thread_reducer";
@@ -83,24 +92,31 @@ import PublicChannelDirectoryRow from "./public_channel_directory_table";
 import VisibleAccountRow from "./visible_account_table";
 import VisibleAccountEntitlementRow from "./visible_account_entitlement_table";
 import VisibleAgentEventRow from "./visible_agent_event_table";
+import VisibleAgentProfileRow from "./visible_agent_profile_table";
 import VisibleAgentSessionRow from "./visible_agent_session_table";
+import VisibleArchiveCandidateMessageRow from "./visible_archive_candidate_message_table";
 import VisibleCapabilityGrantRow from "./visible_capability_grant_table";
 import VisibleChannelRow from "./visible_channel_table";
 import VisibleChannelMemberRow from "./visible_channel_member_table";
 import VisibleChannelRoleRow from "./visible_channel_role_table";
+import VisibleClientRequestReceiptRow from "./visible_client_request_receipt_table";
 import VisibleConversationRow from "./visible_conversation_table";
 import VisibleConversationMemberRow from "./visible_conversation_member_table";
 import VisibleConversationMessageRow from "./visible_conversation_message_table";
 import VisibleConversationReadCursorRow from "./visible_conversation_read_cursor_table";
+import VisibleDirectConversationRow from "./visible_direct_conversation_table";
 import VisibleHandoffRow from "./visible_handoff_table";
+import VisibleInboxDeliveryRow from "./visible_inbox_delivery_table";
 import VisibleMessageRow from "./visible_message_table";
 import VisibleRateLimitBucketRow from "./visible_rate_limit_bucket_table";
 import VisibleRequestedAccountDirectoryRow from "./visible_requested_account_directory_table";
 import VisibleRequestedChannelDirectoryRow from "./visible_requested_channel_directory_table";
 import VisibleRequestedConversationMessageRow from "./visible_requested_conversation_message_table";
+import VisibleRetentionPolicyRow from "./visible_retention_policy_table";
 import VisibleRichMessageRow from "./visible_rich_message_table";
 import VisibleRoomConfigRow from "./visible_room_config_table";
 import VisibleRoomRemovalReceiptRow from "./visible_room_removal_receipt_table";
+import VisibleSelfAgentProfileRow from "./visible_self_agent_profile_table";
 import VisibleTaskRow from "./visible_task_table";
 import VisibleTaskClaimRow from "./visible_task_claim_table";
 import VisibleThreadRow from "./visible_thread_table";
@@ -151,6 +167,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleAgentEventRow),
+  visible_agent_profile: __table({
+    name: 'visible_agent_profile',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleAgentProfileRow),
   visible_agent_session: __table({
     name: 'visible_agent_session',
     indexes: [
@@ -158,6 +181,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleAgentSessionRow),
+  visible_archive_candidate_message: __table({
+    name: 'visible_archive_candidate_message',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleArchiveCandidateMessageRow),
   visible_capability_grant: __table({
     name: 'visible_capability_grant',
     indexes: [
@@ -186,6 +216,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleChannelRoleRow),
+  visible_client_request_receipt: __table({
+    name: 'visible_client_request_receipt',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleClientRequestReceiptRow),
   visible_conversation: __table({
     name: 'visible_conversation',
     indexes: [
@@ -214,6 +251,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleConversationReadCursorRow),
+  visible_direct_conversation: __table({
+    name: 'visible_direct_conversation',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleDirectConversationRow),
   visible_handoff: __table({
     name: 'visible_handoff',
     indexes: [
@@ -221,6 +265,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleHandoffRow),
+  visible_inbox_delivery: __table({
+    name: 'visible_inbox_delivery',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleInboxDeliveryRow),
   visible_message: __table({
     name: 'visible_message',
     indexes: [
@@ -256,6 +307,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleRequestedConversationMessageRow),
+  visible_retention_policy: __table({
+    name: 'visible_retention_policy',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleRetentionPolicyRow),
   visible_rich_message: __table({
     name: 'visible_rich_message',
     indexes: [
@@ -277,6 +335,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleRoomRemovalReceiptRow),
+  visible_self_agent_profile: __table({
+    name: 'visible_self_agent_profile',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleSelfAgentProfileRow),
   visible_task: __table({
     name: 'visible_task',
     indexes: [
@@ -371,21 +436,30 @@ const reducersSchema = __reducers(
   __reducerSchema("create_workspace_invite", CreateWorkspaceInviteReducer),
   __reducerSchema("emit_agent_event", EmitAgentEventReducer),
   __reducerSchema("grant_capability", GrantCapabilityReducer),
+  __reducerSchema("heartbeat", HeartbeatReducer),
   __reducerSchema("join_channel", JoinChannelReducer),
   __reducerSchema("kick_from_room", KickFromRoomReducer),
   __reducerSchema("leave_channel", LeaveChannelReducer),
   __reducerSchema("leave_conversation", LeaveConversationReducer),
   __reducerSchema("mark_conversation_read", MarkConversationReadReducer),
+  __reducerSchema("mark_messages_archive_failed", MarkMessagesArchiveFailedReducer),
+  __reducerSchema("mark_messages_archived", MarkMessagesArchivedReducer),
+  __reducerSchema("open_direct_conversation", OpenDirectConversationReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
   __reducerSchema("repair_access_state", RepairAccessStateReducer),
   __reducerSchema("request_account_directory", RequestAccountDirectoryReducer),
+  __reducerSchema("request_archive_batch", RequestArchiveBatchReducer),
   __reducerSchema("request_channel_directory", RequestChannelDirectoryReducer),
   __reducerSchema("request_conversation_messages", RequestConversationMessagesReducer),
+  __reducerSchema("reset_retention_policy", ResetRetentionPolicyReducer),
   __reducerSchema("revoke_capability", RevokeCapabilityReducer),
+  __reducerSchema("run_retention_cleanup_now", RunRetentionCleanupNowReducer),
   __reducerSchema("send_conversation_message", SendConversationMessageReducer),
+  __reducerSchema("send_direct_message", SendDirectMessageReducer),
   __reducerSchema("send_thread_message", SendThreadMessageReducer),
   __reducerSchema("set_account_type", SetAccountTypeReducer),
   __reducerSchema("set_profile", SetProfileReducer),
+  __reducerSchema("set_retention_policy", SetRetentionPolicyReducer),
   __reducerSchema("set_room_config", SetRoomConfigReducer),
   __reducerSchema("set_room_role", SetRoomRoleReducer),
   __reducerSchema("unwatch_thread", UnwatchThreadReducer),

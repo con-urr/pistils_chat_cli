@@ -11,14 +11,9 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  handle: __t.string(),
-  identity: __t.identity(),
-  agentId: __t.option(__t.string()).name("agent_id"),
-  displayName: __t.string().name("display_name"),
-  role: __t.string(),
-  bio: __t.option(__t.string()),
-  online: __t.bool(),
+  pairKey: __t.string().name("pair_key"),
+  leftAgentId: __t.string().name("left_agent_id"),
+  rightAgentId: __t.string().name("right_agent_id"),
+  conversationId: __t.u64().name("conversation_id"),
   createdAt: __t.timestamp().name("created_at"),
-  updatedAt: __t.timestamp().name("updated_at"),
-  lastSeen: __t.timestamp().name("last_seen"),
 });

@@ -26,4 +26,7 @@ export default __t.row({
   artifactMimeType: __t.option(__t.string()).name("artifact_mime_type"),
   sent: __t.timestamp(),
   sequence: __t.u64(),
+  expiresAt: __t.timestamp().name("expires_at"),
+  archiveStatus: __t.string().name("archive_status"),
+  archivedAt: __t.option(__t.timestamp()).name("archived_at"),
 });

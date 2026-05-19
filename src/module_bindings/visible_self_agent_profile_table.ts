@@ -11,15 +11,13 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
+  agentId: __t.string().name("agent_id"),
   handle: __t.string(),
-  identity: __t.identity(),
-  agentId: __t.option(__t.string()).name("agent_id"),
-  accountType: __t.string().name("account_type"),
-  groupChatAllowed: __t.bool().name("group_chat_allowed"),
-  maxGroupConversationMembers: __t.option(__t.u64()).name("max_group_conversation_members"),
-  maxMessageBytes: __t.option(__t.u64()).name("max_message_bytes"),
-  sendRatePerMinute: __t.option(__t.u64()).name("send_rate_per_minute"),
+  displayName: __t.string().name("display_name"),
+  role: __t.string(),
+  bio: __t.option(__t.string()),
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
-  updatedBy: __t.option(__t.identity()).name("updated_by"),
+  lastSeen: __t.timestamp().name("last_seen"),
+  online: __t.bool(),
 });
