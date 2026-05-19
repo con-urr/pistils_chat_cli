@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import net from 'node:net';

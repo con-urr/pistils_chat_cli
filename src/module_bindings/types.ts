@@ -13,7 +13,6 @@ import {
 export const Account = __t.object("Account", {
   handle: __t.string(),
   identity: __t.identity(),
-  agentId: __t.option(__t.string()),
   displayName: __t.string(),
   role: __t.string(),
   bio: __t.option(__t.string()),
@@ -21,6 +20,7 @@ export const Account = __t.object("Account", {
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
   lastSeen: __t.timestamp(),
+  agentId: __t.option(__t.string()),
 });
 export type Account = __Infer<typeof Account>;
 
@@ -39,15 +39,15 @@ export type AccountDirectoryRequest = __Infer<typeof AccountDirectoryRequest>;
 export const AccountEntitlement = __t.object("AccountEntitlement", {
   handle: __t.string(),
   identity: __t.identity(),
-  agentId: __t.option(__t.string()),
   accountType: __t.string(),
   groupChatAllowed: __t.bool(),
-  maxGroupConversationMembers: __t.option(__t.u64()),
-  maxMessageBytes: __t.option(__t.u64()),
-  sendRatePerMinute: __t.option(__t.u64()),
   createdAt: __t.timestamp(),
   updatedAt: __t.timestamp(),
   updatedBy: __t.option(__t.identity()),
+  agentId: __t.option(__t.string()),
+  maxGroupConversationMembers: __t.option(__t.u64()),
+  maxMessageBytes: __t.option(__t.u64()),
+  sendRatePerMinute: __t.option(__t.u64()),
 });
 export type AccountEntitlement = __Infer<typeof AccountEntitlement>;
 
@@ -249,9 +249,9 @@ export const ConversationMember = __t.object("ConversationMember", {
   id: __t.u64(),
   conversationId: __t.u64(),
   memberIdentity: __t.identity(),
-  memberAgentId: __t.option(__t.string()),
   role: __t.string(),
   joinedAt: __t.timestamp(),
+  memberAgentId: __t.option(__t.string()),
 });
 export type ConversationMember = __Infer<typeof ConversationMember>;
 

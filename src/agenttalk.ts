@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import net from 'node:net';
@@ -1767,9 +1767,9 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
 
   try {
     const memberIdentities = await resolveAccountIdentities(client, refs);
-    let conversation = getBooleanFlag(flags, ['new'])
-      ? undefined
-      : findReusableGroupConversation(client, memberIdentities);
+    let conversation = getBooleanFlag(flags, ['reuse'])
+      ? findReusableGroupConversation(client, memberIdentities)
+      : undefined;
     const reused = Boolean(conversation);
     const memberHandles = memberIdentities.map(identity => {
       const account = client
@@ -1782,10 +1782,12 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
       `Group: ${memberHandles.join(', ')}`;
 
     if (!conversation) {
+      const createClientRequestId = makeLocalRequestId('group:create');
       const createRequestId = await client.createGroupConversation(
         title,
         memberIdentities,
-        ''
+        '',
+        createClientRequestId
       );
       const receipt = await client.waitForReceipt(
         createRequestId,
@@ -1802,10 +1804,15 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
     }
 
     if (message) {
+      const richInput = parseRichMessageInput(flags);
       const sendRequestId = await client.sendConversationMessage(
         conversation.id,
         message,
-        parseRichMessageInput(flags)
+        {
+          ...richInput,
+          clientRequestId:
+            richInput.clientRequestId ?? makeLocalRequestId('group:message'),
+        }
       );
       await client.waitForReceipt(sendRequestId, 5000, 'send_conversation_message');
     }
@@ -3151,10 +3158,12 @@ async function commandConversation(
         positionals.slice(1)
       );
       const memberIdentities = await resolveAccountIdentities(client, refs);
+      const message = getStringFlag(flags, ['message']) ?? '';
       const createRequestId = await client.createGroupConversation(
         title,
         memberIdentities,
-        getStringFlag(flags, ['message']) ?? ''
+        '',
+        makeLocalRequestId('conversation:group:create')
       );
       const receipt = await client.waitForReceipt(
         createRequestId,
@@ -3164,12 +3173,25 @@ async function commandConversation(
       const created = receipt.conversationId
         ? await waitForConversationById(client, receipt.conversationId)
         : undefined;
+      const sendReceipt =
+        created && message
+          ? await client.waitForReceipt(
+              await client.sendConversationMessage(created.id, message, {
+                ...parseRichMessageInput(flags),
+                clientRequestId: makeLocalRequestId('conversation:group:message'),
+              }),
+              5000,
+              'send_conversation_message'
+            )
+          : undefined;
       writeJson({
         ok: true,
         conversation: created ? toConversationDto(created) : null,
         members: created
           ? client.listConversationMembers(created.id).map(toConversationMemberDto)
           : [],
+        receipt: toReceiptDto(receipt),
+        messageReceipt: sendReceipt ? toReceiptDto(sendReceipt) : null,
       });
       return;
     }
@@ -4954,10 +4976,16 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
             : parseAccountRefs(
                 typeof payload.members === 'string' ? payload.members : undefined
               );
+          const openingMessage = String(payload.opening_message ?? payload.message ?? '');
           const createRequestId = await client.createGroupConversation(
             title,
             await resolveAccountIdentities(client, memberRefs),
-            String(payload.opening_message ?? payload.message ?? '')
+            '',
+            typeof payload.client_request_id === 'string'
+              ? payload.client_request_id
+              : typeof payload.clientRequestId === 'string'
+                ? payload.clientRequestId
+                : makeLocalRequestId('jsonl:group:create')
           );
           const receipt = await client.waitForReceipt(
             createRequestId,
@@ -4967,6 +4995,16 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
           const created = receipt.conversationId
             ? await waitForConversationById(client, receipt.conversationId)
             : undefined;
+          const messageReceipt =
+            created && openingMessage.trim()
+              ? await client.waitForReceipt(
+                  await client.sendConversationMessage(created.id, openingMessage, {
+                    clientRequestId: makeLocalRequestId('jsonl:group:message'),
+                  }),
+                  5000,
+                  'send_conversation_message'
+                )
+              : undefined;
           send(
             'ok',
             {
@@ -4975,6 +5013,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
                 ? client.listConversationMembers(created.id).map(toConversationMemberDto)
                 : [],
               receipt: toReceiptDto(receipt),
+              messageReceipt: messageReceipt ? toReceiptDto(messageReceipt) : null,
             },
             id
           );

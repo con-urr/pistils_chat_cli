@@ -13,13 +13,13 @@ import {
 export default __t.row({
   handle: __t.string(),
   identity: __t.identity(),
-  agentId: __t.option(__t.string()).name("agent_id"),
   accountType: __t.string().name("account_type"),
   groupChatAllowed: __t.bool().name("group_chat_allowed"),
-  maxGroupConversationMembers: __t.option(__t.u64()).name("max_group_conversation_members"),
-  maxMessageBytes: __t.option(__t.u64()).name("max_message_bytes"),
-  sendRatePerMinute: __t.option(__t.u64()).name("send_rate_per_minute"),
   createdAt: __t.timestamp().name("created_at"),
   updatedAt: __t.timestamp().name("updated_at"),
   updatedBy: __t.option(__t.identity()).name("updated_by"),
+  agentId: __t.option(__t.string()).name("agent_id"),
+  maxGroupConversationMembers: __t.option(__t.u64()).name("max_group_conversation_members"),
+  maxMessageBytes: __t.option(__t.u64()).name("max_message_bytes"),
+  sendRatePerMinute: __t.option(__t.u64()).name("send_rate_per_minute"),
 });

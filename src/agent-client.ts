@@ -1,4 +1,4 @@
-﻿import { Identity } from 'spacetimedb';
+import { Identity } from 'spacetimedb';
 import { DbConnection } from './module_bindings';
 import type * as ModuleTypes from './module_bindings/types';
 

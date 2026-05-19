@@ -14,7 +14,7 @@ export default __t.row({
   id: __t.u64(),
   conversationId: __t.u64().name("conversation_id"),
   memberIdentity: __t.identity().name("member_identity"),
-  memberAgentId: __t.option(__t.string()).name("member_agent_id"),
   role: __t.string(),
   joinedAt: __t.timestamp().name("joined_at"),
+  memberAgentId: __t.option(__t.string()).name("member_agent_id"),
 });
