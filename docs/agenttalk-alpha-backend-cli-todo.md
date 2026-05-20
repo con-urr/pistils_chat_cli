@@ -1006,11 +1006,12 @@ Update existing CLI commands to use the new backend architecture while preservin
   - [x] Clarify that only hot-retained messages are available.
   - [x] Use `request_conversation_messages` with explicit bounds.
 
-- [x] Add `--no-daemon` flag to force one-shot behavior.
-- [x] Add `--daemon` flag to require daemon and fail if unavailable.
+- [x] `--no-daemon` / `--direct` are disabled; direct DB debugging belongs in SpaceTimeDB CLI/admin tooling.
+- [x] Keep `--daemon` as a compatibility flag; daemon routing is required by default.
 - [x] Default behavior:
-  - [x] If daemon is running, use it for hot-path commands.
-  - [x] If daemon unavailable, fall back to one-shot behavior unless `--daemon` is set.
+  - [x] If daemon is running, use it for agent-facing commands.
+  - [x] If daemon is unavailable, auto-start it and route over IPC.
+  - [x] Never silently fall back to one-shot direct SpaceTimeDB from normal CLI commands.
 
 ## Why this matters
 
@@ -1019,8 +1020,8 @@ Users keep the CLI interface, but high-frequency agents can use the persistent d
 ## Acceptance criteria
 
 - [x] Existing CLI workflows still work.
-- [x] Hot-path commands can use daemon when available.
-- [x] One-shot fallback still works.
+- [x] Hot-path commands use daemon by default and auto-start it when needed.
+- [x] Direct one-shot fallback is not available through `agenttalk`.
 - [x] CLI output includes receipt/sequence information.
 - [x] CLI tells users about hot retention where relevant.
 
@@ -1587,6 +1588,44 @@ Next recommended step:
 Extend the same clearer wait contract into agenttalkd `listen_once` responses for multi-message batching if daemon clients need more than one hydrated message per command. Persistent daemon use remains the recommended path for real agents.
 Open questions:
 Whether to remove the legacy `timedOut` alias in a future breaking release after clients migrate to `waitTimedOut`.
+
+Date/time:
+2026-05-19
+Agent/session:
+Codex local coding session agent-client UX cleanup
+Phase:
+Phase 10 hot-path CLI semantics hardening
+Files changed:
+pistils_chat_cli/src/agenttalk.ts; pistils_chat_cli/README.md; pistils_chat_cli/scripts/smoke-daemon-routing.mjs; this TODO file.
+What changed:
+Implemented the follow-up fixes from the two-agent CLI exercise: JSON/agent mode no longer emits the daemon autostart info line, daemon-routed responses can report daemonStarted, conversation responses now include cursor-aware structured nextActions, inbox/listen results infer a top-level conversationId from returned messages, and conversation transcript JSON exposes top-level messages/page/nextActions without duplicating messages under result.messages.
+Tests run:
+npm.cmd run build; npm.cmd run smoke:daemon-routing.
+Result:
+PASS. Smoke covered init/chat daemon autostart, find, inbox, reply, listen, transcript, direct/no-daemon denial, run --jsonl daemon transport, cursor-bearing nextActions, top-level inbox conversationId, and transcript output without duplicated result.messages.
+Next recommended step:
+Run another minimally instructed two-agent client exercise against the normal CLI surface to validate the new nextActions contract in real agent behavior.
+Open questions:
+Whether future MCP/client wrappers should hide legacy human next strings entirely and expose only structured nextActions.
+
+Date/time:
+2026-05-19
+Agent/session:
+Codex local coding session post-natural-agent UX fixes
+Phase:
+Phase 10 hot-path CLI semantics hardening
+Files changed:
+pistils_chat_cli/src/agenttalk.ts; pistils_chat_cli/src/agenttalkd.ts; pistils_chat_cli/scripts/smoke-daemon-routing.mjs; pistils_chat_cli/README.md; this TODO file.
+What changed:
+Fixed all gripes from the minimally instructed two-agent client exercise: Windows daemon autostart now uses hidden Start-Process so init --json output is visible and the daemon persists; CLI stdout/stderr/JSONL writes use synchronous fd writes; transcript defaults to the beginning of the hot conversation unless --after/--before is supplied; transcript nextActions no longer suggest a cursor-limited transcript; daemon inbox hydrates deliveries in batches; normal inbox JSON omits raw daemon result/items and reports hydration counts; daemon whoami refreshes the current account so doctor and whoami agree.
+Tests run:
+npm.cmd run build; npm.cmd run smoke:daemon-routing.
+Result:
+PASS. Smoke now asserts init --json emits stdout, daemon stays running after autostart, daemon doctor reports the account, inbox output has no raw result and no unhydrated delivery rows, plain inbox messages are hydrated, and transcript without a cursor starts at sequence 1.
+Next recommended step:
+Repeat a minimally instructed two-agent client exercise once more before treating the CLI surface as acceptable for real agent clients.
+Open questions:
+Whether inbox should expose deliveries at all in normal JSON, or keep only messages plus diagnostic counts.
 ```
 
 ---
@@ -1619,8 +1658,8 @@ This phase is done when:
 - [x] Hot message retention is around 12 hours and enforced.
 - [x] Presence handles multiple active connections correctly.
 - [x] Group chat has hard caps.
-- [x] CLI can use daemon for hot-path chat/reply/inbox/listen/history.
-- [x] One-shot CLI fallback still works.
+- [x] CLI uses daemon for hot-path chat/reply/inbox/listen/history by default.
+- [x] One-shot CLI fallback is not available through `agenttalk`.
 - [x] Persistent-client load harness exists.
 - [x] Docs clearly describe ephemeral retention and daemon architecture.
 - [x] No MCP server has been implemented yet.

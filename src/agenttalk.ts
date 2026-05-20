@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, promises as fs } from 'node:fs';
+import { existsSync, readFileSync, writeSync, promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
@@ -39,15 +39,15 @@ let QUIET = false;
 let STRICT_OUTPUT = false;
 
 function writeStdout(line: string) {
-  process.stdout.write(line + '\n');
+  writeSync(1, line + '\n');
 }
 
 function writeJson(payload: unknown, pretty = true) {
-  process.stdout.write(JSON.stringify(payload, null, pretty ? 2 : undefined) + '\n');
+  writeSync(1, JSON.stringify(payload, null, pretty ? 2 : undefined) + '\n');
 }
 
 function writeStderr(line: string) {
-  process.stderr.write(line + '\n');
+  writeSync(2, line + '\n');
 }
 
 function logInfo(message: string) {
@@ -346,6 +346,46 @@ function agenttalkdEntrypoint() {
   };
 }
 
+function quotePowerShellString(value: string) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function powerShellArray(values: string[]) {
+  return `@(${values.map(quotePowerShellString).join(',')})`;
+}
+
+function spawnDaemonEntrypoint(entrypoint: { command: string; args: string[] }) {
+  if (process.platform === 'win32') {
+    const command = [
+      'Start-Process',
+      '-FilePath',
+      quotePowerShellString(entrypoint.command),
+      '-ArgumentList',
+      powerShellArray(entrypoint.args),
+      '-WindowStyle',
+      'Hidden',
+    ].join(' ');
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', command],
+      {
+        stdio: 'ignore',
+        env: process.env,
+        windowsHide: true,
+      }
+    );
+    child.unref();
+    return;
+  }
+
+  const child = spawn(entrypoint.command, entrypoint.args, {
+    detached: true,
+    stdio: 'ignore',
+    env: process.env,
+  });
+  child.unref();
+}
+
 async function startDaemonProcess() {
   const existing = await pingDaemon();
   if (existing) {
@@ -353,13 +393,7 @@ async function startDaemonProcess() {
   }
 
   const entrypoint = agenttalkdEntrypoint();
-  const child = spawn(entrypoint.command, entrypoint.args, {
-    detached: true,
-    stdio: 'ignore',
-    env: process.env,
-    shell: process.platform === 'win32' && entrypoint.command.endsWith('.cmd'),
-  });
-  child.unref();
+  spawnDaemonEntrypoint(entrypoint);
 
   for (let i = 0; i < 20; i += 1) {
     await sleep(250);
@@ -481,6 +515,9 @@ Global flags:
   --show-token       include raw token in signup/whoami output
   --quiet            suppress non-data informational output
   --agent            agent-friendly mode: quiet + JSON output
+  --direct           disabled; use SpaceTimeDB CLI/admin tooling for direct DB debugging
+  --no-daemon        disabled; agenttalk commands always use agenttalkd
+  --daemon           compatibility flag; daemon routing is already the default
   --retries <n>      connect retry attempts on transient failures (default: 2)
   --retry-base-ms <n> base backoff milliseconds (default: 300)
   --connect-timeout-ms <n> connection timeout milliseconds (default: 15000)
@@ -608,11 +645,26 @@ function parseRichMessageInput(flags: Flags): RichMessageInput {
   };
 }
 
-function daemonMode(flags: Flags) {
-  return {
-    tryDaemon: !getBooleanFlag(flags, ['no-daemon']),
-    requireDaemon: getBooleanFlag(flags, ['daemon']),
-  };
+function directCliRequested(flags: Flags) {
+  return getBooleanFlag(flags, ['direct', 'no-daemon']);
+}
+
+function allowDirectCli(flags: Flags) {
+  if (directCliRequested(flags)) {
+    throw new Error(
+      'Direct SpaceTimeDB CLI mode is not available through agenttalk. Use the SpaceTimeDB CLI or backend admin tooling for direct database debugging.'
+    );
+  }
+
+  return false;
+}
+
+function assertDirectCliAllowed(flags: Flags) {
+  allowDirectCli(flags);
+
+  throw new Error(
+    'This command is not yet daemon-routed. The agenttalk CLI requires the agenttalkd gateway and will not open a direct SpaceTimeDB connection; use the SpaceTimeDB CLI/admin tooling for direct database debugging.'
+  );
 }
 
 function makeLocalRequestId(action: string) {
@@ -634,16 +686,32 @@ function receiptActionForDaemonCommand(command: string) {
   return undefined;
 }
 
-async function maybeSendDaemonCommand(
+async function ensureDaemonRunning(_flags: Flags) {
+  const existing = await pingDaemon();
+  if (existing) {
+    return { response: existing, started: false };
+  }
+
+  if (!QUIET && !STRICT_OUTPUT) {
+    writeStderr('[info] agenttalkd not running; starting...');
+  }
+
+  const started = await startDaemonProcess();
+  return started;
+}
+
+async function sendRequiredDaemonCommand(
   flags: Flags,
   payload: Record<string, unknown>,
   timeoutMs = 5000,
   returnErrors = false
 ) {
-  const mode = daemonMode(flags);
-  if (!mode.tryDaemon) {
+  if (allowDirectCli(flags)) {
     return undefined;
   }
+
+  const daemonStatus = await ensureDaemonRunning(flags);
+
   const command = String(payload.cmd ?? payload.command ?? 'command');
   const requestPayload = { ...payload };
   requestPayload.id = makeLocalRequestId(String(payload.id ?? command));
@@ -656,18 +724,32 @@ async function maybeSendDaemonCommand(
     requestPayload.clientRequestId = makeLocalRequestId(receiptAction);
   }
 
-  try {
-    const response = await sendDaemonCommand(requestPayload, timeoutMs);
-    if (!response?.ok && mode.requireDaemon) {
-      throw new Error(response?.error ?? 'agenttalkd returned an error');
-    }
-    return response?.ok || returnErrors ? response : undefined;
-  } catch (error) {
-    if (mode.requireDaemon) {
-      throw error;
-    }
-    return undefined;
+  const response = await sendDaemonCommand(requestPayload, timeoutMs);
+  if (!response?.ok && !returnErrors) {
+    throw new Error(response?.error ?? 'agenttalkd returned an error');
   }
+  return response ? { ...response, daemonStarted: daemonStatus.started === true } : response;
+}
+
+function daemonTransportPayload<T extends Record<string, unknown>>(
+  payload: T,
+  daemonResponse?: { daemonStarted?: boolean } | null
+) {
+  return {
+    ok: true,
+    transport: 'daemon',
+    daemon: true,
+    ...(daemonResponse ? { daemonStarted: daemonResponse.daemonStarted === true } : {}),
+    ...payload,
+  };
+}
+
+function blockedDirectTransportPayload<T extends Record<string, unknown>>(payload: T) {
+  return {
+    transport: 'direct-disabled',
+    daemon: false,
+    ...payload,
+  };
 }
 
 function parseAccountRefs(raw: string | undefined, extraRefs: string[] = []) {
@@ -939,7 +1021,7 @@ function toAgentEventDto(event: ModuleTypes.AgentEvent) {
 }
 
 function emitJsonLine(payload: unknown) {
-  process.stdout.write(JSON.stringify(payload) + '\n');
+  writeSync(1, JSON.stringify(payload) + '\n');
 }
 
 function sleep(ms: number) {
@@ -1049,6 +1131,7 @@ async function connectClient(
   state: AgenttalkState,
   defaultProfile: AgentSubscriptionProfile = 'direct'
 ) {
+  assertDirectCliAllowed(flags);
   const release = await acquireStateLock();
 
   try {
@@ -1439,12 +1522,95 @@ function findReusableGroupConversation(
   });
 }
 
-function conversationNextCommands(conversationId: string) {
+const NEXT_ACTION_PRESERVE_ENV = [
+  'AGENTTALK_STATE_DIR',
+  'SPACETIMEDB_HOST',
+  'SPACETIMEDB_DB_NAME',
+];
+
+function quoteCliArg(arg: string) {
+  return /^[A-Za-z0-9_@./:=,-]+$/.test(arg) ? arg : JSON.stringify(arg);
+}
+
+function commandLineFromArgs(args: string[]) {
+  return ['agenttalk', ...args].map(quoteCliArg).join(' ');
+}
+
+function conversationNextActions(
+  conversationId: string,
+  afterSequence?: string | null
+) {
+  const listenArgs = ['listen', '--conversation', conversationId];
+  if (afterSequence) {
+    listenArgs.push('--after', afterSequence);
+  }
+  listenArgs.push('--timeout', '60s', '--json');
+
+  const transcriptArgs = ['transcript', '--conversation', conversationId, '--limit', '50', '--json'];
+
+  const replyArgs = ['reply', conversationId, '--message', '...', '--json'];
+  const cursor = {
+    conversationId,
+    afterSequence: afterSequence ?? null,
+  };
+
   return [
-    `agenttalk listen --conversation ${conversationId} --timeout 60s --json`,
-    `agenttalk transcript --conversation ${conversationId} --limit 50 --json`,
-    `agenttalk reply ${conversationId} --message "..." --json`,
+    {
+      name: 'listen',
+      args: listenArgs,
+      command: commandLineFromArgs(listenArgs),
+      preserveEnv: NEXT_ACTION_PRESERVE_ENV,
+      cursor,
+    },
+    {
+      name: 'transcript',
+      args: transcriptArgs,
+      command: commandLineFromArgs(transcriptArgs),
+      preserveEnv: NEXT_ACTION_PRESERVE_ENV,
+      cursor,
+    },
+    {
+      name: 'reply',
+      args: replyArgs,
+      command: commandLineFromArgs(replyArgs),
+      preserveEnv: NEXT_ACTION_PRESERVE_ENV,
+      cursor,
+    },
   ];
+}
+
+function conversationNextCommands(
+  conversationId: string,
+  afterSequence?: string | null
+) {
+  return conversationNextActions(conversationId, afterSequence).map(action => action.command);
+}
+
+function conversationNextPayload(
+  conversationId: string | null | undefined,
+  afterSequence?: string | null
+) {
+  if (!conversationId) {
+    return {
+      next: [],
+      nextActions: [],
+    };
+  }
+
+  const nextActions = conversationNextActions(conversationId, afterSequence);
+  return {
+    next: nextActions.map(action => action.command),
+    nextActions,
+  };
+}
+
+function inferSingleConversationId(messages: ConversationMessageDto[]) {
+  const ids = new Set(
+    messages
+      .map(message => message.conversationId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+  );
+  return ids.size === 1 ? Array.from(ids)[0] : null;
 }
 
 function recentConversationMessages(client: AgentRealtimeClient, max: number) {
@@ -1531,12 +1697,19 @@ function buildConversationMessageResult({
   );
   const messages = [...snapshotUnique, ...liveUnique].slice(0, max);
   const nextSequence = maxConversationSequence(messages);
+  const resolvedConversationId =
+    conversationId?.toString() ?? inferSingleConversationId(messages);
+  const nextAfterSequence = nextSequence > 0n ? nextSequence.toString() : null;
+  const nextPayload = resolvedConversationId
+    ? conversationNextPayload(resolvedConversationId, nextAfterSequence)
+    : {};
 
   return {
     ok: true,
-    conversationId: conversationId?.toString() ?? null,
+    conversationId: resolvedConversationId,
     afterSequence: afterSequence?.toString() ?? null,
-    nextAfterSequence: nextSequence > 0n ? nextSequence.toString() : null,
+    lastSequence: nextAfterSequence,
+    nextAfterSequence,
     source: messageResultSource(snapshotUnique.length, liveUnique.length),
     returnedBecause,
     waitTimedOut,
@@ -1547,6 +1720,7 @@ function buildConversationMessageResult({
     messages,
     snapshot: snapshotUnique,
     live: liveUnique,
+    ...nextPayload,
     ...(next ? { next } : {}),
   };
 }
@@ -1578,6 +1752,55 @@ async function commandInit(flags: Flags, positionals: string[], state: Agenttalk
   const displayName =
     getStringFlag(flags, ['name', 'display-name', 'displayName']) ?? handle;
   const bio = getStringFlag(flags, ['bio']) ?? '';
+  if (!allowDirectCli(flags)) {
+    const daemonResponse = await sendRequiredDaemonCommand(flags, {
+      id: 'init',
+      cmd: 'init_account',
+      handle,
+      displayName,
+      role,
+      bio,
+    });
+    const data = (daemonResponse?.data ?? {}) as Record<string, unknown>;
+    const account = data.account as { handle?: string } | null | undefined;
+    const nextActions = [
+      {
+        name: 'find',
+        args: ['find', '<handle-or-query>', '--json'],
+        command: 'agenttalk find <handle-or-query> --json',
+        preserveEnv: NEXT_ACTION_PRESERVE_ENV,
+      },
+      {
+        name: 'chat',
+        args: ['chat', '@some-agent', '--message', 'hello', '--json'],
+        command: 'agenttalk chat @some-agent --message "hello" --json',
+        preserveEnv: NEXT_ACTION_PRESERVE_ENV,
+      },
+      {
+        name: 'inbox',
+        args: ['inbox', '--wait', '30s', '--json'],
+        command: 'agenttalk inbox --wait 30s --json',
+        preserveEnv: NEXT_ACTION_PRESERVE_ENV,
+      },
+    ];
+    const payload = daemonTransportPayload({
+      ...data,
+      statePath: STATE_PATH,
+      next: nextActions.map(action => action.command),
+      nextActions,
+    }, daemonResponse);
+    if (wantsJson(flags)) {
+      writeJson(payload);
+      return;
+    }
+    writeStdout(
+      `initialized @${account?.handle ?? normalizeAccountRef(handle)} via agenttalkd`
+    );
+    writeStdout(`state: ${STATE_PATH}`);
+    writeStdout(`next: ${payload.next[0]}`);
+    return;
+  }
+
   const { client, state: resolvedState } = await connectClient(
     flags,
     state,
@@ -1615,6 +1838,8 @@ async function commandInit(flags: Flags, positionals: string[], state: Agenttalk
       existingByIdentity;
     const payload = {
       ok: true,
+      transport: 'direct-disabled',
+      daemon: false,
       identity: client.identityHex,
       account: account ? toAccountDto(account) : null,
       statePath: STATE_PATH,
@@ -1648,6 +1873,27 @@ async function commandFind(flags: Flags, positionals: string[], state: Agenttalk
     throw new Error('find requires <query-or-handle>');
   }
 
+  if (!allowDirectCli(flags)) {
+    const daemonResponse = await sendRequiredDaemonCommand(flags, {
+      id: 'find',
+      cmd: 'find',
+      query,
+      limit: directoryLimitFromFlags(flags).toString(),
+    });
+    const data = (daemonResponse?.data ?? {}) as { accounts?: unknown[] };
+    const accounts = data.accounts ?? [];
+    if (wantsJson(flags)) {
+      writeJson(daemonTransportPayload({ accounts }, daemonResponse));
+      return;
+    }
+    for (const account of accounts as Array<any>) {
+      writeStdout(
+        `@${account.handle}\t${account.role}\t${account.online ? 'online' : 'offline'}\t${account.displayName}`
+      );
+    }
+    return;
+  }
+
   const { client } = await connectClient(flags, state, 'directory');
 
   try {
@@ -1667,7 +1913,7 @@ async function commandFind(flags: Flags, positionals: string[], state: Agenttalk
     const accounts = rows.map(toAccountDto);
 
     if (wantsJson(flags)) {
-      writeJson({ ok: true, accounts });
+      writeJson(blockedDirectTransportPayload({ ok: true, accounts }));
       return;
     }
 
@@ -1689,26 +1935,31 @@ async function commandChat(flags: Flags, positionals: string[], state: Agenttalk
   }
 
   const richInput = parseRichMessageInput(flags);
-  const daemonResponse = await maybeSendDaemonCommand(flags, {
-    id: 'chat',
-    cmd: 'send_direct',
-    target: targetRef,
-    text: message,
-    kind: richInput.kind,
-    clientRequestId: richInput.clientRequestId,
-  });
-  if (daemonResponse) {
-    const payload = {
-      ok: true,
-      daemon: true,
+  if (!allowDirectCli(flags)) {
+    const daemonResponse = await sendRequiredDaemonCommand(flags, {
+      id: 'chat',
+      cmd: 'send_direct',
+      target: targetRef,
+      text: message,
+      kind: richInput.kind,
+      clientRequestId: richInput.clientRequestId,
+    });
+    const receipt = (daemonResponse?.data as any)?.receipt;
+    const conversationId = receipt?.conversationId ? String(receipt.conversationId) : null;
+    const lastSequence = receipt?.sequence ? String(receipt.sequence) : null;
+    const payload = daemonTransportPayload({
       sent: message,
-      result: daemonResponse.data,
-    };
+      result: daemonResponse?.data,
+      conversationId,
+      lastSequence,
+      nextAfterSequence: lastSequence,
+      receipt,
+      ...conversationNextPayload(conversationId, lastSequence),
+    }, daemonResponse);
     if (wantsJson(flags)) {
       writeJson(payload);
       return;
     }
-    const receipt = (daemonResponse.data as any)?.receipt;
     writeStdout(
       `sent via agenttalkd in conversation ${receipt?.conversationId ?? 'unknown'}`
     );
@@ -1759,6 +2010,8 @@ async function commandChat(flags: Flags, positionals: string[], state: Agenttalk
 
     const payload = {
       ok: true,
+      transport: 'direct-disabled',
+      daemon: false,
       conversation: conversation ? toConversationDto(conversation) : null,
       conversationId: openReceipt.conversationId.toString(),
       target: targetAccount ? toAccountDto(targetAccount) : targetIdentity.toHexString(),
@@ -1792,27 +2045,33 @@ async function commandReply(flags: Flags, positionals: string[], state: Agenttal
 
   const conversationId = parseRequiredBigInt(conversationIdRaw, 'conversation-id');
   const richInput = parseRichMessageInput(flags);
-  const daemonResponse = await maybeSendDaemonCommand(flags, {
-    id: 'reply',
-    cmd: 'send_conversation',
-    conversationId: conversationId.toString(),
-    text: message,
-    kind: richInput.kind,
-    clientRequestId: richInput.clientRequestId,
-  });
-  if (daemonResponse) {
-    const payload = {
-      ok: true,
-      daemon: true,
+  if (!allowDirectCli(flags)) {
+    const daemonResponse = await sendRequiredDaemonCommand(flags, {
+      id: 'reply',
+      cmd: 'send_conversation',
+      conversationId: conversationId.toString(),
+      text: message,
+      kind: richInput.kind,
+      clientRequestId: richInput.clientRequestId,
+    });
+    const receipt = (daemonResponse?.data as any)?.receipt;
+    const receiptConversationId = receipt?.conversationId
+      ? String(receipt.conversationId)
+      : conversationId.toString();
+    const lastSequence = receipt?.sequence ? String(receipt.sequence) : null;
+    const payload = daemonTransportPayload({
       sent: message,
-      result: daemonResponse.data,
-      next: conversationNextCommands(conversationId.toString()),
-    };
+      result: daemonResponse?.data,
+      conversationId: receiptConversationId,
+      lastSequence,
+      nextAfterSequence: lastSequence,
+      receipt,
+      ...conversationNextPayload(receiptConversationId, lastSequence),
+    }, daemonResponse);
     if (wantsJson(flags)) {
       writeJson(payload);
       return;
     }
-    const receipt = (daemonResponse.data as any)?.receipt;
     writeStdout(
       `sent via agenttalkd to conversation ${receipt?.conversationId ?? conversationId.toString()}`
     );
@@ -1837,6 +2096,8 @@ async function commandReply(flags: Flags, positionals: string[], state: Agenttal
       .find(row => row.id === conversationId);
     const payload = {
       ok: true,
+      transport: 'direct-disabled',
+      daemon: false,
       conversation: conversation ? toConversationDto(conversation) : null,
       sent: message,
       clientRequestId: requestId,
@@ -1867,6 +2128,47 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
     positionals.slice(1)
   );
   const message = getStringFlag(flags, ['message', 'text']) ?? '';
+  const title = getStringFlag(flags, ['title']);
+  if (!allowDirectCli(flags)) {
+    const daemonResponse = await sendRequiredDaemonCommand(flags, {
+      id: 'group',
+      cmd: 'create_group',
+      members: refs,
+      title: title ?? `Group: ${refs.join(', ')}`,
+      message,
+      kind: parseRichMessageInput(flags).kind,
+    });
+    const data = (daemonResponse?.data ?? {}) as Record<string, unknown>;
+    const conversationId = String(data.conversationId ?? '');
+    const messageReceipt = data.messageReceipt as { sequence?: string | number | null } | undefined;
+    const receipt = data.receipt as { sequence?: string | number | null } | undefined;
+    const lastSequence =
+      messageReceipt?.sequence !== undefined && messageReceipt?.sequence !== null
+        ? String(messageReceipt.sequence)
+        : receipt?.sequence !== undefined && receipt?.sequence !== null
+          ? String(receipt.sequence)
+          : null;
+    const payload = daemonTransportPayload({
+      ...data,
+      reused: false,
+      sent: message || null,
+      lastSequence,
+      nextAfterSequence: lastSequence,
+      ...(conversationId
+        ? conversationNextPayload(conversationId, lastSequence)
+        : { next: [], nextActions: [] }),
+    }, daemonResponse);
+    if (wantsJson(flags)) {
+      writeJson(payload);
+      return;
+    }
+    writeStdout(`group conversation ${conversationId || 'unknown'} ready via agenttalkd`);
+    if (payload.next.length > 0) {
+      writeStdout(`next: ${payload.next[0]}`);
+    }
+    return;
+  }
+
   const { client } = await connectClient(flags, state, 'direct');
 
   try {
@@ -1881,14 +2183,14 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
         .find(row => sameIdentityText(row.identity, identity));
       return account ? `@${account.handle}` : identity.toHexString().slice(0, 12);
     });
-    const title =
-      getStringFlag(flags, ['title']) ??
+    const resolvedTitle =
+      title ??
       `Group: ${memberHandles.join(', ')}`;
 
     if (!conversation) {
       const createClientRequestId = makeLocalRequestId('group:create');
       const createRequestId = await client.createGroupConversation(
-        title,
+        resolvedTitle,
         memberIdentities,
         '',
         createClientRequestId
@@ -1923,6 +2225,8 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
 
     const payload = {
       ok: true,
+      transport: 'direct-disabled',
+      daemon: false,
       reused,
       conversation: toConversationDto(conversation),
       members: client.listConversationMembers(conversation.id).map(toConversationMemberDto),
@@ -1949,39 +2253,47 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
   const min = parseWaitMin(flags, max, hasWait ? 1 : 0);
   const drainMs = getIntFlag(flags, ['drain-ms', 'drainMs'], 0);
   const jsonl = getBooleanFlag(flags, ['jsonl']);
-  let daemonResponse = await maybeSendDaemonCommand(flags, hasWait
-    ? {
-        id: 'inbox',
-        cmd: 'listen_once',
-        timeoutMs: waitMs,
-        hydrate: true,
-      }
-    : {
-        id: 'inbox',
-        cmd: 'inbox',
-        limit: max,
-        hydrate: true,
-      },
-    hasWait ? waitMs + 5000 : 3000,
-    hasWait
-  );
-  if (daemonResponse && !daemonResponse.ok && !/timed out/i.test(String(daemonResponse.error ?? ''))) {
-    daemonResponse = undefined;
-  }
-  if (daemonResponse) {
+  const conversationRaw = getStringFlag(flags, ['conversation', 'conversation-id']);
+  const conversationId = conversationRaw
+    ? parseRequiredBigInt(conversationRaw, 'conversation-id')
+    : undefined;
+  const afterSequence = getBigIntFlag(flags, ['after', 'after-sequence']);
+  if (!allowDirectCli(flags)) {
+    const daemonResponse = await sendRequiredDaemonCommand(flags, hasWait
+      ? {
+          id: 'inbox',
+          cmd: 'listen_once',
+          conversationId: conversationId?.toString(),
+          afterSequence: afterSequence?.toString(),
+          timeoutMs: waitMs,
+          hydrate: true,
+        }
+      : {
+          id: 'inbox',
+          cmd: 'inbox',
+          conversationId: conversationId?.toString(),
+          afterSequence: afterSequence?.toString(),
+          limit: max,
+          hydrate: true,
+        },
+      hasWait ? waitMs + 5000 : 3000,
+      hasWait
+    );
     if (!daemonResponse.ok) {
       const payload = buildConversationMessageResult({
+        conversationId,
+        afterSequence,
         snapshot: [],
         live: [],
         max,
         waitTimedOut: true,
         returnedBecause: 'timeout',
-        next: [`agenttalk inbox --wait 30s --json`],
       });
       if (jsonl) {
-        emitJsonLine({ event: 'ready', daemon: true, waitMs, max, min });
+        emitJsonLine({ event: 'ready', daemon: true, transport: 'daemon', waitMs, max, min });
         emitJsonLine({
           event: 'done',
+          transport: 'daemon',
           returnedBecause: payload.returnedBecause,
           waitTimedOut: payload.waitTimedOut,
           timedOut: payload.timedOut,
@@ -1990,40 +2302,68 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
         return;
       }
       if (wantsJson(flags)) {
-        writeJson({ daemon: true, result: daemonResponse, ...payload });
+        writeJson(daemonTransportPayload({ result: daemonResponse, ...payload }, daemonResponse));
         return;
       }
       writeStdout(`timed out after ${waitMs}ms`);
       return;
     }
     const daemonMessage = (daemonResponse.data as { message?: ConversationMessageDto | null })?.message ?? null;
+    const daemonItems = ((daemonResponse.data as any)?.items ?? []) as Array<{
+      delivery?: Record<string, unknown> | null;
+      message?: ConversationMessageDto | null;
+    }>;
+    const itemMessages = daemonItems.map(item => item.message).filter(Boolean) as ConversationMessageDto[];
+    const hydratedItems = daemonItems.filter(item => item.message);
+    const deliveries = hydratedItems
+      .map(item => item.delivery)
+      .filter(Boolean) as Array<Record<string, unknown>>;
+    const deliveryCount =
+      daemonItems.length ||
+      ((daemonResponse.data as any)?.deliveries ?? []).length ||
+      (daemonMessage ? 1 : 0);
+    const hydratedDeliveryCount = hydratedItems.length || (daemonMessage ? 1 : 0);
     const daemonMessages = daemonMessage ? [daemonMessage] : [];
     const daemonPayloadBase = hasWait
       ? buildConversationMessageResult({
+          conversationId,
+          afterSequence,
           snapshot: [],
           live: daemonMessages,
           max,
           waitTimedOut: false,
           returnedBecause: daemonMessages.length > 0 ? 'live_message_available' : 'no_wait',
-          next: [`agenttalk inbox --wait 30s --json`],
         })
-      : {
-          ok: true,
-          daemon: true,
-          result: daemonResponse.data,
+      : buildConversationMessageResult({
+          conversationId,
+          afterSequence,
+          snapshot: itemMessages,
+          live: [],
+          max,
           waitTimedOut: false,
-          timedOut: false,
-        };
+          returnedBecause: 'no_wait',
+        });
     const payload: any = {
-      daemon: true,
-      result: daemonResponse.data,
       ...daemonPayloadBase,
+      deliveries,
+      deliveryCount,
+      hydratedDeliveryCount,
+      unhydratedDeliveryCount: Math.max(deliveryCount - hydratedDeliveryCount, 0),
     };
     if (jsonl) {
-      emitJsonLine({ event: 'ready', daemon: true, waitMs, max });
-      emitJsonLine({ event: 'inbox', data: daemonResponse.data });
+      emitJsonLine({ event: 'ready', daemon: true, transport: 'daemon', waitMs, max });
+      emitJsonLine({
+        event: 'inbox',
+        transport: 'daemon',
+        messages: payload.messages,
+        deliveries: payload.deliveries,
+        deliveryCount: payload.deliveryCount,
+        hydratedDeliveryCount: payload.hydratedDeliveryCount,
+        unhydratedDeliveryCount: payload.unhydratedDeliveryCount,
+      });
       emitJsonLine({
         event: 'done',
+        transport: 'daemon',
         returnedBecause: payload.returnedBecause ?? 'no_wait',
         waitTimedOut: false,
         timedOut: false,
@@ -2032,7 +2372,7 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
       return;
     }
     if (wantsJson(flags)) {
-      writeJson(payload);
+      writeJson(daemonTransportPayload(payload, daemonResponse));
       return;
     }
     writeStdout(JSON.stringify(daemonResponse.data));
@@ -2043,7 +2383,15 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
 
   try {
     if (jsonl) {
-      emitJsonLine({ event: 'ready', identity: client.identityHex, waitMs, max, min });
+      emitJsonLine({
+        event: 'ready',
+        transport: 'direct-disabled',
+        daemon: false,
+        identity: client.identityHex,
+        waitMs,
+        max,
+        min,
+      });
     }
 
     const recent = recentConversationMessages(client, max);
@@ -2064,13 +2412,13 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
         }
         emitJsonLine({ event: 'done', timedOut: false, count: recent.length });
       } else if (wantsJson(flags)) {
-        writeJson(buildConversationMessageResult({
-          snapshot: recent,
-          live: [],
-          max,
-          waitTimedOut: false,
-          returnedBecause: 'no_wait',
-        }));
+        writeJson(blockedDirectTransportPayload(buildConversationMessageResult({
+            snapshot: recent,
+            live: [],
+            max,
+            waitTimedOut: false,
+            returnedBecause: 'no_wait',
+          })));
       } else {
         for (const message of recent) {
           writeStdout(formatConversationMessage(message));
@@ -2114,7 +2462,7 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
       }
 
       if (wantsJson(flags)) {
-        writeJson(payload);
+        writeJson(blockedDirectTransportPayload(payload));
         return;
       }
 
@@ -2183,7 +2531,7 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
     });
 
     if (wantsJson(flags)) {
-      writeJson(payload);
+      writeJson(blockedDirectTransportPayload(payload));
       return;
     }
 
@@ -2220,22 +2568,18 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
   if (conversationRaw) {
     const conversationId = parseRequiredBigInt(conversationRaw, 'conversation-id');
     const afterSequence = getBigIntFlag(flags, ['after', 'after-sequence']);
-    let daemonResponse = await maybeSendDaemonCommand(flags, {
-      id: 'listen',
-      cmd: 'listen_once',
-      conversationId: conversationId.toString(),
-      afterSequence: afterSequence?.toString(),
-      timeoutMs,
-      max,
-      hydrate: true,
-    }, timeoutMs + 5000, true);
-    if (daemonResponse && !daemonResponse.ok && !/timed out/i.test(String(daemonResponse.error ?? ''))) {
-      daemonResponse = undefined;
-    }
-    if (daemonResponse) {
+    if (!allowDirectCli(flags)) {
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'listen',
+        cmd: 'listen_once',
+        conversationId: conversationId.toString(),
+        afterSequence: afterSequence?.toString(),
+        timeoutMs,
+        max,
+        hydrate: true,
+      }, timeoutMs + 5000, true);
       if (!daemonResponse.ok) {
         const payload = {
-          daemon: true,
           result: daemonResponse,
           ...buildConversationMessageResult({
             conversationId,
@@ -2252,6 +2596,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
             event: 'ready',
             kind: 'conversation',
             daemon: true,
+            transport: 'daemon',
             conversationId: conversationId.toString(),
             timeoutMs,
             max,
@@ -2259,6 +2604,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
           });
           emitJsonLine({
             event: 'done',
+            transport: 'daemon',
             returnedBecause: payload.returnedBecause,
             waitTimedOut: payload.waitTimedOut,
             timedOut: payload.timedOut,
@@ -2267,7 +2613,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
           return;
         }
         if (wantsJson(flags)) {
-          writeJson(payload);
+          writeJson(daemonTransportPayload(payload, daemonResponse));
           return;
         }
         writeStdout(`timed out after ${timeoutMs}ms`);
@@ -2276,7 +2622,6 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
       const daemonMessage = (daemonResponse.data as { message?: ConversationMessageDto | null })?.message ?? null;
       const daemonMessages = daemonMessage ? [daemonMessage] : [];
       const payload = {
-        daemon: true,
         result: daemonResponse.data,
         ...buildConversationMessageResult({
           conversationId,
@@ -2293,14 +2638,16 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
           event: 'ready',
           kind: 'conversation',
           daemon: true,
+          transport: 'daemon',
           conversationId: conversationId.toString(),
           timeoutMs,
           max,
           min,
         });
-        emitJsonLine({ event: 'delivery', data: daemonResponse.data });
+        emitJsonLine({ event: 'delivery', transport: 'daemon', data: daemonResponse.data });
         emitJsonLine({
           event: 'done',
+          transport: 'daemon',
           returnedBecause: payload.returnedBecause,
           waitTimedOut: payload.waitTimedOut,
           timedOut: payload.timedOut,
@@ -2309,7 +2656,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
         return;
       }
       if (wantsJson(flags)) {
-        writeJson(payload);
+        writeJson(daemonTransportPayload(payload, daemonResponse));
         return;
       }
       writeStdout(JSON.stringify(daemonResponse.data));
@@ -2356,6 +2703,8 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
         emitJsonLine({
           event: 'ready',
           kind: 'conversation',
+          transport: 'direct-disabled',
+          daemon: false,
           conversationId: conversationId.toString(),
           afterSequence: afterSequence.toString(),
           timeoutMs,
@@ -2382,13 +2731,15 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
         if (jsonl) {
           emitJsonLine({
             event: 'done',
+            transport: 'direct-disabled',
+            daemon: false,
             returnedBecause: payload.returnedBecause,
             waitTimedOut: payload.waitTimedOut,
             timedOut: payload.timedOut,
             count: payload.count,
           });
         } else if (wantsJson(flags)) {
-          writeJson(payload);
+          writeJson(blockedDirectTransportPayload(payload));
         } else {
           for (const message of payload.messages) {
             writeStdout(formatConversationMessage(message));
@@ -2411,13 +2762,15 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
         if (jsonl) {
           emitJsonLine({
             event: 'done',
+            transport: 'direct-disabled',
+            daemon: false,
             returnedBecause: payload.returnedBecause,
             waitTimedOut: payload.waitTimedOut,
             timedOut: payload.timedOut,
             count: payload.count,
           });
         } else if (wantsJson(flags)) {
-          writeJson(payload);
+          writeJson(blockedDirectTransportPayload(payload));
         } else {
           for (const message of payload.messages) {
             writeStdout(formatConversationMessage(message));
@@ -2466,13 +2819,15 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
         }
         emitJsonLine({
           event: 'done',
+          transport: 'direct-disabled',
+          daemon: false,
           returnedBecause: payload.returnedBecause,
           waitTimedOut: payload.waitTimedOut,
           timedOut: payload.timedOut,
           count: payload.count,
         });
       } else if (wantsJson(flags)) {
-        writeJson(payload);
+        writeJson(blockedDirectTransportPayload(payload));
       } else {
         for (const message of payload.messages) {
           writeStdout(formatConversationMessage(message));
@@ -2510,6 +2865,8 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
       emitJsonLine({
         event: 'ready',
         kind: 'thread',
+        transport: 'direct-disabled',
+        daemon: false,
         threadId: threadId.toString(),
         timeoutMs,
         max,
@@ -2534,7 +2891,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
       }
       emitJsonLine({ event: 'done', timedOut: waited.timedOut, count: messages.length });
     } else if (wantsJson(flags)) {
-      writeJson({ ok: true, snapshot, messages, timedOut: waited.timedOut });
+      writeJson(blockedDirectTransportPayload({ ok: true, snapshot, messages, timedOut: waited.timedOut }));
     } else {
       for (const message of snapshot) {
         writeStdout(`snapshot ${formatHumanMessage(message)}`);
@@ -2577,26 +2934,41 @@ async function commandTranscript(
 
   if (conversationRaw) {
     const conversationId = parseRequiredBigInt(conversationRaw, 'conversation-id');
-    const daemonResponse = await maybeSendDaemonCommand(flags, {
-      id: 'history',
-      cmd: 'history',
-      conversationId: conversationId.toString(),
-      afterSequence: afterSequence?.toString(),
-      beforeSequence: beforeSequence?.toString(),
-      limit,
-    });
-    if (daemonResponse) {
-      const payload = {
-        ok: true,
-        daemon: true,
-        result: daemonResponse.data,
+    if (!allowDirectCli(flags)) {
+      const requestedAfterSequence = afterSequence ?? (beforeSequence ? undefined : 0n);
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'history',
+        cmd: 'history',
+        conversationId: conversationId.toString(),
+        afterSequence: requestedAfterSequence?.toString(),
+        beforeSequence: beforeSequence?.toString(),
+        limit,
+      });
+      const messages = ((daemonResponse?.data as any)?.messages ?? []) as Array<any>;
+      const previousBeforeSequence = messages[0]?.sequence ?? null;
+      const lastSequence =
+        messages[messages.length - 1]?.sequence ?? requestedAfterSequence?.toString() ?? null;
+      const payload = daemonTransportPayload({
+        conversationId: conversationId.toString(),
+        messages,
+        page: {
+          limit,
+          count: messages.length,
+          afterSequence: requestedAfterSequence?.toString() ?? null,
+          beforeSequence: beforeSequence?.toString() ?? null,
+          previousBeforeSequence,
+          lastSequence,
+          nextAfterSequence: lastSequence,
+        },
+        lastSequence,
+        nextAfterSequence: lastSequence,
+        ...conversationNextPayload(conversationId.toString(), lastSequence),
         hotRetentionHours: 12,
-      };
+      }, daemonResponse);
       if (wantsJson(flags)) {
         writeJson(payload);
         return;
       }
-      const messages = ((daemonResponse.data as any)?.messages ?? []) as Array<any>;
       for (const message of messages) {
         writeStdout(
           `[${message.conversationId}#${message.sequence}] ${message.authorLabel}: ${message.text}`
@@ -2646,7 +3018,7 @@ async function commandTranscript(
       };
 
       if (wantsJson(flags)) {
-        writeJson(payload);
+        writeJson(blockedDirectTransportPayload(payload));
         return;
       }
 
@@ -2743,6 +3115,113 @@ async function commandAccount(
   state: AgenttalkState
 ) {
   const subcommand = positionals[0] ?? 'search';
+  if (!allowDirectCli(flags)) {
+    if (subcommand === 'create') {
+      const handle = getStringFlag(flags, ['handle']) ?? positionals[1];
+      if (!handle) {
+        throw new Error('account create requires --handle <handle>');
+      }
+      const roleRaw = getStringFlag(flags, ['role']) ?? 'agent';
+      const role: AgentRole = roleRaw === 'human' ? 'human' : 'agent';
+      const displayName =
+        getStringFlag(flags, ['name', 'display-name', 'displayName']) ?? handle;
+      const bio = getStringFlag(flags, ['bio']) ?? '';
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'account:create',
+        cmd: 'create_account',
+        handle,
+        displayName,
+        role,
+        bio,
+      });
+      writeJson(daemonTransportPayload((daemonResponse?.data ?? {}) as Record<string, unknown>));
+      return;
+    }
+
+    if (subcommand === 'bootstrap-operator') {
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'account:bootstrap-operator',
+        cmd: 'bootstrap_operator_account',
+      });
+      writeJson(daemonTransportPayload((daemonResponse?.data ?? {}) as Record<string, unknown>));
+      return;
+    }
+
+    if (subcommand === 'type' || subcommand === 'entitle') {
+      const handle = getStringFlag(flags, ['handle']) ?? positionals[1];
+      const typeRaw = getStringFlag(flags, ['type', 'account-type']) ?? positionals[2];
+      if (!handle || !typeRaw) {
+        throw new Error('account type requires <handle> --type free|group|pro|operator');
+      }
+      const accountType: AccountType = assertChoice(
+        typeRaw,
+        'type',
+        ['free', 'group', 'pro', 'operator'] as const
+      );
+      const explicitGroup = parseOptionalBoolean(
+        getStringFlag(flags, ['group-chat', 'groupChatAllowed']),
+        'group-chat'
+      );
+      const groupChatAllowed =
+        explicitGroup ??
+        (accountType === 'group' || accountType === 'pro' || accountType === 'operator');
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'account:type',
+        cmd: 'set_account_type',
+        handle,
+        accountType,
+        groupChatAllowed,
+      });
+      writeJson(daemonTransportPayload((daemonResponse?.data ?? {}) as Record<string, unknown>));
+      return;
+    }
+
+    if (subcommand === 'entitlements') {
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'account:entitlements',
+        cmd: 'account_entitlements',
+      });
+      writeJson(daemonTransportPayload((daemonResponse?.data ?? {}) as Record<string, unknown>));
+      return;
+    }
+
+    if (subcommand === 'search' || subcommand === 'list') {
+      const outputJson = wantsJson(flags);
+      const roleRaw = getStringFlag(flags, ['role']);
+      const role = roleRaw
+        ? assertChoice(roleRaw, 'role', ['agent', 'human'] as const)
+        : undefined;
+      const online = parseOptionalBoolean(getStringFlag(flags, ['online']), 'online');
+      const query =
+        getStringFlag(flags, ['query', 'q']) ??
+        (positionals.length > 1 ? positionals.slice(1).join(' ') : undefined);
+      const handle = getStringFlag(flags, ['handle']);
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'account:search',
+        cmd: 'account_search',
+        query,
+        handle,
+        role,
+        online,
+        limit: directoryLimitFromFlags(flags).toString(),
+      });
+      const data = (daemonResponse?.data ?? {}) as { accounts?: unknown[] };
+      const accounts = data.accounts ?? [];
+      if (outputJson) {
+        writeJson(daemonTransportPayload({ accounts }));
+        return;
+      }
+      for (const account of accounts as Array<any>) {
+        writeStdout(
+          `@${account.handle}\t${account.role}\t${account.online ? 'online' : 'offline'}\t${account.displayName}\t${account.identity}`
+        );
+      }
+      return;
+    }
+
+    throw new Error(`Unknown account command: ${subcommand}`);
+  }
+
   const profile: AgentSubscriptionProfile =
     subcommand === 'create' ||
     subcommand === 'bootstrap-operator' ||
@@ -2777,6 +3256,8 @@ async function commandAccount(
       const entitlement = client.currentAccountEntitlement();
       writeJson({
         ok: true,
+        transport: 'direct-disabled',
+        daemon: false,
         identity: client.identityHex,
         account: created
           ? toAccountDto(created)
@@ -2797,6 +3278,8 @@ async function commandAccount(
       await sleep(250);
       writeJson({
         ok: true,
+        transport: 'direct-disabled',
+        daemon: false,
         identity: client.identityHex,
         entitlement: client.currentAccountEntitlement()
           ? toAccountEntitlementDto(client.currentAccountEntitlement()!)
@@ -2836,13 +3319,20 @@ async function commandAccount(
         .find(row => row.handle === normalizeAccountRef(handle));
       writeJson({
         ok: true,
+        transport: 'direct-disabled',
+        daemon: false,
         entitlement: entitlement ? toAccountEntitlementDto(entitlement) : null,
       });
       return;
     }
 
     if (subcommand === 'entitlements') {
-      writeJson(client.listAccountEntitlements().map(toAccountEntitlementDto));
+      writeJson(
+        blockedDirectTransportPayload({
+          ok: true,
+          entitlements: client.listAccountEntitlements().map(toAccountEntitlementDto),
+        })
+      );
       return;
     }
 
@@ -2875,7 +3365,7 @@ async function commandAccount(
         .map(toAccountDto);
 
       if (outputJson) {
-        writeJson(accounts);
+        writeJson(blockedDirectTransportPayload({ ok: true, accounts }));
         return;
       }
 
@@ -3245,6 +3735,22 @@ async function commandSignup(flags: Flags, positionals: string[], state: Agentta
 
 async function commandWhoami(flags: Flags, state: AgenttalkState) {
   const showToken = getBooleanFlag(flags, ['show-token']);
+  if (!allowDirectCli(flags)) {
+    const daemonResponse = await sendRequiredDaemonCommand(flags, {
+      id: 'whoami',
+      cmd: 'whoami',
+    });
+    const payload = daemonTransportPayload({
+      ...((daemonResponse?.data ?? {}) as Record<string, unknown>),
+      token: null,
+      tokenRedacted: true,
+      tokenStoredAt: STATE_PATH,
+      messageStore: 'ephemeral-hot-realtime',
+    });
+    writeJson(payload);
+    return;
+  }
+
   const { client } = await connectClient(flags, state, 'identity');
 
   try {
@@ -3253,6 +3759,8 @@ async function commandWhoami(flags: Flags, state: AgenttalkState) {
       .find(row => row.identity.toHexString() === client.identityHex);
 
     writeJson({
+      transport: 'direct-disabled',
+      daemon: false,
       identity: client.identityHex,
       token: showToken ? client.token : null,
       tokenRedacted: !showToken,
@@ -3485,6 +3993,194 @@ async function commandConversation(
   state: AgenttalkState
 ) {
   const subcommand = positionals[0] ?? 'list';
+  if (!allowDirectCli(flags)) {
+    if (subcommand === 'list') {
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'conversation:list',
+        cmd: 'conversation_list',
+      });
+      const conversations = ((daemonResponse?.data as any)?.conversations ?? []) as Array<any>;
+      if (wantsJson(flags)) {
+        writeJson(daemonTransportPayload({ conversations }));
+        return;
+      }
+      for (const conversation of conversations) {
+        writeStdout(
+          `${conversation.id}\t${conversation.kind}\tmembers:${conversation.memberCount}\t${conversation.title}\tlast:${conversation.lastActivity}`
+        );
+      }
+      return;
+    }
+
+    if (subcommand === 'start') {
+      const targetRef = positionals[1] ?? getStringFlag(flags, ['to', 'target']);
+      if (!targetRef) {
+        throw new Error('conversation start requires <handle-or-identity>');
+      }
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'conversation:start',
+        cmd: 'create_direct',
+        target: targetRef,
+        title: getStringFlag(flags, ['title']) ?? '',
+        message: getStringFlag(flags, ['message']) ?? '',
+      });
+      const data = (daemonResponse?.data ?? {}) as Record<string, unknown>;
+      const conversationId = data.conversationId ? String(data.conversationId) : null;
+      const receipt = data.receipt as { sequence?: string | number | null } | undefined;
+      const messageReceipt = data.messageReceipt as { sequence?: string | number | null } | undefined;
+      const lastSequence =
+        messageReceipt?.sequence !== undefined && messageReceipt?.sequence !== null
+          ? String(messageReceipt.sequence)
+          : receipt?.sequence !== undefined && receipt?.sequence !== null
+            ? String(receipt.sequence)
+            : null;
+      writeJson(daemonTransportPayload({
+        ...data,
+        lastSequence,
+        nextAfterSequence: lastSequence,
+        ...conversationNextPayload(conversationId, lastSequence),
+      }, daemonResponse));
+      return;
+    }
+
+    if (subcommand === 'group') {
+      const title = getStringFlag(flags, ['title']);
+      if (!title) {
+        throw new Error('conversation group requires --title <title>');
+      }
+      const refs = parseAccountRefs(
+        getStringFlag(flags, ['members']),
+        positionals.slice(1)
+      );
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'conversation:group',
+        cmd: 'create_group',
+        title,
+        members: refs,
+        message: getStringFlag(flags, ['message']) ?? '',
+        kind: parseRichMessageInput(flags).kind,
+      });
+      const data = (daemonResponse?.data ?? {}) as Record<string, unknown>;
+      const conversationId = data.conversationId ? String(data.conversationId) : null;
+      const receipt = data.receipt as { sequence?: string | number | null } | undefined;
+      const messageReceipt = data.messageReceipt as { sequence?: string | number | null } | undefined;
+      const lastSequence =
+        messageReceipt?.sequence !== undefined && messageReceipt?.sequence !== null
+          ? String(messageReceipt.sequence)
+          : receipt?.sequence !== undefined && receipt?.sequence !== null
+            ? String(receipt.sequence)
+            : null;
+      writeJson(daemonTransportPayload({
+        ...data,
+        lastSequence,
+        nextAfterSequence: lastSequence,
+        ...conversationNextPayload(conversationId, lastSequence),
+      }, daemonResponse));
+      return;
+    }
+
+    if (subcommand === 'add') {
+      const conversationIdRaw = positionals[1];
+      const accountRef = positionals[2];
+      if (!conversationIdRaw || !accountRef) {
+        throw new Error('conversation add requires <conversation-id> <handle-or-identity>');
+      }
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'conversation:add',
+        cmd: 'add_conversation_member',
+        conversationId: conversationIdRaw,
+        member: accountRef,
+        role: getStringFlag(flags, ['role']) ?? 'member',
+      });
+      writeJson(daemonTransportPayload((daemonResponse?.data ?? {}) as Record<string, unknown>));
+      return;
+    }
+
+    if (subcommand === 'send') {
+      const conversationIdRaw = positionals[1];
+      const message = getStringFlag(flags, ['message']);
+      if (!conversationIdRaw || !message) {
+        throw new Error('conversation send requires <conversation-id> --message <text>');
+      }
+      const richInput = parseRichMessageInput(flags);
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'conversation:send',
+        cmd: 'send_conversation',
+        conversationId: conversationIdRaw,
+        text: message,
+        kind: richInput.kind,
+        clientRequestId: richInput.clientRequestId,
+      });
+      const receipt = (daemonResponse?.data as any)?.receipt ?? null;
+      const lastSequence = receipt?.sequence ? String(receipt.sequence) : null;
+      writeJson(daemonTransportPayload({
+        conversationId: conversationIdRaw,
+        text: message,
+        result: daemonResponse?.data,
+        receipt,
+        lastSequence,
+        nextAfterSequence: lastSequence,
+        ...conversationNextPayload(conversationIdRaw, lastSequence),
+      }, daemonResponse));
+      return;
+    }
+
+    if (subcommand === 'messages') {
+      const conversationIdRaw = positionals[1];
+      if (!conversationIdRaw) {
+        throw new Error('conversation messages requires <conversation-id>');
+      }
+      const limit = Math.min(getIntFlag(flags, ['limit'], 50), 100);
+      const requestedAfterSequence = getBigIntFlag(flags, ['after', 'after-sequence']);
+      const beforeSequence = getBigIntFlag(flags, ['before', 'before-sequence']);
+      if (requestedAfterSequence && beforeSequence) {
+        throw new Error('conversation messages accepts --after or --before, not both');
+      }
+      const effectiveAfterSequence = requestedAfterSequence ?? (beforeSequence ? undefined : 0n);
+      const daemonResponse = await sendRequiredDaemonCommand(flags, {
+        id: 'conversation:messages',
+        cmd: 'history',
+        conversationId: conversationIdRaw,
+        afterSequence: effectiveAfterSequence?.toString(),
+        beforeSequence: beforeSequence?.toString(),
+        limit,
+      });
+      const messages = ((daemonResponse?.data as any)?.messages ?? []) as Array<any>;
+      const lastSequence =
+        messages[messages.length - 1]?.sequence ?? effectiveAfterSequence?.toString() ?? null;
+      const payload = daemonTransportPayload({
+        conversationId: conversationIdRaw,
+        messages,
+        page: {
+          limit,
+          count: messages.length,
+          afterSequence: effectiveAfterSequence?.toString() ?? null,
+          beforeSequence: beforeSequence?.toString() ?? null,
+          previousBeforeSequence: messages[0]?.sequence ?? null,
+          lastSequence,
+          nextAfterSequence: lastSequence,
+        },
+        lastSequence,
+        nextAfterSequence: lastSequence,
+        ...conversationNextPayload(conversationIdRaw, lastSequence),
+      }, daemonResponse);
+      if (wantsJson(flags)) {
+        writeJson(payload);
+        return;
+      }
+      for (const message of messages) {
+        writeStdout(
+          `[${message.sentAt ?? message.sent}] ${message.author ?? message.authorLabel} (${message.kind}): ${message.text}`
+        );
+      }
+      return;
+    }
+
+    throw new Error(
+      `conversation ${subcommand} is not yet daemon-routed. The agenttalk CLI requires the agenttalkd gateway and will not open a direct SpaceTimeDB connection.`
+    );
+  }
+
   const { client } = await connectClient(flags, state, 'direct');
 
   try {
@@ -3495,7 +4191,7 @@ async function commandConversation(
       }));
 
       if (wantsJson(flags)) {
-        writeJson(conversations);
+        writeJson(blockedDirectTransportPayload({ ok: true, conversations }));
         return;
       }
 
@@ -3524,13 +4220,13 @@ async function commandConversation(
       await sleep(250);
 
       const created = findCreatedConversation(client, beforeIds, title || undefined);
-      writeJson({
+      writeJson(blockedDirectTransportPayload({
         ok: true,
         conversation: created ? toConversationDto(created) : null,
         members: created
           ? client.listConversationMembers(created.id).map(toConversationMemberDto)
           : [],
-      });
+      }));
       return;
     }
 
@@ -3571,7 +4267,7 @@ async function commandConversation(
               'send_conversation_message'
             )
           : undefined;
-      writeJson({
+      writeJson(blockedDirectTransportPayload({
         ok: true,
         conversation: created ? toConversationDto(created) : null,
         members: created
@@ -3579,7 +4275,7 @@ async function commandConversation(
           : [],
         receipt: toReceiptDto(receipt),
         messageReceipt: sendReceipt ? toReceiptDto(sendReceipt) : null,
-      });
+      }));
       return;
     }
 
@@ -3601,7 +4297,7 @@ async function commandConversation(
       await client.addConversationMember(conversationId, memberIdentity, role);
       await sleep(250);
 
-      writeJson({
+      writeJson(blockedDirectTransportPayload({
         ok: true,
         conversationId: conversationId.toString(),
         memberIdentity: memberIdentity.toHexString(),
@@ -3609,7 +4305,7 @@ async function commandConversation(
         members: client
           .listConversationMembers(conversationId)
           .map(toConversationMemberDto),
-      });
+      }));
       return;
     }
 
@@ -3632,12 +4328,12 @@ async function commandConversation(
         'send_conversation_message'
       );
 
-      writeJson({
+      writeJson(blockedDirectTransportPayload({
         ok: true,
         conversationId: conversationId.toString(),
         text: message,
         receipt: toReceiptDto(receipt),
-      });
+      }));
       return;
     }
 
@@ -3673,7 +4369,7 @@ async function commandConversation(
       }
 
       if (wantsJson(flags)) {
-        writeJson({
+        writeJson(blockedDirectTransportPayload({
           ok: true,
           messages,
           page: {
@@ -3684,7 +4380,7 @@ async function commandConversation(
             previousBeforeSequence: messages[0]?.sequence ?? null,
             nextAfterSequence: messages[messages.length - 1]?.sequence ?? null,
           },
-        });
+        }));
         return;
       }
 
@@ -3704,7 +4400,7 @@ async function commandConversation(
 
       const conversationId = parseRequiredBigInt(conversationIdRaw, 'conversation-id');
       await client.leaveConversation(conversationId);
-      writeJson({ ok: true, conversationId: conversationId.toString() });
+      writeJson(blockedDirectTransportPayload({ ok: true, conversationId: conversationId.toString() }));
       return;
     }
 
@@ -3981,6 +4677,62 @@ async function commandDoctor(flags: Flags, state: AgenttalkState) {
   let channelCount = 0;
   let client: AgentRealtimeClient | null = null;
 
+  if (!allowDirectCli(flags)) {
+    const daemonStatus = await ensureDaemonRunning(flags);
+    const whoami = await sendDaemonCommand({ id: 'doctor:whoami', cmd: 'whoami' });
+    const stats = await sendDaemonCommand({ id: 'doctor:stats', cmd: 'stats' });
+    const data = (whoami.data ?? {}) as Record<string, unknown>;
+    identity = typeof data.identity === 'string' ? data.identity : null;
+    checks.push({
+      name: 'daemon',
+      ok: daemonStatus.response?.ok === true,
+      detail: `agenttalkd running at ${daemonPipePath()}`,
+    });
+    checks.push({
+      name: 'connect',
+      ok: whoami.ok === true,
+      detail: identity
+        ? `daemon connected to ${config.databaseName} as ${identity.slice(0, 12)}...`
+        : 'daemon connected',
+    });
+    checks.push({
+      name: 'identity:account',
+      ok: whoami.ok === true,
+      detail: data.account
+        ? `account @${(data.account as any).handle}`
+        : data.needsInit
+          ? 'daemon running; account initialization needed'
+          : 'no account row visible',
+    });
+    const result = daemonTransportPayload({
+      host: config.host,
+      databaseName: config.databaseName,
+      tokenProvided: Boolean(config.token),
+      identity,
+      whoami: data,
+      daemonStatus: daemonStatus.response,
+      daemonStarted: daemonStatus.started,
+      stats: stats.data ?? stats,
+      hotRetentionHours: data.hotRetentionHours ?? 12,
+      messageStore: 'ephemeral-hot-realtime',
+      archiveConfigured: data.archiveConfigured ?? false,
+      checks,
+    });
+    if (outputJson) {
+      writeJson(result);
+    } else {
+      writeStdout(`doctor: ${result.ok ? 'ok' : 'failed'}`);
+      writeStdout('hot retention: 12 hours; archiveConfigured=false');
+      for (const check of checks) {
+        writeStdout(`${check.ok ? 'ok' : 'fail'} ${check.name}: ${check.detail}`);
+      }
+    }
+    if (!checks.every(check => check.ok)) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   try {
     const connected = await connectClient(flags, state, 'ops');
     client = connected.client;
@@ -4022,6 +4774,8 @@ async function commandDoctor(flags: Flags, state: AgenttalkState) {
 
   const result = {
     ok: checks.every(check => check.ok),
+    transport: 'direct-disabled',
+    daemon: false,
     host: config.host,
     databaseName: config.databaseName,
     tokenProvided: Boolean(config.token),
@@ -4543,6 +5297,12 @@ async function commandDaemon(flags: Flags, positionals: string[]) {
 }
 
 async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
+  if (!allowDirectCli(flags)) {
+    const { runAgenttalkd } = await import('./agenttalkd');
+    await runAgenttalkd({ stdio: true, ipc: true });
+    return;
+  }
+
   const { client, state: resolvedState } = await connectClient(flags, state, 'ops');
 
   const subscribedThreads = new Set<string>();
@@ -4555,6 +5315,8 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
     emitJsonLine({
       ...(id !== undefined ? { id } : {}),
       event,
+      transport: 'direct-disabled',
+      daemon: false,
       ...data,
     });
   };
@@ -5955,6 +6717,8 @@ async function main() {
     printHelp();
     return;
   }
+
+  allowDirectCli(flags);
 
   if (command === 'init') {
     await commandInit(flags, positionals, state);

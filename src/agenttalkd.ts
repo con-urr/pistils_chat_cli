@@ -105,6 +105,15 @@ function coerceErrorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isNeedsInitError(error: unknown) {
+  const text = coerceErrorText(error).toLowerCase();
+  return (
+    text.includes('guest-only') ||
+    text.includes('create an active account') ||
+    text.includes('accept a workspace invite')
+  );
+}
+
 function requestIdFromPayload(
   payload: Record<string, unknown>,
   action: string,
@@ -172,6 +181,72 @@ function receiptDto(row: ModuleTypes.ClientRequestReceipt) {
   };
 }
 
+function identityHex(identity?: Identity | null) {
+  return identity ? identity.toHexString() : null;
+}
+
+function accountDto(account: ModuleTypes.Account) {
+  return {
+    handle: account.handle,
+    identity: account.identity.toHexString(),
+    agentId: account.agentId ?? null,
+    displayName: account.displayName,
+    role: account.role,
+    bio: account.bio ?? null,
+    online: account.online,
+    createdAt: account.createdAt.toDate().toISOString(),
+    updatedAt: account.updatedAt.toDate().toISOString(),
+    lastSeen: account.lastSeen.toDate().toISOString(),
+  };
+}
+
+function accountEntitlementDto(entitlement: ModuleTypes.AccountEntitlement) {
+  return {
+    handle: entitlement.handle,
+    identity: entitlement.identity.toHexString(),
+    accountType: entitlement.accountType,
+    groupChatAllowed: entitlement.groupChatAllowed,
+    agentId: entitlement.agentId ?? null,
+    maxGroupConversationMembers:
+      entitlement.maxGroupConversationMembers?.toString() ?? null,
+    maxMessageBytes: entitlement.maxMessageBytes?.toString() ?? null,
+    sendRatePerMinute: entitlement.sendRatePerMinute?.toString() ?? null,
+    createdAt: entitlement.createdAt.toDate().toISOString(),
+    updatedAt: entitlement.updatedAt.toDate().toISOString(),
+    updatedBy: identityHex(entitlement.updatedBy),
+  };
+}
+
+function conversationDto(conversation: ModuleTypes.Conversation) {
+  return {
+    id: conversation.id.toString(),
+    kind: conversation.kind,
+    title: conversation.title,
+    createdBy: conversation.createdBy.toHexString(),
+    createdAt: conversation.createdAt.toDate().toISOString(),
+    lastActivity: conversation.lastActivity.toDate().toISOString(),
+  };
+}
+
+function conversationMemberDto(member: ModuleTypes.ConversationMember) {
+  return {
+    id: member.id.toString(),
+    conversationId: member.conversationId.toString(),
+    memberIdentity: member.memberIdentity.toHexString(),
+    role: member.role,
+    joinedAt: member.joinedAt.toDate().toISOString(),
+  };
+}
+
+function normalizeAccountRef(ref: string): string {
+  return ref.startsWith('@') ? ref.slice(1).trim().toLowerCase() : ref.trim().toLowerCase();
+}
+
+function maybeAccountHandle(ref: string) {
+  const normalized = normalizeAccountRef(ref);
+  return /^[a-z0-9][a-z0-9_-]{2,39}$/.test(normalized) ? normalized : undefined;
+}
+
 class AgenttalkDaemon {
   private handleCache = new Map<
     string,
@@ -187,6 +262,7 @@ class AgenttalkDaemon {
   private lastReconnectAt: number | undefined;
   private lastReconnectReason: string | undefined;
   private lastConnectionError: string | undefined;
+  private needsInit = false;
   private reconnectPromise: Promise<void> | undefined;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -209,8 +285,19 @@ class AgenttalkDaemon {
       subscriptionProfile: profile,
     });
     await saveState({ host, databaseName, token: client.token });
-    await client.heartbeat('agenttalkd online', 'agenttalkd');
-    return new AgenttalkDaemon(client, { host, databaseName, token: client.token }, profile);
+    let needsInit = false;
+    try {
+      await client.heartbeat('agenttalkd online', 'agenttalkd');
+    } catch (error) {
+      if (!isNeedsInitError(error)) {
+        throw error;
+      }
+      needsInit = true;
+    }
+    const daemon = new AgenttalkDaemon(client, { host, databaseName, token: client.token }, profile);
+    daemon.needsInit = needsInit;
+    daemon.lastConnectionError = needsInit ? 'needs_init' : undefined;
+    return daemon;
   }
 
   isShuttingDown() {
@@ -248,8 +335,14 @@ class AgenttalkDaemon {
     try {
       await this.ensureConnected('heartbeat');
       await this.client.heartbeat('agenttalkd online', 'agenttalkd');
+      this.needsInit = false;
+      this.lastConnectionError = undefined;
     } catch (error) {
       this.lastConnectionError = coerceErrorText(error);
+      if (isNeedsInitError(error)) {
+        this.needsInit = true;
+        return;
+      }
       if (!this.shuttingDown) {
         try {
           await this.reconnect(`heartbeat failed: ${this.lastConnectionError}`);
@@ -269,7 +362,7 @@ class AgenttalkDaemon {
 
   private isReconnectableError(error: unknown) {
     const text = coerceErrorText(error);
-    return /disconnect|closed|websocket|socket|network|connection|econn|timed out waiting for receipt|timed out waiting for inbox/i.test(text);
+    return /disconnect|closed|websocket|socket|network|connection|econn|timed out waiting for receipt/i.test(text);
   }
 
   private async reconnect(reason: string) {
@@ -304,7 +397,15 @@ class AgenttalkDaemon {
               this.lastConnectionError = error ? error.message : 'connection disconnected';
             },
           });
-          await client.heartbeat('agenttalkd reconnected', 'agenttalkd');
+          try {
+            await client.heartbeat('agenttalkd reconnected', 'agenttalkd');
+            this.needsInit = false;
+          } catch (error) {
+            if (!isNeedsInitError(error)) {
+              throw error;
+            }
+            this.needsInit = true;
+          }
           this.client = client;
           this.state = {
             ...this.state,
@@ -392,6 +493,46 @@ class AgenttalkDaemon {
     return resolved;
   }
 
+  private currentAccount(client = this.client) {
+    return client.listAccounts().find(row => row.identity.toHexString() === client.identityHex);
+  }
+
+  private async currentAccountWithRefresh(client = this.client) {
+    let account = this.currentAccount(client);
+    if (account) {
+      return account;
+    }
+
+    const profile = client.currentAgentProfile();
+    if (profile?.handle) {
+      await client.requestAccountDirectory({ handle: profile.handle, limit: 1n });
+      await sleep(250);
+      account = this.currentAccount(client);
+    }
+    return account;
+  }
+
+  private async withProfile<T>(
+    profile: AgentSubscriptionProfile,
+    fn: (client: AgentRealtimeClient) => Promise<T>
+  ) {
+    if (profile === this.profile) {
+      return fn(this.client);
+    }
+
+    const client = await AgentRealtimeClient.connect({
+      host: this.state.host,
+      databaseName: this.state.databaseName,
+      token: this.state.token,
+      subscriptionProfile: profile,
+    });
+    try {
+      return await fn(client);
+    } finally {
+      client.disconnect();
+    }
+  }
+
   private async openDirect(target: string, clientRequestId?: string) {
     const targetKey = this.accountCacheKey(target);
     const resolved = await this.resolveAccount(target);
@@ -429,21 +570,57 @@ class AgenttalkDaemon {
     return payload.hydrate !== false && payload.hydrate !== 'false';
   }
 
-  private async hydrateDeliveryMessage(delivery: ModuleTypes.ConversationDelivery) {
-    await this.client.requestConversationMessages({
-      conversationId: delivery.conversationId,
-      afterSequence: delivery.sequence > 0n ? delivery.sequence - 1n : undefined,
-      limit: 5n,
-    });
-    await sleep(100);
-    const message = this.client
-      .listRequestedConversationMessages(delivery.conversationId)
-      .find(
-        row =>
-          row.id === delivery.messageId ||
-          (row.sequence ?? row.id) === delivery.sequence
+  private deliveryMessageKey(delivery: ModuleTypes.ConversationDelivery) {
+    return `${delivery.conversationId.toString()}:${delivery.messageId.toString()}:${delivery.sequence.toString()}`;
+  }
+
+  private async hydrateDeliveryMessages(deliveries: ModuleTypes.ConversationDelivery[]) {
+    const hydrated = new Map<string, ReturnType<typeof conversationMessageDto>>();
+    const byConversation = new Map<string, ModuleTypes.ConversationDelivery[]>();
+    for (const delivery of deliveries) {
+      const key = delivery.conversationId.toString();
+      const rows = byConversation.get(key) ?? [];
+      rows.push(delivery);
+      byConversation.set(key, rows);
+    }
+
+    for (const rows of byConversation.values()) {
+      const conversationId = rows[0].conversationId;
+      const minSequence = rows.reduce(
+        (min, row) => (row.sequence < min ? row.sequence : min),
+        rows[0].sequence
       );
-    return message ? conversationMessageDto(message) : null;
+      const maxSequence = rows.reduce(
+        (max, row) => (row.sequence > max ? row.sequence : max),
+        rows[0].sequence
+      );
+      const span = Number(maxSequence - minSequence + 1n);
+      const limit = BigInt(Math.min(Math.max(span, rows.length, 1), 100));
+      await this.client.requestConversationMessages({
+        conversationId,
+        afterSequence: minSequence > 0n ? minSequence - 1n : undefined,
+        limit,
+      });
+      await sleep(250);
+      const requested = this.client.listRequestedConversationMessages(conversationId);
+      for (const delivery of rows) {
+        const message = requested.find(
+          row =>
+            row.id === delivery.messageId ||
+            (row.sequence ?? row.id) === delivery.sequence
+        );
+        if (message) {
+          hydrated.set(this.deliveryMessageKey(delivery), conversationMessageDto(message));
+        }
+      }
+    }
+
+    return hydrated;
+  }
+
+  private async hydrateDeliveryMessage(delivery: ModuleTypes.ConversationDelivery) {
+    const messages = await this.hydrateDeliveryMessages([delivery]);
+    return messages.get(this.deliveryMessageKey(delivery)) ?? null;
   }
 
   async handle(payload: Record<string, unknown>): Promise<AgenttalkdResponse> {
@@ -485,6 +662,7 @@ class AgenttalkDaemon {
       if (cmd === 'whoami') {
         const profile = this.client.currentAgentProfile();
         const retention = this.client.listRetentionPolicies()[0];
+        const account = await this.currentAccountWithRefresh();
         return {
           id,
           ok: true,
@@ -492,12 +670,178 @@ class AgenttalkDaemon {
             identity: this.client.identityHex,
             agentId: profile?.agentId ?? null,
             handle: profile?.handle ?? null,
+            account: account ? accountDto(account) : null,
             host: this.state.host,
             databaseName: this.state.databaseName,
             hotRetentionHours: Number(retention?.hotRetentionHours ?? 12n),
             archiveConfigured: retention?.archiveConfigured ?? false,
+            needsInit: this.needsInit,
           },
         };
+      }
+
+      if (cmd === 'init_account' || cmd === 'create_account') {
+        const handle = String(payload.handle ?? '').trim();
+        if (!handle) {
+          throw new Error(`${cmd} requires handle`);
+        }
+
+        const role = payload.role === 'human' ? 'human' : 'agent';
+        const displayName = String(payload.displayName ?? payload.display_name ?? handle);
+        const bio = String(payload.bio ?? '');
+        const normalizedHandle = normalizeAccountRef(handle);
+        await this.client.requestAccountDirectory({ handle: normalizedHandle, limit: 1n });
+        await sleep(250);
+        const existingByIdentity = this.currentAccount();
+        const existingByHandle = this.client.searchAccounts({ handle: normalizedHandle })[0];
+
+        if (
+          existingByHandle &&
+          existingByHandle.identity.toHexString() !== this.client.identityHex
+        ) {
+          throw new Error(`Account handle is already owned by another identity: ${normalizedHandle}`);
+        }
+
+        if (existingByIdentity && existingByIdentity.handle !== normalizedHandle) {
+          throw new Error(
+            `This state already owns @${existingByIdentity.handle}; use a different AGENTTALK_STATE_DIR for @${normalizedHandle}`
+          );
+        }
+
+        if (!existingByHandle) {
+          await this.client.createAccount({
+            handle: normalizedHandle,
+            displayName,
+            role,
+            bio,
+          });
+          await this.client.requestAccountDirectory({ handle: normalizedHandle, limit: 1n });
+          await sleep(250);
+        }
+
+        const account =
+          this.client.searchAccounts({ handle: normalizedHandle })[0] ??
+          existingByIdentity ??
+          null;
+        this.needsInit = false;
+        this.lastConnectionError = undefined;
+        return {
+          id,
+          ok: true,
+          data: {
+            identity: this.client.identityHex,
+            account: account ? accountDto(account) : null,
+            agentId: account?.agentId ?? null,
+            host: this.state.host,
+            databaseName: this.state.databaseName,
+          },
+        };
+      }
+
+      if (cmd === 'find' || cmd === 'account_search') {
+        const query = String(payload.query ?? payload.q ?? payload.handle ?? '').trim();
+        const handle =
+          typeof payload.handle === 'string' ? normalizeAccountRef(payload.handle) : undefined;
+        const role =
+          payload.role === 'agent' || payload.role === 'human' ? payload.role : undefined;
+        const online = typeof payload.online === 'boolean' ? payload.online : undefined;
+        const limit = BigInt(Math.min(Number(payload.limit ?? 20), 50));
+
+        let rows: ModuleTypes.Account[] = [];
+        const normalized = handle ?? (query ? maybeAccountHandle(query) : undefined);
+        if (normalized) {
+          await this.client.requestAccountDirectory({ handle: normalized, role, online, limit });
+          await sleep(250);
+          rows = this.client.searchAccounts({ handle: normalized, role, online });
+        }
+        if (rows.length === 0) {
+          await this.client.requestAccountDirectory({
+            query: query || undefined,
+            role,
+            online,
+            limit,
+          });
+          await sleep(250);
+          rows = this.client.searchAccounts({
+            query: query || undefined,
+            handle,
+            role,
+            online,
+          });
+        }
+
+        return {
+          id,
+          ok: true,
+          data: {
+            accounts: rows.map(accountDto),
+          },
+        };
+      }
+
+      if (cmd === 'account_entitlements') {
+        return this.withProfile('account-admin', async client => ({
+          id,
+          ok: true,
+          data: {
+            entitlements: client.listAccountEntitlements().map(accountEntitlementDto),
+            current: client.currentAccountEntitlement()
+              ? accountEntitlementDto(client.currentAccountEntitlement()!)
+              : null,
+          },
+        }));
+      }
+
+      if (cmd === 'bootstrap_operator_account') {
+        return this.withProfile('account-admin', async client => {
+          await client.bootstrapOperatorAccount();
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: {
+              identity: client.identityHex,
+              entitlement: client.currentAccountEntitlement()
+                ? accountEntitlementDto(client.currentAccountEntitlement()!)
+                : null,
+            },
+          };
+        });
+      }
+
+      if (cmd === 'set_account_type') {
+        const handle = String(payload.handle ?? '').trim();
+        const accountType = String(payload.accountType ?? payload.account_type ?? payload.type ?? '');
+        if (!handle || !accountType) {
+          throw new Error('set_account_type requires handle and account_type');
+        }
+        if (!['free', 'group', 'pro', 'operator'].includes(accountType)) {
+          throw new Error('account_type must be free, group, pro, or operator');
+        }
+        const groupChatAllowed =
+          typeof payload.groupChatAllowed === 'boolean'
+            ? payload.groupChatAllowed
+            : typeof payload.group_chat_allowed === 'boolean'
+              ? payload.group_chat_allowed
+              : accountType === 'group' || accountType === 'pro' || accountType === 'operator';
+        return this.withProfile('account-admin', async client => {
+          await client.setAccountType({
+            handle: normalizeAccountRef(handle),
+            accountType: accountType as 'free' | 'group' | 'pro' | 'operator',
+            groupChatAllowed,
+          });
+          await sleep(250);
+          const entitlement = client
+            .listAccountEntitlements()
+            .find(row => row.handle === normalizeAccountRef(handle));
+          return {
+            id,
+            ok: true,
+            data: {
+              entitlement: entitlement ? accountEntitlementDto(entitlement) : null,
+            },
+          };
+        });
       }
 
       if (cmd === 'resolve_account') {
@@ -519,6 +863,160 @@ class AgenttalkDaemon {
                   agentId: resolved.account.agentId ?? null,
                 }
               : null,
+          },
+        };
+      }
+
+      if (cmd === 'conversation_list') {
+        return {
+          id,
+          ok: true,
+          data: {
+            conversations: this.client.listConversations().map(row => ({
+              ...conversationDto(row),
+              memberCount: this.client.listConversationMembers(row.id).length,
+            })),
+          },
+        };
+      }
+
+      if (cmd === 'create_direct') {
+        const target = String(payload.target ?? payload.to ?? '').trim();
+        if (!target) {
+          throw new Error('create_direct requires target');
+        }
+        const title = typeof payload.title === 'string' ? payload.title : '';
+        const openingMessage =
+          typeof payload.openingMessage === 'string'
+            ? payload.openingMessage
+            : typeof payload.message === 'string'
+              ? payload.message
+              : '';
+        const resolved = await this.resolveAccount(target);
+        const requestId = await this.client.createDirectConversation(
+          resolved.identity,
+          title,
+          openingMessage,
+          typeof payload.clientRequestId === 'string' ? payload.clientRequestId : undefined
+        );
+        const receipt = await this.client.waitForReceipt(
+          requestId,
+          5000,
+          'create_direct_conversation'
+        );
+        if (!receipt.conversationId) {
+          throw new Error('create_direct_conversation receipt did not include conversationId');
+        }
+        const conversation = this.client
+          .listConversations()
+          .find(row => row.id === receipt.conversationId);
+        return {
+          id,
+          ok: true,
+          data: {
+            conversationId: receipt.conversationId.toString(),
+            conversation: conversation ? conversationDto(conversation) : null,
+            members: this.client
+              .listConversationMembers(receipt.conversationId)
+              .map(conversationMemberDto),
+            receipt: this.rememberReceipt(receipt),
+          },
+        };
+      }
+
+      if (cmd === 'create_group') {
+        const title = String(payload.title ?? '').trim();
+        if (!title) {
+          throw new Error('create_group requires title');
+        }
+        const rawMembers = payload.members ?? payload.with;
+        const refs = Array.isArray(rawMembers)
+          ? rawMembers.map(String)
+          : typeof rawMembers === 'string'
+            ? rawMembers.split(',').map(value => value.trim()).filter(Boolean)
+            : [];
+        if (refs.length === 0) {
+          throw new Error('create_group requires members');
+        }
+        const memberIdentities = [];
+        for (const ref of refs) {
+          memberIdentities.push((await this.resolveAccount(ref)).identity);
+        }
+        const requestId = await this.client.createGroupConversation(
+          title,
+          memberIdentities,
+          '',
+          typeof payload.clientRequestId === 'string' ? payload.clientRequestId : undefined
+        );
+        const receipt = await this.client.waitForReceipt(
+          requestId,
+          5000,
+          'create_group_conversation'
+        );
+        if (!receipt.conversationId) {
+          throw new Error('create_group_conversation receipt did not include conversationId');
+        }
+        const conversation = this.client
+          .listConversations()
+          .find(row => row.id === receipt.conversationId);
+        let messageReceipt: ReturnType<typeof receiptDto> | null = null;
+        const message = typeof payload.message === 'string' ? payload.message : '';
+        if (message) {
+          const sendRequestId = await this.client.sendConversationMessage(
+            receipt.conversationId,
+            message,
+            {
+              kind: typeof payload.kind === 'string' ? (payload.kind as RichKind) : undefined,
+              clientRequestId:
+                typeof payload.messageClientRequestId === 'string'
+                  ? payload.messageClientRequestId
+                  : undefined,
+            }
+          );
+          messageReceipt = this.rememberReceipt(
+            await this.client.waitForReceipt(
+              sendRequestId,
+              5000,
+              'send_conversation_message'
+            )
+          );
+        }
+        return {
+          id,
+          ok: true,
+          data: {
+            conversationId: receipt.conversationId.toString(),
+            conversation: conversation ? conversationDto(conversation) : null,
+            members: this.client
+              .listConversationMembers(receipt.conversationId)
+              .map(conversationMemberDto),
+            receipt: this.rememberReceipt(receipt),
+            messageReceipt,
+          },
+        };
+      }
+
+      if (cmd === 'add_conversation_member') {
+        const conversationId = BigInt(String(payload.conversationId ?? payload.conversation_id));
+        const memberRef = String(payload.member ?? payload.account ?? payload.target ?? '').trim();
+        if (!memberRef) {
+          throw new Error('add_conversation_member requires member');
+        }
+        const role =
+          payload.role === 'mod' || payload.role === 'member' ? payload.role : 'member';
+        const memberIdentity = (await this.resolveAccount(memberRef)).identity;
+        await this.client.addConversationMember(conversationId, memberIdentity, role);
+        await sleep(250);
+        return {
+          id,
+          ok: true,
+          data: {
+            conversationId: conversationId.toString(),
+            memberIdentity: memberIdentity.toHexString(),
+            role,
+            members: this.client
+              .listConversationMembers(conversationId)
+              .map(conversationMemberDto),
           },
         };
       }
@@ -615,16 +1113,33 @@ class AgenttalkDaemon {
 
       if (cmd === 'inbox') {
         const limit = Math.min(Number(payload.limit ?? payload.max ?? 10), 100);
+        const conversationId =
+          payload.conversationId !== undefined || payload.conversation_id !== undefined
+            ? BigInt(String(payload.conversationId ?? payload.conversation_id))
+            : undefined;
+        const afterSequence =
+          payload.afterSequence !== undefined || payload.after_sequence !== undefined
+            ? BigInt(String(payload.afterSequence ?? payload.after_sequence))
+            : undefined;
         const deliveries = this.client
-          .listInboxDeliveries({ state: payload.state as 'unread' | 'delivered' | 'read' | undefined })
+          .listInboxDeliveries({
+            conversationId,
+            state: payload.state as 'unread' | 'delivered' | 'read' | undefined,
+          })
+          .filter(delivery =>
+            afterSequence === undefined ? true : delivery.sequence > afterSequence
+          )
           .slice(0, limit);
         const hydrate = this.shouldHydrate(payload);
+        const hydratedMessages = hydrate
+          ? await this.hydrateDeliveryMessages(deliveries)
+          : new Map<string, ReturnType<typeof conversationMessageDto>>();
         const items = [];
         for (const delivery of deliveries) {
           this.rememberConversationSequence(delivery.conversationId, delivery.sequence);
           items.push({
             delivery: deliveryDto(delivery),
-            message: hydrate ? await this.hydrateDeliveryMessage(delivery) : null,
+            message: hydratedMessages.get(this.deliveryMessageKey(delivery)) ?? null,
           });
         }
         return {
@@ -647,10 +1162,11 @@ class AgenttalkDaemon {
           payload.beforeSequence !== undefined || payload.before_sequence !== undefined
             ? BigInt(String(payload.beforeSequence ?? payload.before_sequence))
             : undefined;
+        const requestedAfterSequence = afterSequence ?? (beforeSequence ? undefined : 0n);
         const limit = BigInt(Math.min(Number(payload.limit ?? 50), 100));
         await this.client.requestConversationMessages({
           conversationId,
-          afterSequence,
+          afterSequence: requestedAfterSequence,
           beforeSequence,
           limit,
         });
@@ -731,6 +1247,7 @@ class AgenttalkDaemon {
             cachedReceipts: this.receiptCache.size,
             cachedConversationSequences: this.conversationSequenceCache.size,
             clientCache: this.client.cacheStats(),
+            needsInit: this.needsInit,
             inboxDeliveryCount: this.client.connected
               ? this.client.listInboxDeliveries().length
               : 0,
@@ -802,13 +1319,15 @@ async function serveLineInterface(
       writeJsonLine(output, {
         id: '',
         ok: false,
+        transport: 'daemon',
+        daemon: true,
         error: error instanceof Error ? error.message : String(error),
       });
       continue;
     }
 
     const response = await daemon.handle(payload);
-    writeJsonLine(output, response);
+    writeJsonLine(output, { transport: 'daemon', daemon: true, ...response });
     if (daemon.isShuttingDown()) {
       break;
     }

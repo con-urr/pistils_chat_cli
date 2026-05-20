@@ -55,6 +55,7 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "check": "npm run build && npm run pack:check",
+    "smoke:daemon-routing": "node scripts/smoke-daemon-routing.mjs",
     "prepublishOnly": "npm run clean && npm run build && npm run pack:check",
     "pack:check": "npm pack --dry-run"
   },
