@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, writeSync, promises as fs } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,6 +23,7 @@ type AgenttalkState = {
   host?: string;
   databaseName?: string;
   token?: string;
+  ipcSecret?: string;
 };
 
 const DEFAULT_HOST = 'https://maincloud.spacetimedb.com';
@@ -250,7 +251,15 @@ function loadStateSync(): AgenttalkState {
 
 async function saveState(state: AgenttalkState): Promise<void> {
   await fs.mkdir(STATE_DIR, { recursive: true });
+  await fs.chmod(STATE_DIR, 0o700).catch(() => undefined);
   await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  await fs.chmod(STATE_PATH, 0o600).catch(() => undefined);
+}
+
+function ensureIpcSecret(state: AgenttalkState) {
+  return state.ipcSecret && state.ipcSecret.length >= 32
+    ? state.ipcSecret
+    : randomBytes(32).toString('hex');
 }
 
 function daemonPipePath() {
@@ -280,7 +289,13 @@ function sendDaemonCommand(payload: Record<string, unknown>, timeoutMs = 3000) {
     let buffer = '';
 
     socket.on('connect', () => {
-      socket.write(JSON.stringify(payload) + '\n');
+      const state = loadStateSync();
+      socket.write(
+        JSON.stringify({
+          ...payload,
+          ipcSecret: state.ipcSecret,
+        }) + '\n'
+      );
     });
     socket.on('data', chunk => {
       buffer += chunk.toString('utf8');
@@ -507,6 +522,15 @@ Usage:
   agenttalk run --jsonl
   agenttalk serve --jsonl
   agenttalkd
+
+Open beta supported daemon-first commands:
+  init, whoami, doctor, daemon start/status/stop/doctor
+  find, chat, reply, group start, inbox, listen --conversation, transcript --conversation
+  conversation list/start/group/add/send/messages
+
+Experimental/dev surfaces:
+  room/thread/task/handoff/event/watch/serve and account operator tools are available but are not the primary open-beta hot path.
+  MCP, archive storage, billing, Redis edge guard, and Postgres cold storage are planned adapters, not implemented core dependencies.
 
 Global flags:
   --host <url>       default: ${DEFAULT_HOST}
@@ -821,6 +845,18 @@ function toAccountEntitlementDto(entitlement: ModuleTypes.AccountEntitlement) {
       entitlement.maxGroupConversationMembers?.toString() ?? null,
     maxMessageBytes: entitlement.maxMessageBytes?.toString() ?? null,
     sendRatePerMinute: entitlement.sendRatePerMinute?.toString() ?? null,
+    openConversationRatePerMinute:
+      entitlement.openConversationRatePerMinute?.toString() ?? null,
+    historyRequestRatePerMinute:
+      entitlement.historyRequestRatePerMinute?.toString() ?? null,
+    inboxRequestRatePerMinute:
+      entitlement.inboxRequestRatePerMinute?.toString() ?? null,
+    directorySearchRatePerMinute:
+      entitlement.directorySearchRatePerMinute?.toString() ?? null,
+    maxInboxPageSize: entitlement.maxInboxPageSize?.toString() ?? null,
+    maxHistoryPageSize: entitlement.maxHistoryPageSize?.toString() ?? null,
+    maxPendingUnreadDeliveries:
+      entitlement.maxPendingUnreadDeliveries?.toString() ?? null,
     createdAt: entitlement.createdAt.toDate().toISOString(),
     updatedAt: entitlement.updatedAt.toDate().toISOString(),
     updatedBy: identityHex(entitlement.updatedBy),
@@ -1173,9 +1209,11 @@ async function connectClient(
         );
 
         const nextState: AgenttalkState = {
+          ...freshState,
           host: config.host,
           databaseName: config.databaseName,
           token: client.token,
+          ipcSecret: ensureIpcSecret(freshState),
         };
 
         await saveState(nextState);

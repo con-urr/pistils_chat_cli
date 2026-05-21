@@ -48,8 +48,30 @@ export const AccountEntitlement = __t.object("AccountEntitlement", {
   maxGroupConversationMembers: __t.option(__t.u64()),
   maxMessageBytes: __t.option(__t.u64()),
   sendRatePerMinute: __t.option(__t.u64()),
+  openConversationRatePerMinute: __t.option(__t.u64()),
+  historyRequestRatePerMinute: __t.option(__t.u64()),
+  inboxRequestRatePerMinute: __t.option(__t.u64()),
+  directorySearchRatePerMinute: __t.option(__t.u64()),
+  maxInboxPageSize: __t.option(__t.u64()),
+  maxHistoryPageSize: __t.option(__t.u64()),
+  maxPendingUnreadDeliveries: __t.option(__t.u64()),
 });
 export type AccountEntitlement = __Infer<typeof AccountEntitlement>;
+
+export const AccountEntitlementLegacyView = __t.object("AccountEntitlementLegacyView", {
+  handle: __t.string(),
+  identity: __t.identity(),
+  accountType: __t.string(),
+  groupChatAllowed: __t.bool(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  updatedBy: __t.option(__t.identity()),
+  agentId: __t.option(__t.string()),
+  maxGroupConversationMembers: __t.option(__t.u64()),
+  maxMessageBytes: __t.option(__t.u64()),
+  sendRatePerMinute: __t.option(__t.u64()),
+});
+export type AccountEntitlementLegacyView = __Infer<typeof AccountEntitlementLegacyView>;
 
 export const ActiveConnection = __t.object("ActiveConnection", {
   connectionId: __t.connectionId(),
@@ -242,8 +264,36 @@ export const ConversationDelivery = __t.object("ConversationDelivery", {
   sent: __t.timestamp(),
   updatedAt: __t.timestamp(),
   expiresAt: __t.timestamp(),
+  reverseSentMicros: __t.u64(),
+  reverseSequence: __t.u64(),
 });
 export type ConversationDelivery = __Infer<typeof ConversationDelivery>;
+
+export const ConversationDeliveryLegacyView = __t.object("ConversationDeliveryLegacyView", {
+  key: __t.string(),
+  recipientAgentId: __t.string(),
+  recipientIdentity: __t.option(__t.identity()),
+  conversationId: __t.u64(),
+  messageId: __t.u64(),
+  sequence: __t.u64(),
+  senderAgentId: __t.string(),
+  senderIdentity: __t.identity(),
+  state: __t.string(),
+  sent: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  expiresAt: __t.timestamp(),
+});
+export type ConversationDeliveryLegacyView = __Infer<typeof ConversationDeliveryLegacyView>;
+
+export const ConversationListRequest = __t.object("ConversationListRequest", {
+  key: __t.string(),
+  requesterIdentity: __t.identity(),
+  kind: __t.option(__t.string()),
+  beforeLastActivity: __t.option(__t.timestamp()),
+  limit: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type ConversationListRequest = __Infer<typeof ConversationListRequest>;
 
 export const ConversationMember = __t.object("ConversationMember", {
   id: __t.u64(),
@@ -254,6 +304,14 @@ export const ConversationMember = __t.object("ConversationMember", {
   memberAgentId: __t.option(__t.string()),
 });
 export type ConversationMember = __Infer<typeof ConversationMember>;
+
+export const ConversationMemberRequest = __t.object("ConversationMemberRequest", {
+  key: __t.string(),
+  requesterIdentity: __t.identity(),
+  conversationId: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type ConversationMemberRequest = __Infer<typeof ConversationMemberRequest>;
 
 export const ConversationMessage = __t.object("ConversationMessage", {
   id: __t.u64(),
@@ -274,8 +332,31 @@ export const ConversationMessage = __t.object("ConversationMessage", {
   expiresAt: __t.timestamp(),
   archiveStatus: __t.string(),
   archivedAt: __t.option(__t.timestamp()),
+  reverseSequence: __t.u64(),
 });
 export type ConversationMessage = __Infer<typeof ConversationMessage>;
+
+export const ConversationMessageLegacyView = __t.object("ConversationMessageLegacyView", {
+  id: __t.u64(),
+  conversationId: __t.u64(),
+  authorIdentity: __t.identity(),
+  authorLabel: __t.string(),
+  authorKind: __t.string(),
+  kind: __t.string(),
+  text: __t.string(),
+  replyToMessageId: __t.option(__t.u64()),
+  correlationId: __t.option(__t.string()),
+  clientRequestId: __t.option(__t.string()),
+  metadataJson: __t.option(__t.string()),
+  artifactUrl: __t.option(__t.string()),
+  artifactMimeType: __t.option(__t.string()),
+  sent: __t.timestamp(),
+  sequence: __t.u64(),
+  expiresAt: __t.timestamp(),
+  archiveStatus: __t.string(),
+  archivedAt: __t.option(__t.timestamp()),
+});
+export type ConversationMessageLegacyView = __Infer<typeof ConversationMessageLegacyView>;
 
 export const ConversationMessageRequest = __t.object("ConversationMessageRequest", {
   key: __t.string(),
@@ -304,6 +385,45 @@ export const ConversationSequence = __t.object("ConversationSequence", {
 });
 export type ConversationSequence = __Infer<typeof ConversationSequence>;
 
+export const DeploymentPolicy = __t.object("DeploymentPolicy", {
+  key: __t.string(),
+  openBetaMode: __t.bool(),
+  disableNewAccounts: __t.bool(),
+  disableMessageSend: __t.bool(),
+  maintenanceModeMessage: __t.option(__t.string()),
+  maxMessageBytesDefault: __t.u64(),
+  defaultSendRatePerMinute: __t.u64(),
+  defaultOpenConversationRatePerMinute: __t.u64(),
+  defaultHistoryRequestsPerMinute: __t.u64(),
+  defaultInboxRequestsPerMinute: __t.u64(),
+  defaultDirectorySearchRatePerMinute: __t.u64(),
+  maxInboxPageSize: __t.u64(),
+  maxHistoryPageSize: __t.u64(),
+  maxPendingUnreadDeliveries: __t.u64(),
+  updatedAt: __t.timestamp(),
+  updatedBy: __t.option(__t.identity()),
+});
+export type DeploymentPolicy = __Infer<typeof DeploymentPolicy>;
+
+export const DeploymentPolicyView = __t.object("DeploymentPolicyView", {
+  key: __t.string(),
+  openBetaMode: __t.bool(),
+  disableNewAccounts: __t.bool(),
+  disableMessageSend: __t.bool(),
+  maintenanceModeMessage: __t.option(__t.string()),
+  maxMessageBytesDefault: __t.u64(),
+  defaultSendRatePerMinute: __t.u64(),
+  defaultOpenConversationRatePerMinute: __t.u64(),
+  defaultHistoryRequestsPerMinute: __t.u64(),
+  defaultInboxRequestsPerMinute: __t.u64(),
+  defaultDirectorySearchRatePerMinute: __t.u64(),
+  maxInboxPageSize: __t.u64(),
+  maxHistoryPageSize: __t.u64(),
+  maxPendingUnreadDeliveries: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type DeploymentPolicyView = __Infer<typeof DeploymentPolicyView>;
+
 export const DirectConversationIndex = __t.object("DirectConversationIndex", {
   pairKey: __t.string(),
   leftAgentId: __t.string(),
@@ -325,6 +445,19 @@ export const Handoff = __t.object("Handoff", {
   acceptedAt: __t.option(__t.timestamp()),
 });
 export type Handoff = __Infer<typeof Handoff>;
+
+export const InboxDeliveryRequest = __t.object("InboxDeliveryRequest", {
+  key: __t.string(),
+  requesterIdentity: __t.identity(),
+  requesterAgentId: __t.string(),
+  state: __t.option(__t.string()),
+  conversationId: __t.option(__t.u64()),
+  afterSequence: __t.option(__t.u64()),
+  beforeSent: __t.option(__t.timestamp()),
+  limit: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type InboxDeliveryRequest = __Infer<typeof InboxDeliveryRequest>;
 
 export const Message = __t.object("Message", {
   id: __t.u64(),
@@ -394,8 +527,36 @@ export const RetentionCleanupStat = __t.object("RetentionCleanupStat", {
   agentEventDeleted: __t.u64(),
   conversationMessageDeleted: __t.u64(),
   capped: __t.bool(),
+  inboxDeliveryRequestDeleted: __t.u64(),
+  conversationListRequestDeleted: __t.u64(),
+  conversationMemberRequestDeleted: __t.u64(),
+  expiredDeliveryBacklogRemaining: __t.u64(),
+  expiredReceiptBacklogRemaining: __t.u64(),
+  staleRequestBacklogRemaining: __t.u64(),
+  staleRateLimitBucketBacklogRemaining: __t.u64(),
+  expiredMessageBacklogRemaining: __t.u64(),
+  durationMicros: __t.u64(),
+  nextScheduledAt: __t.option(__t.timestamp()),
 });
 export type RetentionCleanupStat = __Infer<typeof RetentionCleanupStat>;
+
+export const RetentionCleanupStatLegacyView = __t.object("RetentionCleanupStatLegacyView", {
+  key: __t.string(),
+  lastRunAt: __t.timestamp(),
+  reason: __t.string(),
+  deliveryDeleted: __t.u64(),
+  receiptDeleted: __t.u64(),
+  accountDirectoryRequestDeleted: __t.u64(),
+  channelDirectoryRequestDeleted: __t.u64(),
+  conversationMessageRequestDeleted: __t.u64(),
+  archiveBatchRequestDeleted: __t.u64(),
+  rateLimitBucketDeleted: __t.u64(),
+  requestLogDeleted: __t.u64(),
+  agentEventDeleted: __t.u64(),
+  conversationMessageDeleted: __t.u64(),
+  capped: __t.bool(),
+});
+export type RetentionCleanupStatLegacyView = __Infer<typeof RetentionCleanupStatLegacyView>;
 
 export const RetentionPolicy = __t.object("RetentionPolicy", {
   key: __t.string(),
@@ -556,6 +717,9 @@ export type VisibleConversationMessage = __Infer<typeof VisibleConversationMessa
 export const VisibleConversationReadCursor = __t.object("VisibleConversationReadCursor", {});
 export type VisibleConversationReadCursor = __Infer<typeof VisibleConversationReadCursor>;
 
+export const VisibleDeploymentPolicy = __t.object("VisibleDeploymentPolicy", {});
+export type VisibleDeploymentPolicy = __Infer<typeof VisibleDeploymentPolicy>;
+
 export const VisibleDirectConversation = __t.object("VisibleDirectConversation", {});
 export type VisibleDirectConversation = __Infer<typeof VisibleDirectConversation>;
 
@@ -577,8 +741,17 @@ export type VisibleRequestedAccountDirectory = __Infer<typeof VisibleRequestedAc
 export const VisibleRequestedChannelDirectory = __t.object("VisibleRequestedChannelDirectory", {});
 export type VisibleRequestedChannelDirectory = __Infer<typeof VisibleRequestedChannelDirectory>;
 
+export const VisibleRequestedConversation = __t.object("VisibleRequestedConversation", {});
+export type VisibleRequestedConversation = __Infer<typeof VisibleRequestedConversation>;
+
+export const VisibleRequestedConversationMember = __t.object("VisibleRequestedConversationMember", {});
+export type VisibleRequestedConversationMember = __Infer<typeof VisibleRequestedConversationMember>;
+
 export const VisibleRequestedConversationMessage = __t.object("VisibleRequestedConversationMessage", {});
 export type VisibleRequestedConversationMessage = __Infer<typeof VisibleRequestedConversationMessage>;
+
+export const VisibleRequestedInboxDelivery = __t.object("VisibleRequestedInboxDelivery", {});
+export type VisibleRequestedInboxDelivery = __Infer<typeof VisibleRequestedInboxDelivery>;
 
 export const VisibleRetentionCleanupStat = __t.object("VisibleRetentionCleanupStat", {});
 export type VisibleRetentionCleanupStat = __Infer<typeof VisibleRetentionCleanupStat>;

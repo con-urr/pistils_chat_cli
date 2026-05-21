@@ -42,7 +42,10 @@ import BootstrapOperatorAccountReducer from "./bootstrap_operator_account_reduce
 import ClaimTaskReducer from "./claim_task_reducer";
 import ClearAccountDirectoryRequestReducer from "./clear_account_directory_request_reducer";
 import ClearChannelDirectoryRequestReducer from "./clear_channel_directory_request_reducer";
+import ClearConversationListRequestReducer from "./clear_conversation_list_request_reducer";
+import ClearConversationMemberRequestReducer from "./clear_conversation_member_request_reducer";
 import ClearConversationMessageRequestReducer from "./clear_conversation_message_request_reducer";
+import ClearInboxDeliveryRequestReducer from "./clear_inbox_delivery_request_reducer";
 import CreateAccountReducer from "./create_account_reducer";
 import CreateChannelReducer from "./create_channel_reducer";
 import CreateDirectConversationReducer from "./create_direct_conversation_reducer";
@@ -69,7 +72,11 @@ import RepairAccessStateReducer from "./repair_access_state_reducer";
 import RequestAccountDirectoryReducer from "./request_account_directory_reducer";
 import RequestArchiveBatchReducer from "./request_archive_batch_reducer";
 import RequestChannelDirectoryReducer from "./request_channel_directory_reducer";
+import RequestConversationMembersReducer from "./request_conversation_members_reducer";
 import RequestConversationMessagesReducer from "./request_conversation_messages_reducer";
+import RequestConversationsReducer from "./request_conversations_reducer";
+import RequestInboxDeliveriesReducer from "./request_inbox_deliveries_reducer";
+import ResetDeploymentPolicyReducer from "./reset_deployment_policy_reducer";
 import ResetRetentionPolicyReducer from "./reset_retention_policy_reducer";
 import RevokeCapabilityReducer from "./revoke_capability_reducer";
 import RunRetentionCleanupNowReducer from "./run_retention_cleanup_now_reducer";
@@ -77,6 +84,7 @@ import SendConversationMessageReducer from "./send_conversation_message_reducer"
 import SendDirectMessageReducer from "./send_direct_message_reducer";
 import SendThreadMessageReducer from "./send_thread_message_reducer";
 import SetAccountTypeReducer from "./set_account_type_reducer";
+import SetDeploymentPolicyReducer from "./set_deployment_policy_reducer";
 import SetProfileReducer from "./set_profile_reducer";
 import SetRetentionPolicyReducer from "./set_retention_policy_reducer";
 import SetRoomConfigReducer from "./set_room_config_reducer";
@@ -105,6 +113,7 @@ import VisibleConversationRow from "./visible_conversation_table";
 import VisibleConversationMemberRow from "./visible_conversation_member_table";
 import VisibleConversationMessageRow from "./visible_conversation_message_table";
 import VisibleConversationReadCursorRow from "./visible_conversation_read_cursor_table";
+import VisibleDeploymentPolicyRow from "./visible_deployment_policy_table";
 import VisibleDirectConversationRow from "./visible_direct_conversation_table";
 import VisibleHandoffRow from "./visible_handoff_table";
 import VisibleInboxDeliveryRow from "./visible_inbox_delivery_table";
@@ -112,7 +121,10 @@ import VisibleMessageRow from "./visible_message_table";
 import VisibleRateLimitBucketRow from "./visible_rate_limit_bucket_table";
 import VisibleRequestedAccountDirectoryRow from "./visible_requested_account_directory_table";
 import VisibleRequestedChannelDirectoryRow from "./visible_requested_channel_directory_table";
+import VisibleRequestedConversationRow from "./visible_requested_conversation_table";
+import VisibleRequestedConversationMemberRow from "./visible_requested_conversation_member_table";
 import VisibleRequestedConversationMessageRow from "./visible_requested_conversation_message_table";
+import VisibleRequestedInboxDeliveryRow from "./visible_requested_inbox_delivery_table";
 import VisibleRetentionCleanupStatRow from "./visible_retention_cleanup_stat_table";
 import VisibleRetentionPolicyRow from "./visible_retention_policy_table";
 import VisibleRichMessageRow from "./visible_rich_message_table";
@@ -253,6 +265,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleConversationReadCursorRow),
+  visible_deployment_policy: __table({
+    name: 'visible_deployment_policy',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleDeploymentPolicyRow),
   visible_direct_conversation: __table({
     name: 'visible_direct_conversation',
     indexes: [
@@ -302,6 +321,20 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleRequestedChannelDirectoryRow),
+  visible_requested_conversation: __table({
+    name: 'visible_requested_conversation',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleRequestedConversationRow),
+  visible_requested_conversation_member: __table({
+    name: 'visible_requested_conversation_member',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleRequestedConversationMemberRow),
   visible_requested_conversation_message: __table({
     name: 'visible_requested_conversation_message',
     indexes: [
@@ -309,6 +342,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleRequestedConversationMessageRow),
+  visible_requested_inbox_delivery: __table({
+    name: 'visible_requested_inbox_delivery',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleRequestedInboxDeliveryRow),
   visible_retention_cleanup_stat: __table({
     name: 'visible_retention_cleanup_stat',
     indexes: [
@@ -433,7 +473,10 @@ const reducersSchema = __reducers(
   __reducerSchema("claim_task", ClaimTaskReducer),
   __reducerSchema("clear_account_directory_request", ClearAccountDirectoryRequestReducer),
   __reducerSchema("clear_channel_directory_request", ClearChannelDirectoryRequestReducer),
+  __reducerSchema("clear_conversation_list_request", ClearConversationListRequestReducer),
+  __reducerSchema("clear_conversation_member_request", ClearConversationMemberRequestReducer),
   __reducerSchema("clear_conversation_message_request", ClearConversationMessageRequestReducer),
+  __reducerSchema("clear_inbox_delivery_request", ClearInboxDeliveryRequestReducer),
   __reducerSchema("create_account", CreateAccountReducer),
   __reducerSchema("create_channel", CreateChannelReducer),
   __reducerSchema("create_direct_conversation", CreateDirectConversationReducer),
@@ -460,7 +503,11 @@ const reducersSchema = __reducers(
   __reducerSchema("request_account_directory", RequestAccountDirectoryReducer),
   __reducerSchema("request_archive_batch", RequestArchiveBatchReducer),
   __reducerSchema("request_channel_directory", RequestChannelDirectoryReducer),
+  __reducerSchema("request_conversation_members", RequestConversationMembersReducer),
   __reducerSchema("request_conversation_messages", RequestConversationMessagesReducer),
+  __reducerSchema("request_conversations", RequestConversationsReducer),
+  __reducerSchema("request_inbox_deliveries", RequestInboxDeliveriesReducer),
+  __reducerSchema("reset_deployment_policy", ResetDeploymentPolicyReducer),
   __reducerSchema("reset_retention_policy", ResetRetentionPolicyReducer),
   __reducerSchema("revoke_capability", RevokeCapabilityReducer),
   __reducerSchema("run_retention_cleanup_now", RunRetentionCleanupNowReducer),
@@ -468,6 +515,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_direct_message", SendDirectMessageReducer),
   __reducerSchema("send_thread_message", SendThreadMessageReducer),
   __reducerSchema("set_account_type", SetAccountTypeReducer),
+  __reducerSchema("set_deployment_policy", SetDeploymentPolicyReducer),
   __reducerSchema("set_profile", SetProfileReducer),
   __reducerSchema("set_retention_policy", SetRetentionPolicyReducer),
   __reducerSchema("set_room_config", SetRoomConfigReducer),

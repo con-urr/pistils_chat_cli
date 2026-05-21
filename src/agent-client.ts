@@ -1,4 +1,4 @@
-import { Identity } from 'spacetimedb';
+import { Identity, type Timestamp } from 'spacetimedb';
 import { DbConnection } from './module_bindings';
 import type * as ModuleTypes from './module_bindings/types';
 
@@ -54,6 +54,22 @@ export type RetentionPolicyInput = {
   rateLimitBucketRetentionSeconds?: bigint;
   directoryRequestRetentionSeconds?: bigint;
   agentEventRetentionSeconds?: bigint;
+};
+
+export type DeploymentPolicyInput = {
+  openBetaMode?: boolean;
+  disableNewAccounts?: boolean;
+  disableMessageSend?: boolean;
+  maintenanceModeMessage?: string;
+  maxMessageBytesDefault?: bigint;
+  defaultSendRatePerMinute?: bigint;
+  defaultOpenConversationRatePerMinute?: bigint;
+  defaultHistoryRequestsPerMinute?: bigint;
+  defaultInboxRequestsPerMinute?: bigint;
+  defaultDirectorySearchRatePerMinute?: bigint;
+  maxInboxPageSize?: bigint;
+  maxHistoryPageSize?: bigint;
+  maxPendingUnreadDeliveries?: bigint;
 };
 
 export type ChannelDirectoryRequest = {
@@ -178,6 +194,7 @@ const IDENTITY_SUBSCRIPTIONS = [
   'SELECT * FROM visible_self_agent_profile',
   'SELECT * FROM visible_agent_profile',
   'SELECT * FROM visible_retention_policy',
+  'SELECT * FROM visible_deployment_policy',
 ];
 
 const DIRECT_CONVERSATION_SUBSCRIPTIONS = [
@@ -193,20 +210,22 @@ const DIRECT_CONVERSATION_SUBSCRIPTIONS = [
   'SELECT * FROM visible_conversation_read_cursor',
   'SELECT * FROM visible_client_request_receipt',
   'SELECT * FROM visible_retention_policy',
+  'SELECT * FROM visible_deployment_policy',
 ];
 
 const DAEMON_DIRECT_SUBSCRIPTIONS = [
   ...DIRECTORY_SUBSCRIPTIONS,
   'SELECT * FROM visible_self_agent_profile',
-  'SELECT * FROM visible_agent_profile',
   'SELECT * FROM visible_direct_conversation',
-  'SELECT * FROM visible_conversation',
-  'SELECT * FROM visible_conversation_member',
   'SELECT * FROM visible_inbox_delivery',
+  'SELECT * FROM visible_requested_inbox_delivery',
   'SELECT * FROM visible_requested_conversation_message',
+  'SELECT * FROM visible_requested_conversation',
+  'SELECT * FROM visible_requested_conversation_member',
   'SELECT * FROM visible_conversation_read_cursor',
   'SELECT * FROM visible_client_request_receipt',
   'SELECT * FROM visible_retention_policy',
+  'SELECT * FROM visible_deployment_policy',
 ];
 
 const ACCOUNT_ADMIN_SUBSCRIPTIONS = [
@@ -483,6 +502,28 @@ export class AgentRealtimeClient {
 
   async resetRetentionPolicy() {
     await this.conn.reducers.resetRetentionPolicy({});
+  }
+
+  async setDeploymentPolicy(input: DeploymentPolicyInput) {
+    await this.conn.reducers.setDeploymentPolicy({
+      openBetaMode: input.openBetaMode,
+      disableNewAccounts: input.disableNewAccounts,
+      disableMessageSend: input.disableMessageSend,
+      maintenanceModeMessage: input.maintenanceModeMessage,
+      maxMessageBytesDefault: input.maxMessageBytesDefault,
+      defaultSendRatePerMinute: input.defaultSendRatePerMinute,
+      defaultOpenConversationRatePerMinute: input.defaultOpenConversationRatePerMinute,
+      defaultHistoryRequestsPerMinute: input.defaultHistoryRequestsPerMinute,
+      defaultInboxRequestsPerMinute: input.defaultInboxRequestsPerMinute,
+      defaultDirectorySearchRatePerMinute: input.defaultDirectorySearchRatePerMinute,
+      maxInboxPageSize: input.maxInboxPageSize,
+      maxHistoryPageSize: input.maxHistoryPageSize,
+      maxPendingUnreadDeliveries: input.maxPendingUnreadDeliveries,
+    });
+  }
+
+  async resetDeploymentPolicy() {
+    await this.conn.reducers.resetDeploymentPolicy({});
   }
 
   async runRetentionCleanupNow() {
@@ -1034,6 +1075,15 @@ export class AgentRealtimeClient {
     return accessor ? Array.from(accessor.iter()) : [];
   }
 
+  listDeploymentPolicies() {
+    const accessor = findDbAccessor<ModuleTypes.DeploymentPolicyView>(
+      this.conn,
+      'visible_deployment_policy',
+      'visibleDeploymentPolicy'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
   listAccountEntitlements() {
     return Array.from(
       getDbAccessor<ModuleTypes.AccountEntitlement>(
@@ -1278,13 +1328,25 @@ export class AgentRealtimeClient {
   }
 
   listConversations() {
-    return Array.from(
+    const broadRows = Array.from(
       getDbAccessor<ModuleTypes.Conversation>(
         this.conn,
         'visible_conversation',
         'visibleConversation'
       ).iter()
-    ).sort(byLastActivityDesc);
+    );
+    const requestedRows = Array.from(
+      getDbAccessor<ModuleTypes.Conversation>(
+        this.conn,
+        'visible_requested_conversation',
+        'visibleRequestedConversation'
+      ).iter()
+    );
+    const byId = new Map<string, ModuleTypes.Conversation>();
+    for (const row of [...broadRows, ...requestedRows]) {
+      byId.set(row.id.toString(), row);
+    }
+    return Array.from(byId.values()).sort(byLastActivityDesc);
   }
 
   listDirectConversations() {
@@ -1302,13 +1364,56 @@ export class AgentRealtimeClient {
   }
 
   listConversationMembers(conversationId?: bigint) {
-    return Array.from(
+    const broadRows = Array.from(
       getDbAccessor<ModuleTypes.ConversationMember>(
         this.conn,
         'visible_conversation_member',
         'visibleConversationMember'
       ).iter()
-    ).filter(row => (conversationId ? row.conversationId === conversationId : true));
+    );
+    const requestedRows = Array.from(
+      getDbAccessor<ModuleTypes.ConversationMember>(
+        this.conn,
+        'visible_requested_conversation_member',
+        'visibleRequestedConversationMember'
+      ).iter()
+    );
+    const byId = new Map<string, ModuleTypes.ConversationMember>();
+    for (const row of [...broadRows, ...requestedRows]) {
+      if (conversationId && row.conversationId !== conversationId) {
+        continue;
+      }
+      byId.set(row.id.toString(), row);
+    }
+    return Array.from(byId.values());
+  }
+
+  async requestConversations({
+    kind,
+    beforeLastActivity,
+    limit,
+  }: {
+    kind?: 'direct' | 'group';
+    beforeLastActivity?: Timestamp;
+    limit?: bigint;
+  } = {}) {
+    await this.conn.reducers.requestConversations({
+      kind,
+      beforeLastActivity,
+      limit,
+    });
+  }
+
+  async clearConversationListRequest() {
+    await this.conn.reducers.clearConversationListRequest({});
+  }
+
+  async requestConversationMembers(conversationId: bigint) {
+    await this.conn.reducers.requestConversationMembers({ conversationId });
+  }
+
+  async clearConversationMemberRequest(conversationId: bigint) {
+    await this.conn.reducers.clearConversationMemberRequest({ conversationId });
   }
 
   async requestConversationMessages({
@@ -1381,6 +1486,62 @@ export class AgentRealtimeClient {
         this.conn,
         'visible_inbox_delivery',
         'visibleInboxDelivery'
+      ).iter()
+    );
+    const filtered = rows
+      .filter(row => (conversationId ? row.conversationId === conversationId : true))
+      .filter(row => (state ? row.state === state : true))
+      .sort((left, right) => {
+        const sent = right.sent.toDate().getTime() - left.sent.toDate().getTime();
+        if (sent !== 0) {
+          return sent;
+        }
+        return right.sequence > left.sequence ? 1 : right.sequence < left.sequence ? -1 : 0;
+      });
+    for (const row of filtered) {
+      this.rememberConversationSequence(row.conversationId, row.sequence);
+    }
+    return filtered;
+  }
+
+  async requestInboxDeliveries({
+    conversationId,
+    state,
+    afterSequence,
+    beforeSent,
+    limit,
+  }: {
+    conversationId?: bigint;
+    state?: 'unread' | 'delivered' | 'read';
+    afterSequence?: bigint;
+    beforeSent?: Timestamp;
+    limit?: bigint;
+  } = {}) {
+    await this.conn.reducers.requestInboxDeliveries({
+      conversationId,
+      state,
+      afterSequence,
+      beforeSent,
+      limit,
+    });
+  }
+
+  async clearInboxDeliveryRequest() {
+    await this.conn.reducers.clearInboxDeliveryRequest({});
+  }
+
+  listRequestedInboxDeliveries({
+    conversationId,
+    state,
+  }: {
+    conversationId?: bigint;
+    state?: 'unread' | 'delivered' | 'read';
+  } = {}) {
+    const rows = Array.from(
+      getDbAccessor<ModuleTypes.ConversationDelivery>(
+        this.conn,
+        'visible_requested_inbox_delivery',
+        'visibleRequestedInboxDelivery'
       ).iter()
     );
     const filtered = rows

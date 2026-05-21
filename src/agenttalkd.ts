@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +13,7 @@ type AgenttalkState = {
   host?: string;
   databaseName?: string;
   token?: string;
+  ipcSecret?: string;
 };
 
 type AgenttalkdResponse =
@@ -94,7 +95,15 @@ async function loadState(): Promise<AgenttalkState> {
 
 async function saveState(state: AgenttalkState) {
   await fs.mkdir(STATE_DIR, { recursive: true });
+  await fs.chmod(STATE_DIR, 0o700).catch(() => undefined);
   await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  await fs.chmod(STATE_PATH, 0o600).catch(() => undefined);
+}
+
+function ensureIpcSecret(state: AgenttalkState) {
+  return state.ipcSecret && state.ipcSecret.length >= 32
+    ? state.ipcSecret
+    : randomBytes(32).toString('hex');
 }
 
 function parseIdentity(value: string) {
@@ -211,9 +220,45 @@ function accountEntitlementDto(entitlement: ModuleTypes.AccountEntitlement) {
       entitlement.maxGroupConversationMembers?.toString() ?? null,
     maxMessageBytes: entitlement.maxMessageBytes?.toString() ?? null,
     sendRatePerMinute: entitlement.sendRatePerMinute?.toString() ?? null,
+    openConversationRatePerMinute:
+      entitlement.openConversationRatePerMinute?.toString() ?? null,
+    historyRequestRatePerMinute:
+      entitlement.historyRequestRatePerMinute?.toString() ?? null,
+    inboxRequestRatePerMinute:
+      entitlement.inboxRequestRatePerMinute?.toString() ?? null,
+    directorySearchRatePerMinute:
+      entitlement.directorySearchRatePerMinute?.toString() ?? null,
+    maxInboxPageSize: entitlement.maxInboxPageSize?.toString() ?? null,
+    maxHistoryPageSize: entitlement.maxHistoryPageSize?.toString() ?? null,
+    maxPendingUnreadDeliveries:
+      entitlement.maxPendingUnreadDeliveries?.toString() ?? null,
     createdAt: entitlement.createdAt.toDate().toISOString(),
     updatedAt: entitlement.updatedAt.toDate().toISOString(),
     updatedBy: identityHex(entitlement.updatedBy),
+  };
+}
+
+function deploymentPolicyDto(policy: ModuleTypes.DeploymentPolicyView) {
+  return {
+    key: policy.key,
+    openBetaMode: policy.openBetaMode,
+    disableNewAccounts: policy.disableNewAccounts,
+    disableMessageSend: policy.disableMessageSend,
+    maintenanceModeMessage: policy.maintenanceModeMessage ?? null,
+    maxMessageBytesDefault: policy.maxMessageBytesDefault.toString(),
+    defaultSendRatePerMinute: policy.defaultSendRatePerMinute.toString(),
+    defaultOpenConversationRatePerMinute:
+      policy.defaultOpenConversationRatePerMinute.toString(),
+    defaultHistoryRequestsPerMinute:
+      policy.defaultHistoryRequestsPerMinute.toString(),
+    defaultInboxRequestsPerMinute:
+      policy.defaultInboxRequestsPerMinute.toString(),
+    defaultDirectorySearchRatePerMinute:
+      policy.defaultDirectorySearchRatePerMinute.toString(),
+    maxInboxPageSize: policy.maxInboxPageSize.toString(),
+    maxHistoryPageSize: policy.maxHistoryPageSize.toString(),
+    maxPendingUnreadDeliveries: policy.maxPendingUnreadDeliveries.toString(),
+    updatedAt: policy.updatedAt.toDate().toISOString(),
   };
 }
 
@@ -272,6 +317,10 @@ class AgenttalkDaemon {
     private readonly profile: AgentSubscriptionProfile
   ) {}
 
+  acceptsIpcSecret(value: unknown) {
+    return typeof value === 'string' && value === this.state.ipcSecret;
+  }
+
   static async connect(profile: AgentSubscriptionProfile = 'daemon-direct') {
     setGlobalLogLevel('error');
     const state = await loadState();
@@ -284,7 +333,9 @@ class AgenttalkDaemon {
       token,
       subscriptionProfile: profile,
     });
-    await saveState({ host, databaseName, token: client.token });
+    const ipcSecret = ensureIpcSecret(state);
+    const nextState = { ...state, host, databaseName, token: client.token, ipcSecret };
+    await saveState(nextState);
     let needsInit = false;
     try {
       await client.heartbeat('agenttalkd online', 'agenttalkd');
@@ -294,7 +345,7 @@ class AgenttalkDaemon {
       }
       needsInit = true;
     }
-    const daemon = new AgenttalkDaemon(client, { host, databaseName, token: client.token }, profile);
+    const daemon = new AgenttalkDaemon(client, nextState, profile);
     daemon.needsInit = needsInit;
     daemon.lastConnectionError = needsInit ? 'needs_init' : undefined;
     return daemon;
@@ -410,6 +461,7 @@ class AgenttalkDaemon {
           this.state = {
             ...this.state,
             token: client.token,
+            ipcSecret: ensureIpcSecret(this.state),
           };
           await saveState(this.state);
           this.reconnectCount += 1;
@@ -662,6 +714,7 @@ class AgenttalkDaemon {
       if (cmd === 'whoami') {
         const profile = this.client.currentAgentProfile();
         const retention = this.client.listRetentionPolicies()[0];
+        const deploymentPolicy = this.client.listDeploymentPolicies()[0];
         const account = await this.currentAccountWithRefresh();
         return {
           id,
@@ -675,6 +728,9 @@ class AgenttalkDaemon {
             databaseName: this.state.databaseName,
             hotRetentionHours: Number(retention?.hotRetentionHours ?? 12n),
             archiveConfigured: retention?.archiveConfigured ?? false,
+            deploymentPolicy: deploymentPolicy
+              ? deploymentPolicyDto(deploymentPolicy)
+              : null,
             needsInit: this.needsInit,
           },
         };
@@ -868,11 +924,25 @@ class AgenttalkDaemon {
       }
 
       if (cmd === 'conversation_list') {
+        const limit = BigInt(Math.min(Number(payload.limit ?? 50), 100));
+        await this.client.requestConversations({
+          kind:
+            payload.kind === 'direct' || payload.kind === 'group'
+              ? payload.kind
+              : undefined,
+          limit,
+        });
+        await sleep(150);
+        const conversations = this.client.listConversations();
+        for (const conversation of conversations) {
+          await this.client.requestConversationMembers(conversation.id);
+        }
+        await sleep(100);
         return {
           id,
           ok: true,
           data: {
-            conversations: this.client.listConversations().map(row => ({
+            conversations: conversations.map(row => ({
               ...conversationDto(row),
               memberCount: this.client.listConversationMembers(row.id).length,
             })),
@@ -907,6 +977,9 @@ class AgenttalkDaemon {
         if (!receipt.conversationId) {
           throw new Error('create_direct_conversation receipt did not include conversationId');
         }
+        await this.client.requestConversations({ limit: 10n });
+        await this.client.requestConversationMembers(receipt.conversationId);
+        await sleep(150);
         const conversation = this.client
           .listConversations()
           .find(row => row.id === receipt.conversationId);
@@ -956,6 +1029,9 @@ class AgenttalkDaemon {
         if (!receipt.conversationId) {
           throw new Error('create_group_conversation receipt did not include conversationId');
         }
+        await this.client.requestConversations({ limit: 10n });
+        await this.client.requestConversationMembers(receipt.conversationId);
+        await sleep(150);
         const conversation = this.client
           .listConversations()
           .find(row => row.id === receipt.conversationId);
@@ -1006,6 +1082,7 @@ class AgenttalkDaemon {
           payload.role === 'mod' || payload.role === 'member' ? payload.role : 'member';
         const memberIdentity = (await this.resolveAccount(memberRef)).identity;
         await this.client.addConversationMember(conversationId, memberIdentity, role);
+        await this.client.requestConversationMembers(conversationId);
         await sleep(250);
         return {
           id,
@@ -1112,7 +1189,7 @@ class AgenttalkDaemon {
       }
 
       if (cmd === 'inbox') {
-        const limit = Math.min(Number(payload.limit ?? payload.max ?? 10), 100);
+        const limit = Math.min(Number(payload.limit ?? payload.max ?? 10), 250);
         const conversationId =
           payload.conversationId !== undefined || payload.conversation_id !== undefined
             ? BigInt(String(payload.conversationId ?? payload.conversation_id))
@@ -1121,15 +1198,29 @@ class AgenttalkDaemon {
           payload.afterSequence !== undefined || payload.after_sequence !== undefined
             ? BigInt(String(payload.afterSequence ?? payload.after_sequence))
             : undefined;
-        const deliveries = this.client
-          .listInboxDeliveries({
+        await this.client.requestInboxDeliveries({
+          conversationId,
+          state: payload.state as 'unread' | 'delivered' | 'read' | undefined,
+          afterSequence,
+          limit: BigInt(limit),
+        });
+        await sleep(150);
+        const requested = this.client.listRequestedInboxDeliveries({
+          conversationId,
+          state: payload.state as 'unread' | 'delivered' | 'read' | undefined,
+        });
+        const live = this.client.listInboxDeliveries({
             conversationId,
             state: payload.state as 'unread' | 'delivered' | 'read' | undefined,
-          })
-          .filter(delivery =>
-            afterSequence === undefined ? true : delivery.sequence > afterSequence
-          )
-          .slice(0, limit);
+          });
+        const byKey = new Map<string, ModuleTypes.ConversationDelivery>();
+        for (const delivery of [...requested, ...live]) {
+          if (afterSequence !== undefined && delivery.sequence <= afterSequence) {
+            continue;
+          }
+          byKey.set(this.deliveryMessageKey(delivery), delivery);
+        }
+        const deliveries = Array.from(byKey.values()).slice(0, limit);
         const hydrate = this.shouldHydrate(payload);
         const hydratedMessages = hydrate
           ? await this.hydrateDeliveryMessages(deliveries)
@@ -1251,6 +1342,12 @@ class AgenttalkDaemon {
             inboxDeliveryCount: this.client.connected
               ? this.client.listInboxDeliveries().length
               : 0,
+            requestedInboxDeliveryCount: this.client.connected
+              ? this.client.listRequestedInboxDeliveries().length
+              : 0,
+            requestedConversationCount: this.client.connected
+              ? this.client.listConversations().length
+              : 0,
             receiptCount: this.client.connected
               ? this.client.listClientRequestReceipts().length
               : 0,
@@ -1304,7 +1401,8 @@ type RichKind =
 async function serveLineInterface(
   daemon: AgenttalkDaemon,
   input: NodeJS.ReadableStream,
-  output: NodeJS.WritableStream
+  output: NodeJS.WritableStream,
+  requireAuth = false
 ) {
   const rl = readline.createInterface({ input });
   for await (const line of rl) {
@@ -1326,6 +1424,20 @@ async function serveLineInterface(
       continue;
     }
 
+    if (requireAuth && !daemon.acceptsIpcSecret(payload.ipcSecret)) {
+      writeJsonLine(output, {
+        id: typeof payload.id === 'string' ? payload.id : '',
+        ok: false,
+        transport: 'daemon',
+        daemon: true,
+        error: 'Invalid or missing agenttalkd IPC secret',
+      });
+      continue;
+    }
+    if (requireAuth) {
+      delete payload.ipcSecret;
+    }
+
     const response = await daemon.handle(payload);
     writeJsonLine(output, { transport: 'daemon', daemon: true, ...response });
     if (daemon.isShuttingDown()) {
@@ -1344,7 +1456,9 @@ export async function runAgenttalkd({
   const daemon = await AgenttalkDaemon.connect('daemon-direct');
   daemon.startHeartbeat();
   await fs.mkdir(STATE_DIR, { recursive: true });
+  await fs.chmod(STATE_DIR, 0o700).catch(() => undefined);
   await fs.writeFile(PID_PATH, `${process.pid}\n`, 'utf8');
+  await fs.chmod(PID_PATH, 0o600).catch(() => undefined);
 
   let server: net.Server | undefined;
   if (ipc) {
@@ -1353,7 +1467,7 @@ export async function runAgenttalkd({
       await fs.rm(pipePath, { force: true });
     }
     server = net.createServer(socket => {
-      void serveLineInterface(daemon, socket, socket);
+      void serveLineInterface(daemon, socket, socket, true);
     });
     await new Promise<void>((resolve, reject) => {
       server!.once('error', reject);
@@ -1362,7 +1476,7 @@ export async function runAgenttalkd({
   }
 
   if (stdio) {
-    await serveLineInterface(daemon, process.stdin, process.stdout);
+    await serveLineInterface(daemon, process.stdin, process.stdout, false);
   } else {
     while (!daemon.isShuttingDown()) {
       await sleep(250);

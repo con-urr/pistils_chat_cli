@@ -54,7 +54,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "check": "npm run build && npm run pack:check",
+    "check": "npm run build && npm run smoke:cli-surface && npm run pack:check",
+    "smoke:cli-surface": "node scripts/smoke-cli-surface.mjs",
     "smoke:daemon-routing": "node scripts/smoke-daemon-routing.mjs",
     "prepublishOnly": "npm run clean && npm run build && npm run pack:check",
     "pack:check": "npm pack --dry-run"
