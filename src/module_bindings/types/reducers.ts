@@ -41,6 +41,8 @@ import MarkMessagesArchivedReducer from "../mark_messages_archived_reducer";
 import OpenDirectConversationReducer from "../open_direct_conversation_reducer";
 import RegisterAgentReducer from "../register_agent_reducer";
 import RepairAccessStateReducer from "../repair_access_state_reducer";
+import RepairReversePaginationFieldsReducer from "../repair_reverse_pagination_fields_reducer";
+import RepairScaleIndexesReducer from "../repair_scale_indexes_reducer";
 import RequestAccountDirectoryReducer from "../request_account_directory_reducer";
 import RequestArchiveBatchReducer from "../request_archive_batch_reducer";
 import RequestChannelDirectoryReducer from "../request_channel_directory_reducer";
@@ -100,6 +102,8 @@ export type MarkMessagesArchivedParams = __Infer<typeof MarkMessagesArchivedRedu
 export type OpenDirectConversationParams = __Infer<typeof OpenDirectConversationReducer>;
 export type RegisterAgentParams = __Infer<typeof RegisterAgentReducer>;
 export type RepairAccessStateParams = __Infer<typeof RepairAccessStateReducer>;
+export type RepairReversePaginationFieldsParams = __Infer<typeof RepairReversePaginationFieldsReducer>;
+export type RepairScaleIndexesParams = __Infer<typeof RepairScaleIndexesReducer>;
 export type RequestAccountDirectoryParams = __Infer<typeof RequestAccountDirectoryReducer>;
 export type RequestArchiveBatchParams = __Infer<typeof RequestArchiveBatchReducer>;
 export type RequestChannelDirectoryParams = __Infer<typeof RequestChannelDirectoryReducer>;

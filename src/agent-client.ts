@@ -221,9 +221,11 @@ const DAEMON_DIRECT_SUBSCRIPTIONS = [
   'SELECT * FROM visible_requested_inbox_delivery',
   'SELECT * FROM visible_requested_conversation_message',
   'SELECT * FROM visible_requested_conversation',
+  'SELECT * FROM visible_requested_conversation_summary',
   'SELECT * FROM visible_requested_conversation_member',
   'SELECT * FROM visible_conversation_read_cursor',
   'SELECT * FROM visible_client_request_receipt',
+  'SELECT * FROM visible_agent_delivery_counter',
   'SELECT * FROM visible_retention_policy',
   'SELECT * FROM visible_deployment_policy',
 ];
@@ -232,6 +234,10 @@ const ACCOUNT_ADMIN_SUBSCRIPTIONS = [
   ...IDENTITY_SUBSCRIPTIONS,
   'SELECT * FROM visible_account_entitlement',
   'SELECT * FROM visible_retention_cleanup_stat',
+  'SELECT * FROM visible_scale_repair_stat',
+  'SELECT * FROM visible_agent_delivery_counter',
+  'SELECT * FROM visible_operator_scale_snapshot',
+  'SELECT * FROM visible_rate_limit_pressure',
 ];
 
 const ROOM_SUBSCRIPTIONS = [
@@ -371,6 +377,7 @@ export class AgentRealtimeClient {
   private readonly directConversationCache = new Map<string, ModuleTypes.DirectConversationIndex>();
   private readonly conversationSequenceCache = new Map<string, bigint>();
   private readonly receiptCache = new Map<string, ModuleTypes.ClientRequestReceipt>();
+  private readonly inFlightRequests = new Map<string, Promise<void>>();
 
   private constructor(
     private readonly conn: DbConnection,
@@ -419,7 +426,22 @@ export class AgentRealtimeClient {
       directConversations: this.directConversationCache.size,
       conversationSequences: this.conversationSequenceCache.size,
       receipts: this.receiptCache.size,
+      inFlightRequests: this.inFlightRequests.size,
     };
+  }
+
+  private coalesceRequest(key: string, run: () => Promise<void>) {
+    const existing = this.inFlightRequests.get(key);
+    if (existing) {
+      return existing;
+    }
+    const next = run().finally(() => {
+      if (this.inFlightRequests.get(key) === next) {
+        this.inFlightRequests.delete(key);
+      }
+    });
+    this.inFlightRequests.set(key, next);
+    return next;
   }
 
   private rememberAccount(row: ModuleTypes.Account) {
@@ -528,6 +550,14 @@ export class AgentRealtimeClient {
 
   async runRetentionCleanupNow() {
     await this.conn.reducers.runRetentionCleanupNow({});
+  }
+
+  async repairReversePaginationFields(limit?: bigint) {
+    await this.conn.reducers.repairReversePaginationFields({ limit });
+  }
+
+  async repairScaleIndexes(limit?: bigint) {
+    await this.conn.reducers.repairScaleIndexes({ limit });
   }
 
   async setAccountType({
@@ -1075,6 +1105,42 @@ export class AgentRealtimeClient {
     return accessor ? Array.from(accessor.iter()) : [];
   }
 
+  listScaleRepairStats() {
+    const accessor = findDbAccessor<ModuleTypes.ScaleRepairStatView>(
+      this.conn,
+      'visible_scale_repair_stat',
+      'visibleScaleRepairStat'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  listAgentDeliveryCounters() {
+    const accessor = findDbAccessor<ModuleTypes.AgentDeliveryCounterView>(
+      this.conn,
+      'visible_agent_delivery_counter',
+      'visibleAgentDeliveryCounter'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  listOperatorScaleSnapshots() {
+    const accessor = findDbAccessor<ModuleTypes.OperatorScaleSnapshotView>(
+      this.conn,
+      'visible_operator_scale_snapshot',
+      'visibleOperatorScaleSnapshot'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  listRateLimitPressure() {
+    const accessor = findDbAccessor<ModuleTypes.RateLimitPressureView>(
+      this.conn,
+      'visible_rate_limit_pressure',
+      'visibleRateLimitPressure'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
   listDeploymentPolicies() {
     const accessor = findDbAccessor<ModuleTypes.DeploymentPolicyView>(
       this.conn,
@@ -1349,6 +1415,18 @@ export class AgentRealtimeClient {
     return Array.from(byId.values()).sort(byLastActivityDesc);
   }
 
+  listConversationSummaries(conversationId?: bigint) {
+    const accessor = findDbAccessor<ModuleTypes.ConversationParticipantSummaryView>(
+      this.conn,
+      'visible_requested_conversation_summary',
+      'visibleRequestedConversationSummary'
+    );
+    const rows = accessor ? Array.from(accessor.iter()) : [];
+    return rows
+      .filter(row => (conversationId ? row.conversationId === conversationId : true))
+      .sort(byLastActivityDesc);
+  }
+
   listDirectConversations() {
     const rows = Array.from(
       getDbAccessor<ModuleTypes.DirectConversationIndex>(
@@ -1397,11 +1475,19 @@ export class AgentRealtimeClient {
     beforeLastActivity?: Timestamp;
     limit?: bigint;
   } = {}) {
-    await this.conn.reducers.requestConversations({
-      kind,
-      beforeLastActivity,
-      limit,
-    });
+    const key = [
+      'conversation:list',
+      kind ?? '',
+      beforeLastActivity?.toDate().getTime().toString() ?? '',
+      limit?.toString() ?? '',
+    ].join(':');
+    await this.coalesceRequest(key, () =>
+      this.conn.reducers.requestConversations({
+        kind,
+        beforeLastActivity,
+        limit,
+      })
+    );
   }
 
   async clearConversationListRequest() {
@@ -1409,7 +1495,9 @@ export class AgentRealtimeClient {
   }
 
   async requestConversationMembers(conversationId: bigint) {
-    await this.conn.reducers.requestConversationMembers({ conversationId });
+    await this.coalesceRequest(`conversation:members:${conversationId.toString()}`, () =>
+      this.conn.reducers.requestConversationMembers({ conversationId })
+    );
   }
 
   async clearConversationMemberRequest(conversationId: bigint) {
@@ -1427,12 +1515,21 @@ export class AgentRealtimeClient {
     beforeSequence?: bigint;
     limit?: bigint;
   }) {
-    await this.conn.reducers.requestConversationMessages({
-      conversationId,
-      afterSequence,
-      beforeSequence,
-      limit,
-    });
+    const key = [
+      'conversation:history',
+      conversationId.toString(),
+      afterSequence?.toString() ?? '',
+      beforeSequence?.toString() ?? '',
+      limit?.toString() ?? '',
+    ].join(':');
+    await this.coalesceRequest(key, () =>
+      this.conn.reducers.requestConversationMessages({
+        conversationId,
+        afterSequence,
+        beforeSequence,
+        limit,
+      })
+    );
   }
 
   async clearConversationMessageRequest(conversationId: bigint) {
@@ -1517,13 +1614,23 @@ export class AgentRealtimeClient {
     beforeSent?: Timestamp;
     limit?: bigint;
   } = {}) {
-    await this.conn.reducers.requestInboxDeliveries({
-      conversationId,
-      state,
-      afterSequence,
-      beforeSent,
-      limit,
-    });
+    const key = [
+      'inbox:request',
+      conversationId?.toString() ?? '',
+      state ?? '',
+      afterSequence?.toString() ?? '',
+      beforeSent?.toDate().getTime().toString() ?? '',
+      limit?.toString() ?? '',
+    ].join(':');
+    await this.coalesceRequest(key, () =>
+      this.conn.reducers.requestInboxDeliveries({
+        conversationId,
+        state,
+        afterSequence,
+        beforeSent,
+        limit,
+      })
+    );
   }
 
   async clearInboxDeliveryRequest() {

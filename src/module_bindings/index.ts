@@ -69,6 +69,8 @@ import MarkMessagesArchivedReducer from "./mark_messages_archived_reducer";
 import OpenDirectConversationReducer from "./open_direct_conversation_reducer";
 import RegisterAgentReducer from "./register_agent_reducer";
 import RepairAccessStateReducer from "./repair_access_state_reducer";
+import RepairReversePaginationFieldsReducer from "./repair_reverse_pagination_fields_reducer";
+import RepairScaleIndexesReducer from "./repair_scale_indexes_reducer";
 import RequestAccountDirectoryReducer from "./request_account_directory_reducer";
 import RequestArchiveBatchReducer from "./request_archive_batch_reducer";
 import RequestChannelDirectoryReducer from "./request_channel_directory_reducer";
@@ -100,6 +102,7 @@ import PublicAccountDirectoryRow from "./public_account_directory_table";
 import PublicChannelDirectoryRow from "./public_channel_directory_table";
 import VisibleAccountRow from "./visible_account_table";
 import VisibleAccountEntitlementRow from "./visible_account_entitlement_table";
+import VisibleAgentDeliveryCounterRow from "./visible_agent_delivery_counter_table";
 import VisibleAgentEventRow from "./visible_agent_event_table";
 import VisibleAgentProfileRow from "./visible_agent_profile_table";
 import VisibleAgentSessionRow from "./visible_agent_session_table";
@@ -118,18 +121,22 @@ import VisibleDirectConversationRow from "./visible_direct_conversation_table";
 import VisibleHandoffRow from "./visible_handoff_table";
 import VisibleInboxDeliveryRow from "./visible_inbox_delivery_table";
 import VisibleMessageRow from "./visible_message_table";
+import VisibleOperatorScaleSnapshotRow from "./visible_operator_scale_snapshot_table";
 import VisibleRateLimitBucketRow from "./visible_rate_limit_bucket_table";
+import VisibleRateLimitPressureRow from "./visible_rate_limit_pressure_table";
 import VisibleRequestedAccountDirectoryRow from "./visible_requested_account_directory_table";
 import VisibleRequestedChannelDirectoryRow from "./visible_requested_channel_directory_table";
 import VisibleRequestedConversationRow from "./visible_requested_conversation_table";
 import VisibleRequestedConversationMemberRow from "./visible_requested_conversation_member_table";
 import VisibleRequestedConversationMessageRow from "./visible_requested_conversation_message_table";
+import VisibleRequestedConversationSummaryRow from "./visible_requested_conversation_summary_table";
 import VisibleRequestedInboxDeliveryRow from "./visible_requested_inbox_delivery_table";
 import VisibleRetentionCleanupStatRow from "./visible_retention_cleanup_stat_table";
 import VisibleRetentionPolicyRow from "./visible_retention_policy_table";
 import VisibleRichMessageRow from "./visible_rich_message_table";
 import VisibleRoomConfigRow from "./visible_room_config_table";
 import VisibleRoomRemovalReceiptRow from "./visible_room_removal_receipt_table";
+import VisibleScaleRepairStatRow from "./visible_scale_repair_stat_table";
 import VisibleSelfAgentProfileRow from "./visible_self_agent_profile_table";
 import VisibleTaskRow from "./visible_task_table";
 import VisibleTaskClaimRow from "./visible_task_claim_table";
@@ -174,6 +181,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleAccountEntitlementRow),
+  visible_agent_delivery_counter: __table({
+    name: 'visible_agent_delivery_counter',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleAgentDeliveryCounterRow),
   visible_agent_event: __table({
     name: 'visible_agent_event',
     indexes: [
@@ -300,6 +314,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleMessageRow),
+  visible_operator_scale_snapshot: __table({
+    name: 'visible_operator_scale_snapshot',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleOperatorScaleSnapshotRow),
   visible_rate_limit_bucket: __table({
     name: 'visible_rate_limit_bucket',
     indexes: [
@@ -307,6 +328,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleRateLimitBucketRow),
+  visible_rate_limit_pressure: __table({
+    name: 'visible_rate_limit_pressure',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleRateLimitPressureRow),
   visible_requested_account_directory: __table({
     name: 'visible_requested_account_directory',
     indexes: [
@@ -342,6 +370,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleRequestedConversationMessageRow),
+  visible_requested_conversation_summary: __table({
+    name: 'visible_requested_conversation_summary',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleRequestedConversationSummaryRow),
   visible_requested_inbox_delivery: __table({
     name: 'visible_requested_inbox_delivery',
     indexes: [
@@ -384,6 +419,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleRoomRemovalReceiptRow),
+  visible_scale_repair_stat: __table({
+    name: 'visible_scale_repair_stat',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleScaleRepairStatRow),
   visible_self_agent_profile: __table({
     name: 'visible_self_agent_profile',
     indexes: [
@@ -500,6 +542,8 @@ const reducersSchema = __reducers(
   __reducerSchema("open_direct_conversation", OpenDirectConversationReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
   __reducerSchema("repair_access_state", RepairAccessStateReducer),
+  __reducerSchema("repair_reverse_pagination_fields", RepairReversePaginationFieldsReducer),
+  __reducerSchema("repair_scale_indexes", RepairScaleIndexesReducer),
   __reducerSchema("request_account_directory", RequestAccountDirectoryReducer),
   __reducerSchema("request_archive_batch", RequestArchiveBatchReducer),
   __reducerSchema("request_channel_directory", RequestChannelDirectoryReducer),

@@ -82,6 +82,20 @@ export const ActiveConnection = __t.object("ActiveConnection", {
 });
 export type ActiveConnection = __Infer<typeof ActiveConnection>;
 
+export const AgentDeliveryCounter = __t.object("AgentDeliveryCounter", {
+  agentId: __t.string(),
+  unreadCount: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type AgentDeliveryCounter = __Infer<typeof AgentDeliveryCounter>;
+
+export const AgentDeliveryCounterView = __t.object("AgentDeliveryCounterView", {
+  agentId: __t.string(),
+  unreadCount: __t.u64(),
+  updatedAt: __t.timestamp(),
+});
+export type AgentDeliveryCounterView = __Infer<typeof AgentDeliveryCounterView>;
+
 export const AgentEvent = __t.object("AgentEvent", {
   id: __t.u64(),
   kind: __t.string(),
@@ -369,6 +383,42 @@ export const ConversationMessageRequest = __t.object("ConversationMessageRequest
 });
 export type ConversationMessageRequest = __Infer<typeof ConversationMessageRequest>;
 
+export const ConversationParticipantIndex = __t.object("ConversationParticipantIndex", {
+  key: __t.string(),
+  agentId: __t.string(),
+  memberIdentity: __t.identity(),
+  conversationId: __t.u64(),
+  role: __t.string(),
+  kind: __t.string(),
+  title: __t.string(),
+  lastActivity: __t.timestamp(),
+  reverseLastActivityMicros: __t.u64(),
+  lastSequence: __t.u64(),
+  lastReadSequence: __t.u64(),
+  unreadCount: __t.u64(),
+  active: __t.bool(),
+  joinedAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ConversationParticipantIndex = __Infer<typeof ConversationParticipantIndex>;
+
+export const ConversationParticipantSummaryView = __t.object("ConversationParticipantSummaryView", {
+  key: __t.string(),
+  agentId: __t.string(),
+  conversationId: __t.u64(),
+  role: __t.string(),
+  kind: __t.string(),
+  title: __t.string(),
+  lastActivity: __t.timestamp(),
+  lastSequence: __t.u64(),
+  lastReadSequence: __t.u64(),
+  unreadCount: __t.u64(),
+  active: __t.bool(),
+  joinedAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+});
+export type ConversationParticipantSummaryView = __Infer<typeof ConversationParticipantSummaryView>;
+
 export const ConversationReadCursor = __t.object("ConversationReadCursor", {
   key: __t.string(),
   conversationId: __t.u64(),
@@ -471,6 +521,28 @@ export const Message = __t.object("Message", {
 });
 export type Message = __Infer<typeof Message>;
 
+export const OperatorScaleSnapshotView = __t.object("OperatorScaleSnapshotView", {
+  key: __t.string(),
+  capturedAt: __t.timestamp(),
+  activeConnections: __t.u64(),
+  activeConnectionAgents: __t.u64(),
+  activeAccounts: __t.u64(),
+  activeAgentProfiles: __t.u64(),
+  conversationCount: __t.u64(),
+  conversationMemberCount: __t.u64(),
+  conversationDeliveryCount: __t.u64(),
+  unreadDeliveryCount: __t.u64(),
+  agentDeliveryCounterUnreadTotal: __t.u64(),
+  conversationParticipantIndexCount: __t.u64(),
+  requestRowCount: __t.u64(),
+  rateLimitBucketCount: __t.u64(),
+  cleanupCapped: __t.bool(),
+  lastCleanupRunAt: __t.timestamp(),
+  deploymentDisableNewAccounts: __t.bool(),
+  deploymentDisableMessageSend: __t.bool(),
+});
+export type OperatorScaleSnapshotView = __Infer<typeof OperatorScaleSnapshotView>;
+
 export const Principal = __t.object("Principal", {
   identity: __t.identity(),
   ownerIdentity: __t.option(__t.identity()),
@@ -496,6 +568,16 @@ export const RateLimitBucket = __t.object("RateLimitBucket", {
   updatedAt: __t.timestamp(),
 });
 export type RateLimitBucket = __Infer<typeof RateLimitBucket>;
+
+export const RateLimitPressureView = __t.object("RateLimitPressureView", {
+  key: __t.string(),
+  action: __t.string(),
+  bucketCount: __t.u64(),
+  totalCount: __t.u64(),
+  maxBucketCount: __t.u64(),
+  latestUpdatedAt: __t.timestamp(),
+});
+export type RateLimitPressureView = __Infer<typeof RateLimitPressureView>;
 
 export const RequestLog = __t.object("RequestLog", {
   requestKey: __t.string(),
@@ -632,6 +714,30 @@ export const RoomRemovalReceipt = __t.object("RoomRemovalReceipt", {
 });
 export type RoomRemovalReceipt = __Infer<typeof RoomRemovalReceipt>;
 
+export const ScaleRepairStat = __t.object("ScaleRepairStat", {
+  key: __t.string(),
+  lastRunAt: __t.timestamp(),
+  reason: __t.string(),
+  reverseMessageUpdated: __t.u64(),
+  reverseDeliveryUpdated: __t.u64(),
+  deliveryCounterUpdated: __t.u64(),
+  participantIndexUpdated: __t.u64(),
+  capped: __t.bool(),
+});
+export type ScaleRepairStat = __Infer<typeof ScaleRepairStat>;
+
+export const ScaleRepairStatView = __t.object("ScaleRepairStatView", {
+  key: __t.string(),
+  lastRunAt: __t.timestamp(),
+  reason: __t.string(),
+  reverseMessageUpdated: __t.u64(),
+  reverseDeliveryUpdated: __t.u64(),
+  deliveryCounterUpdated: __t.u64(),
+  participantIndexUpdated: __t.u64(),
+  capped: __t.bool(),
+});
+export type ScaleRepairStatView = __Infer<typeof ScaleRepairStatView>;
+
 export const TaskClaim = __t.object("TaskClaim", {
   id: __t.u64(),
   taskId: __t.u64(),
@@ -677,6 +783,9 @@ export type VisibleAccount = __Infer<typeof VisibleAccount>;
 
 export const VisibleAccountEntitlement = __t.object("VisibleAccountEntitlement", {});
 export type VisibleAccountEntitlement = __Infer<typeof VisibleAccountEntitlement>;
+
+export const VisibleAgentDeliveryCounter = __t.object("VisibleAgentDeliveryCounter", {});
+export type VisibleAgentDeliveryCounter = __Infer<typeof VisibleAgentDeliveryCounter>;
 
 export const VisibleAgentEvent = __t.object("VisibleAgentEvent", {});
 export type VisibleAgentEvent = __Infer<typeof VisibleAgentEvent>;
@@ -732,8 +841,14 @@ export type VisibleInboxDelivery = __Infer<typeof VisibleInboxDelivery>;
 export const VisibleMessage = __t.object("VisibleMessage", {});
 export type VisibleMessage = __Infer<typeof VisibleMessage>;
 
+export const VisibleOperatorScaleSnapshot = __t.object("VisibleOperatorScaleSnapshot", {});
+export type VisibleOperatorScaleSnapshot = __Infer<typeof VisibleOperatorScaleSnapshot>;
+
 export const VisibleRateLimitBucket = __t.object("VisibleRateLimitBucket", {});
 export type VisibleRateLimitBucket = __Infer<typeof VisibleRateLimitBucket>;
+
+export const VisibleRateLimitPressure = __t.object("VisibleRateLimitPressure", {});
+export type VisibleRateLimitPressure = __Infer<typeof VisibleRateLimitPressure>;
 
 export const VisibleRequestedAccountDirectory = __t.object("VisibleRequestedAccountDirectory", {});
 export type VisibleRequestedAccountDirectory = __Infer<typeof VisibleRequestedAccountDirectory>;
@@ -749,6 +864,9 @@ export type VisibleRequestedConversationMember = __Infer<typeof VisibleRequested
 
 export const VisibleRequestedConversationMessage = __t.object("VisibleRequestedConversationMessage", {});
 export type VisibleRequestedConversationMessage = __Infer<typeof VisibleRequestedConversationMessage>;
+
+export const VisibleRequestedConversationSummary = __t.object("VisibleRequestedConversationSummary", {});
+export type VisibleRequestedConversationSummary = __Infer<typeof VisibleRequestedConversationSummary>;
 
 export const VisibleRequestedInboxDelivery = __t.object("VisibleRequestedInboxDelivery", {});
 export type VisibleRequestedInboxDelivery = __Infer<typeof VisibleRequestedInboxDelivery>;
@@ -767,6 +885,9 @@ export type VisibleRoomConfig = __Infer<typeof VisibleRoomConfig>;
 
 export const VisibleRoomRemovalReceipt = __t.object("VisibleRoomRemovalReceipt", {});
 export type VisibleRoomRemovalReceipt = __Infer<typeof VisibleRoomRemovalReceipt>;
+
+export const VisibleScaleRepairStat = __t.object("VisibleScaleRepairStat", {});
+export type VisibleScaleRepairStat = __Infer<typeof VisibleScaleRepairStat>;
 
 export const VisibleSelfAgentProfile = __t.object("VisibleSelfAgentProfile", {});
 export type VisibleSelfAgentProfile = __Infer<typeof VisibleSelfAgentProfile>;
