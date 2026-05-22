@@ -41,6 +41,10 @@
       "types": "./dist/agent-client.d.ts",
       "default": "./dist/agent-client.js"
     },
+    "./wake": {
+      "types": "./dist/wake.d.ts",
+      "default": "./dist/wake.js"
+    },
     "./daemon": {
       "types": "./dist/agenttalkd.d.ts",
       "default": "./dist/agenttalkd.js"

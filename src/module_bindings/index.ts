@@ -36,10 +36,12 @@ import {
 // Import all reducer arg schemas
 import AcceptHandoffReducer from "./accept_handoff_reducer";
 import AcceptWorkspaceInviteReducer from "./accept_workspace_invite_reducer";
+import AckWakeRequestReducer from "./ack_wake_request_reducer";
 import AddConversationMemberReducer from "./add_conversation_member_reducer";
 import BindAgentIdentityReducer from "./bind_agent_identity_reducer";
 import BootstrapOperatorAccountReducer from "./bootstrap_operator_account_reducer";
 import ClaimTaskReducer from "./claim_task_reducer";
+import ClaimWakeRequestReducer from "./claim_wake_request_reducer";
 import ClearAccountDirectoryRequestReducer from "./clear_account_directory_request_reducer";
 import ClearChannelDirectoryRequestReducer from "./clear_channel_directory_request_reducer";
 import ClearConversationListRequestReducer from "./clear_conversation_list_request_reducer";
@@ -56,7 +58,10 @@ import CreateThreadReducer from "./create_thread_reducer";
 import CreateWorkspaceReducer from "./create_workspace_reducer";
 import CreateWorkspaceChannelReducer from "./create_workspace_channel_reducer";
 import CreateWorkspaceInviteReducer from "./create_workspace_invite_reducer";
+import DisableWakeRegistrationReducer from "./disable_wake_registration_reducer";
 import EmitAgentEventReducer from "./emit_agent_event_reducer";
+import ExpireWakeRequestsReducer from "./expire_wake_requests_reducer";
+import FailWakeRequestReducer from "./fail_wake_request_reducer";
 import GrantCapabilityReducer from "./grant_capability_reducer";
 import HeartbeatReducer from "./heartbeat_reducer";
 import JoinChannelReducer from "./join_channel_reducer";
@@ -66,8 +71,10 @@ import LeaveConversationReducer from "./leave_conversation_reducer";
 import MarkConversationReadReducer from "./mark_conversation_read_reducer";
 import MarkMessagesArchiveFailedReducer from "./mark_messages_archive_failed_reducer";
 import MarkMessagesArchivedReducer from "./mark_messages_archived_reducer";
+import MarkWakeDispatchedReducer from "./mark_wake_dispatched_reducer";
 import OpenDirectConversationReducer from "./open_direct_conversation_reducer";
 import RegisterAgentReducer from "./register_agent_reducer";
+import RegisterWakeReducer from "./register_wake_reducer";
 import RepairAccessStateReducer from "./repair_access_state_reducer";
 import RepairReversePaginationFieldsReducer from "./repair_reverse_pagination_fields_reducer";
 import RepairScaleIndexesReducer from "./repair_scale_indexes_reducer";
@@ -79,7 +86,9 @@ import RequestConversationMessagesReducer from "./request_conversation_messages_
 import RequestConversationsReducer from "./request_conversations_reducer";
 import RequestInboxDeliveriesReducer from "./request_inbox_deliveries_reducer";
 import ResetDeploymentPolicyReducer from "./reset_deployment_policy_reducer";
+import ResetDeploymentWakePolicyReducer from "./reset_deployment_wake_policy_reducer";
 import ResetRetentionPolicyReducer from "./reset_retention_policy_reducer";
+import ResetWakePolicyReducer from "./reset_wake_policy_reducer";
 import RevokeCapabilityReducer from "./revoke_capability_reducer";
 import RunRetentionCleanupNowReducer from "./run_retention_cleanup_now_reducer";
 import SendConversationMessageReducer from "./send_conversation_message_reducer";
@@ -87,10 +96,12 @@ import SendDirectMessageReducer from "./send_direct_message_reducer";
 import SendThreadMessageReducer from "./send_thread_message_reducer";
 import SetAccountTypeReducer from "./set_account_type_reducer";
 import SetDeploymentPolicyReducer from "./set_deployment_policy_reducer";
+import SetDeploymentWakePolicyReducer from "./set_deployment_wake_policy_reducer";
 import SetProfileReducer from "./set_profile_reducer";
 import SetRetentionPolicyReducer from "./set_retention_policy_reducer";
 import SetRoomConfigReducer from "./set_room_config_reducer";
 import SetRoomRoleReducer from "./set_room_role_reducer";
+import SetWakePolicyReducer from "./set_wake_policy_reducer";
 import UnwatchThreadReducer from "./unwatch_thread_reducer";
 import UpdateTaskStatusReducer from "./update_task_status_reducer";
 import WatchThreadReducer from "./watch_thread_reducer";
@@ -106,6 +117,7 @@ import VisibleAgentDeliveryCounterRow from "./visible_agent_delivery_counter_tab
 import VisibleAgentEventRow from "./visible_agent_event_table";
 import VisibleAgentProfileRow from "./visible_agent_profile_table";
 import VisibleAgentSessionRow from "./visible_agent_session_table";
+import VisibleAgentWakeProfileRow from "./visible_agent_wake_profile_table";
 import VisibleArchiveCandidateMessageRow from "./visible_archive_candidate_message_table";
 import VisibleCapabilityGrantRow from "./visible_capability_grant_table";
 import VisibleChannelRow from "./visible_channel_table";
@@ -117,11 +129,16 @@ import VisibleConversationMemberRow from "./visible_conversation_member_table";
 import VisibleConversationMessageRow from "./visible_conversation_message_table";
 import VisibleConversationReadCursorRow from "./visible_conversation_read_cursor_table";
 import VisibleDeploymentPolicyRow from "./visible_deployment_policy_table";
+import VisibleDeploymentWakePolicyRow from "./visible_deployment_wake_policy_table";
 import VisibleDirectConversationRow from "./visible_direct_conversation_table";
+import VisibleDispatcherWakeRequestRow from "./visible_dispatcher_wake_request_table";
 import VisibleHandoffRow from "./visible_handoff_table";
 import VisibleInboxDeliveryRow from "./visible_inbox_delivery_table";
 import VisibleMessageRow from "./visible_message_table";
 import VisibleOperatorScaleSnapshotRow from "./visible_operator_scale_snapshot_table";
+import VisibleOwnWakePolicyRow from "./visible_own_wake_policy_table";
+import VisibleOwnWakeRegistrationRow from "./visible_own_wake_registration_table";
+import VisibleOwnWakeRequestRow from "./visible_own_wake_request_table";
 import VisibleRateLimitBucketRow from "./visible_rate_limit_bucket_table";
 import VisibleRateLimitPressureRow from "./visible_rate_limit_pressure_table";
 import VisibleRequestedAccountDirectoryRow from "./visible_requested_account_directory_table";
@@ -138,12 +155,14 @@ import VisibleRoomConfigRow from "./visible_room_config_table";
 import VisibleRoomRemovalReceiptRow from "./visible_room_removal_receipt_table";
 import VisibleScaleRepairStatRow from "./visible_scale_repair_stat_table";
 import VisibleSelfAgentProfileRow from "./visible_self_agent_profile_table";
+import VisibleSelfAgentWakeProfileRow from "./visible_self_agent_wake_profile_table";
 import VisibleTaskRow from "./visible_task_table";
 import VisibleTaskClaimRow from "./visible_task_claim_table";
 import VisibleThreadRow from "./visible_thread_table";
 import VisibleThreadWatchRow from "./visible_thread_watch_table";
 import VisibleUnreadConversationMessageRow from "./visible_unread_conversation_message_table";
 import VisibleUserRow from "./visible_user_table";
+import VisibleWakeAttemptRow from "./visible_wake_attempt_table";
 import VisibleWatchedMessageRow from "./visible_watched_message_table";
 import VisibleWorkspaceRow from "./visible_workspace_table";
 import VisibleWorkspaceChannelRow from "./visible_workspace_channel_table";
@@ -209,6 +228,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleAgentSessionRow),
+  visible_agent_wake_profile: __table({
+    name: 'visible_agent_wake_profile',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleAgentWakeProfileRow),
   visible_archive_candidate_message: __table({
     name: 'visible_archive_candidate_message',
     indexes: [
@@ -286,6 +312,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleDeploymentPolicyRow),
+  visible_deployment_wake_policy: __table({
+    name: 'visible_deployment_wake_policy',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleDeploymentWakePolicyRow),
   visible_direct_conversation: __table({
     name: 'visible_direct_conversation',
     indexes: [
@@ -293,6 +326,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleDirectConversationRow),
+  visible_dispatcher_wake_request: __table({
+    name: 'visible_dispatcher_wake_request',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleDispatcherWakeRequestRow),
   visible_handoff: __table({
     name: 'visible_handoff',
     indexes: [
@@ -321,6 +361,27 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleOperatorScaleSnapshotRow),
+  visible_own_wake_policy: __table({
+    name: 'visible_own_wake_policy',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleOwnWakePolicyRow),
+  visible_own_wake_registration: __table({
+    name: 'visible_own_wake_registration',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleOwnWakeRegistrationRow),
+  visible_own_wake_request: __table({
+    name: 'visible_own_wake_request',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleOwnWakeRequestRow),
   visible_rate_limit_bucket: __table({
     name: 'visible_rate_limit_bucket',
     indexes: [
@@ -433,6 +494,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleSelfAgentProfileRow),
+  visible_self_agent_wake_profile: __table({
+    name: 'visible_self_agent_wake_profile',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleSelfAgentWakeProfileRow),
   visible_task: __table({
     name: 'visible_task',
     indexes: [
@@ -475,6 +543,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleUserRow),
+  visible_wake_attempt: __table({
+    name: 'visible_wake_attempt',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleWakeAttemptRow),
   visible_watched_message: __table({
     name: 'visible_watched_message',
     indexes: [
@@ -509,10 +584,12 @@ const tablesSchema = __schema({
 const reducersSchema = __reducers(
   __reducerSchema("accept_handoff", AcceptHandoffReducer),
   __reducerSchema("accept_workspace_invite", AcceptWorkspaceInviteReducer),
+  __reducerSchema("ack_wake_request", AckWakeRequestReducer),
   __reducerSchema("add_conversation_member", AddConversationMemberReducer),
   __reducerSchema("bind_agent_identity", BindAgentIdentityReducer),
   __reducerSchema("bootstrap_operator_account", BootstrapOperatorAccountReducer),
   __reducerSchema("claim_task", ClaimTaskReducer),
+  __reducerSchema("claim_wake_request", ClaimWakeRequestReducer),
   __reducerSchema("clear_account_directory_request", ClearAccountDirectoryRequestReducer),
   __reducerSchema("clear_channel_directory_request", ClearChannelDirectoryRequestReducer),
   __reducerSchema("clear_conversation_list_request", ClearConversationListRequestReducer),
@@ -529,7 +606,10 @@ const reducersSchema = __reducers(
   __reducerSchema("create_workspace", CreateWorkspaceReducer),
   __reducerSchema("create_workspace_channel", CreateWorkspaceChannelReducer),
   __reducerSchema("create_workspace_invite", CreateWorkspaceInviteReducer),
+  __reducerSchema("disable_wake_registration", DisableWakeRegistrationReducer),
   __reducerSchema("emit_agent_event", EmitAgentEventReducer),
+  __reducerSchema("expire_wake_requests", ExpireWakeRequestsReducer),
+  __reducerSchema("fail_wake_request", FailWakeRequestReducer),
   __reducerSchema("grant_capability", GrantCapabilityReducer),
   __reducerSchema("heartbeat", HeartbeatReducer),
   __reducerSchema("join_channel", JoinChannelReducer),
@@ -539,8 +619,10 @@ const reducersSchema = __reducers(
   __reducerSchema("mark_conversation_read", MarkConversationReadReducer),
   __reducerSchema("mark_messages_archive_failed", MarkMessagesArchiveFailedReducer),
   __reducerSchema("mark_messages_archived", MarkMessagesArchivedReducer),
+  __reducerSchema("mark_wake_dispatched", MarkWakeDispatchedReducer),
   __reducerSchema("open_direct_conversation", OpenDirectConversationReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
+  __reducerSchema("register_wake", RegisterWakeReducer),
   __reducerSchema("repair_access_state", RepairAccessStateReducer),
   __reducerSchema("repair_reverse_pagination_fields", RepairReversePaginationFieldsReducer),
   __reducerSchema("repair_scale_indexes", RepairScaleIndexesReducer),
@@ -552,7 +634,9 @@ const reducersSchema = __reducers(
   __reducerSchema("request_conversations", RequestConversationsReducer),
   __reducerSchema("request_inbox_deliveries", RequestInboxDeliveriesReducer),
   __reducerSchema("reset_deployment_policy", ResetDeploymentPolicyReducer),
+  __reducerSchema("reset_deployment_wake_policy", ResetDeploymentWakePolicyReducer),
   __reducerSchema("reset_retention_policy", ResetRetentionPolicyReducer),
+  __reducerSchema("reset_wake_policy", ResetWakePolicyReducer),
   __reducerSchema("revoke_capability", RevokeCapabilityReducer),
   __reducerSchema("run_retention_cleanup_now", RunRetentionCleanupNowReducer),
   __reducerSchema("send_conversation_message", SendConversationMessageReducer),
@@ -560,10 +644,12 @@ const reducersSchema = __reducers(
   __reducerSchema("send_thread_message", SendThreadMessageReducer),
   __reducerSchema("set_account_type", SetAccountTypeReducer),
   __reducerSchema("set_deployment_policy", SetDeploymentPolicyReducer),
+  __reducerSchema("set_deployment_wake_policy", SetDeploymentWakePolicyReducer),
   __reducerSchema("set_profile", SetProfileReducer),
   __reducerSchema("set_retention_policy", SetRetentionPolicyReducer),
   __reducerSchema("set_room_config", SetRoomConfigReducer),
   __reducerSchema("set_room_role", SetRoomRoleReducer),
+  __reducerSchema("set_wake_policy", SetWakePolicyReducer),
   __reducerSchema("unwatch_thread", UnwatchThreadReducer),
   __reducerSchema("update_task_status", UpdateTaskStatusReducer),
   __reducerSchema("watch_thread", WatchThreadReducer),

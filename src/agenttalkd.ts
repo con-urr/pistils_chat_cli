@@ -262,6 +262,228 @@ function deploymentPolicyDto(policy: ModuleTypes.DeploymentPolicyView) {
   };
 }
 
+function deploymentWakePolicyDto(policy: ModuleTypes.DeploymentWakePolicyView) {
+  return {
+    key: policy.key,
+    disableWakeDispatch: policy.disableWakeDispatch,
+    defaultWakeCoalesceWindowMs: policy.defaultWakeCoalesceWindowMs.toString(),
+    defaultMinWakeIntervalMs: policy.defaultMinWakeIntervalMs.toString(),
+    defaultMaxWakesPerMinute: policy.defaultMaxWakesPerMinute.toString(),
+    defaultWakeRequestTtlSeconds: policy.defaultWakeRequestTtlSeconds.toString(),
+    maxWakeAttempts: policy.maxWakeAttempts.toString(),
+    maxWakePayloadBytes: policy.maxWakePayloadBytes.toString(),
+    maxPendingWakeRequestsPerAgent: policy.maxPendingWakeRequestsPerAgent.toString(),
+    maintenanceModeMessage: policy.maintenanceModeMessage ?? null,
+    updatedAt: policy.updatedAt.toDate().toISOString(),
+  };
+}
+
+function wakeProfileDto(profile: ModuleTypes.AgentWakeProfileView) {
+  return {
+    agentId: profile.agentId,
+    handle: profile.handle,
+    displayName: profile.displayName,
+    role: profile.role,
+    online: profile.online,
+    wakeable: profile.wakeable,
+    availability: profile.availability,
+    acceptsNewConversations: profile.acceptsNewConversations,
+    expectedWakeLatencyMs: profile.expectedWakeLatencyMs?.toString() ?? null,
+    wakeLatencyClass: profile.wakeLatencyClass ?? null,
+    supportedWakeReasonsJson: profile.supportedWakeReasonsJson,
+    statusText: profile.statusText ?? null,
+    updatedAt: profile.updatedAt.toDate().toISOString(),
+  };
+}
+
+function wakeRegistrationDto(
+  registration: ModuleTypes.WakeRegistrationView,
+  showPrivate = false
+) {
+  return {
+    registrationId: registration.registrationId,
+    agentId: registration.agentId,
+    ownerIdentity: registration.ownerIdentity.toHexString(),
+    kind: registration.kind,
+    endpointRef: showPrivate ? registration.endpointRef ?? null : null,
+    endpointRefRedacted: Boolean(registration.endpointRef && !showPrivate),
+    secretConfigured: registration.secretConfigured,
+    enabled: registration.enabled,
+    createdAt: registration.createdAt.toDate().toISOString(),
+    updatedAt: registration.updatedAt.toDate().toISOString(),
+    lastSuccessAt: registration.lastSuccessAt?.toDate().toISOString() ?? null,
+    lastFailureAt: registration.lastFailureAt?.toDate().toISOString() ?? null,
+    failureCount: registration.failureCount.toString(),
+    metadataJson: registration.metadataJson ?? null,
+  };
+}
+
+function wakePolicyDto(policy: ModuleTypes.AgentWakePolicy) {
+  return {
+    agentId: policy.agentId,
+    wakeOnDirectMessage: policy.wakeOnDirectMessage,
+    wakeOnMention: policy.wakeOnMention,
+    wakeOnGroupMessage: policy.wakeOnGroupMessage,
+    wakeOnHandoff: policy.wakeOnHandoff,
+    wakeOnBusinessInquiry: policy.wakeOnBusinessInquiry,
+    acceptsNewConversations: policy.acceptsNewConversations,
+    minWakeIntervalMs: policy.minWakeIntervalMs.toString(),
+    coalesceWindowMs: policy.coalesceWindowMs.toString(),
+    maxWakesPerMinute: policy.maxWakesPerMinute.toString(),
+    maxConcurrentWakeJobs: policy.maxConcurrentWakeJobs.toString(),
+    expectedWakeLatencyMs: policy.expectedWakeLatencyMs?.toString() ?? null,
+    availabilityOverride: policy.availabilityOverride ?? null,
+    statusText: policy.statusText ?? null,
+    allowedWakeSenderAgentIdsJson: policy.allowedWakeSenderAgentIdsJson ?? null,
+    blockedWakeSenderAgentIdsJson: policy.blockedWakeSenderAgentIdsJson ?? null,
+    updatedAt: policy.updatedAt.toDate().toISOString(),
+    updatedBy: policy.updatedBy.toHexString(),
+  };
+}
+
+function wakeRequestDto(wake: ModuleTypes.WakeRequestView) {
+  return {
+    wakeId: wake.wakeId,
+    wakeKey: wake.wakeKey,
+    recipientAgentId: wake.recipientAgentId,
+    recipientIdentity: wake.recipientIdentity?.toHexString() ?? null,
+    senderAgentId: wake.senderAgentId,
+    conversationId: wake.conversationId.toString(),
+    minSequence: wake.minSequence.toString(),
+    maxSequence: wake.maxSequence.toString(),
+    reason: wake.reason,
+    status: wake.status,
+    priority: wake.priority,
+    attemptCount: wake.attemptCount.toString(),
+    nextAttemptAt: wake.nextAttemptAt.toDate().toISOString(),
+    leaseUntil: wake.leaseUntil?.toDate().toISOString() ?? null,
+    createdAt: wake.createdAt.toDate().toISOString(),
+    updatedAt: wake.updatedAt.toDate().toISOString(),
+    expiresAt: wake.expiresAt.toDate().toISOString(),
+    suppressedReason: wake.suppressedReason ?? null,
+    metadataJson: wake.metadataJson ?? null,
+    payload: {
+      type: 'agenttalk.wake',
+      version: '1',
+      wakeId: wake.wakeId,
+      recipientAgentId: wake.recipientAgentId,
+      conversationId: wake.conversationId.toString(),
+      minSequence: wake.minSequence.toString(),
+      maxSequence: wake.maxSequence.toString(),
+      reason: wake.reason,
+      createdAt: wake.createdAt.toDate().toISOString(),
+      expiresAt: wake.expiresAt.toDate().toISOString(),
+    },
+  };
+}
+
+function wakeAttemptDto(attempt: ModuleTypes.WakeAttemptView) {
+  return {
+    attemptId: attempt.attemptId,
+    wakeId: attempt.wakeId,
+    registrationId: attempt.registrationId ?? null,
+    recipientAgentId: attempt.recipientAgentId,
+    attemptNumber: attempt.attemptNumber.toString(),
+    status: attempt.status,
+    claimedBy: attempt.claimedBy.toHexString(),
+    claimedAt: attempt.claimedAt.toDate().toISOString(),
+    dispatchedAt: attempt.dispatchedAt?.toDate().toISOString() ?? null,
+    completedAt: attempt.completedAt?.toDate().toISOString() ?? null,
+    leaseUntil: attempt.leaseUntil.toDate().toISOString(),
+    error: attempt.error ?? null,
+    metadataJson: attempt.metadataJson ?? null,
+  };
+}
+
+function payloadString(
+  payload: Record<string, unknown>,
+  keys: string[],
+  defaultValue?: string
+) {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === 'string') {
+      return value;
+    }
+  }
+  return defaultValue;
+}
+
+function payloadBoolean(
+  payload: Record<string, unknown>,
+  keys: string[],
+  defaultValue?: boolean
+) {
+  for (const key of keys) {
+    const value = payload[key];
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes', 'on'].includes(normalized)) {
+        return true;
+      }
+      if (['false', '0', 'no', 'off'].includes(normalized)) {
+        return false;
+      }
+    }
+    throw new Error(`${keys[0]} must be a boolean`);
+  }
+  return defaultValue;
+}
+
+function payloadBigInt(payload: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = payload[key];
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+    if (typeof value === 'bigint') {
+      return value;
+    }
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+      return BigInt(value);
+    }
+    if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+      return BigInt(value.trim());
+    }
+    throw new Error(`${keys[0]} must be an unsigned integer string`);
+  }
+  return undefined;
+}
+
+function payloadNumber(
+  payload: Record<string, unknown>,
+  keys: string[],
+  defaultValue: number,
+  maxValue = Number.MAX_SAFE_INTEGER
+) {
+  for (const key of keys) {
+    const value = payload[key];
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+      throw new Error(`${keys[0]} must be a non-negative integer`);
+    }
+    return Math.min(parsed, maxValue);
+  }
+  return defaultValue;
+}
+
+function sortWakeRequestsDesc(left: ModuleTypes.WakeRequestView, right: ModuleTypes.WakeRequestView) {
+  const updated = right.updatedAt.toDate().getTime() - left.updatedAt.toDate().getTime();
+  if (updated !== 0) {
+    return updated;
+  }
+  return right.createdAt.toDate().getTime() - left.createdAt.toDate().getTime();
+}
+
 function conversationDto(conversation: ModuleTypes.Conversation) {
   return {
     id: conversation.id.toString(),
@@ -675,6 +897,60 @@ class AgenttalkDaemon {
     return messages.get(this.deliveryMessageKey(delivery)) ?? null;
   }
 
+  private async wakeSnapshot(
+    client: AgentRealtimeClient,
+    payload: Record<string, unknown> = {}
+  ) {
+    const status = payloadString(payload, ['status']);
+    const conversationId = payloadBigInt(payload, ['conversationId', 'conversation_id']);
+    const includeDispatcher = payloadBoolean(payload, ['includeDispatcher', 'dispatcher'], true);
+    const wakeId = payloadString(payload, ['wakeId', 'wake_id']);
+    const requests = client
+      .listWakeRequests({
+        status,
+        conversationId,
+        includeDispatcher,
+      })
+      .filter(row => (wakeId ? row.wakeId === wakeId : true))
+      .sort(sortWakeRequestsDesc);
+    const attempts = client
+      .listWakeAttempts(wakeId)
+      .filter(row => (wakeId ? row.wakeId === wakeId : true))
+      .map(wakeAttemptDto);
+
+    return {
+      identity: client.identityHex,
+      profile: client.currentAgentWakeProfile()
+        ? wakeProfileDto(client.currentAgentWakeProfile()!)
+        : null,
+      registrations: client
+        .listWakeRegistrations()
+        .map(row => wakeRegistrationDto(row, payloadBoolean(payload, ['showPrivate'], false))),
+      policy: client.currentWakePolicy() ? wakePolicyDto(client.currentWakePolicy()!) : null,
+      requests: requests.map(wakeRequestDto),
+      attempts,
+      deploymentPolicy:
+        client.listDeploymentWakePolicies()[0]
+          ? deploymentWakePolicyDto(client.listDeploymentWakePolicies()[0])
+          : null,
+    };
+  }
+
+  private async wakeContext(client: AgentRealtimeClient, wake: ModuleTypes.WakeRequestView) {
+    const span = Number(wake.maxSequence - wake.minSequence + 1n);
+    const limit = BigInt(Math.min(Math.max(span, 1), 50));
+    await client.requestConversationMessages({
+      conversationId: wake.conversationId,
+      afterSequence: wake.minSequence > 0n ? wake.minSequence - 1n : undefined,
+      limit,
+    });
+    await sleep(250);
+    return client
+      .listRequestedConversationMessages(wake.conversationId)
+      .filter(row => row.sequence >= wake.minSequence && row.sequence <= wake.maxSequence)
+      .map(conversationMessageDto);
+  }
+
   async handle(payload: Record<string, unknown>): Promise<AgenttalkdResponse> {
     const id = String(payload.id ?? '');
     const cmd = String(payload.cmd ?? payload.command ?? '');
@@ -734,6 +1010,255 @@ class AgenttalkDaemon {
             needsInit: this.needsInit,
           },
         };
+      }
+
+      if (cmd === 'wake_status' || cmd === 'list_wake') {
+        return await this.withProfile('wake', async client => {
+          await sleep(150);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, payload),
+          };
+        });
+      }
+
+      if (cmd === 'register_wake') {
+        return await this.withProfile('wake', async client => {
+          await client.registerWake({
+            kind: String(payload.kind ?? 'local_daemon') as any,
+            endpointRef: payloadString(payload, ['endpointRef', 'endpoint_ref']),
+            secretHash: payloadString(payload, ['secretHash', 'secret_hash']),
+            enabled: payloadBoolean(payload, ['enabled'], true),
+            metadataJson: payloadString(payload, ['metadataJson', 'metadata_json']),
+            agentId: payloadString(payload, ['agentId', 'agent_id']),
+            registrationId: payloadString(payload, ['registrationId', 'registration_id']),
+          });
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, { ...payload, showPrivate: true }),
+          };
+        });
+      }
+
+      if (cmd === 'disable_wake_registration') {
+        return await this.withProfile('wake', async client => {
+          await client.disableWakeRegistration({
+            registrationId: payloadString(payload, ['registrationId', 'registration_id']),
+            kind: payloadString(payload, ['kind']) as any,
+            agentId: payloadString(payload, ['agentId', 'agent_id']),
+          });
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, { ...payload, showPrivate: true }),
+          };
+        });
+      }
+
+      if (cmd === 'set_wake_policy') {
+        return await this.withProfile('wake', async client => {
+          await client.setWakePolicy({
+            agentId: payloadString(payload, ['agentId', 'agent_id']),
+            wakeOnDirectMessage: payloadBoolean(payload, ['wakeOnDirectMessage', 'direct']),
+            wakeOnMention: payloadBoolean(payload, ['wakeOnMention', 'mention']),
+            wakeOnGroupMessage: payloadBoolean(payload, ['wakeOnGroupMessage', 'group']),
+            wakeOnHandoff: payloadBoolean(payload, ['wakeOnHandoff', 'handoff']),
+            wakeOnBusinessInquiry: payloadBoolean(payload, [
+              'wakeOnBusinessInquiry',
+              'business',
+            ]),
+            acceptsNewConversations: payloadBoolean(payload, [
+              'acceptsNewConversations',
+              'accepts_new_conversations',
+            ]),
+            minWakeIntervalMs: payloadBigInt(payload, ['minWakeIntervalMs', 'min_interval_ms']),
+            coalesceWindowMs: payloadBigInt(payload, ['coalesceWindowMs', 'coalesce_ms']),
+            maxWakesPerMinute: payloadBigInt(payload, ['maxWakesPerMinute', 'max_per_minute']),
+            maxConcurrentWakeJobs: payloadBigInt(payload, [
+              'maxConcurrentWakeJobs',
+              'max_concurrent',
+            ]),
+            expectedWakeLatencyMs: payloadBigInt(payload, [
+              'expectedWakeLatencyMs',
+              'latency_ms',
+            ]),
+            availabilityOverride: payloadString(payload, [
+              'availabilityOverride',
+              'availability',
+            ]) as any,
+            statusText: payloadString(payload, ['statusText', 'status_text']),
+            allowedWakeSenderAgentIdsJson: payloadString(payload, [
+              'allowedWakeSenderAgentIdsJson',
+              'allowed_senders_json',
+            ]),
+            blockedWakeSenderAgentIdsJson: payloadString(payload, [
+              'blockedWakeSenderAgentIdsJson',
+              'blocked_senders_json',
+            ]),
+          });
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, payload),
+          };
+        });
+      }
+
+      if (cmd === 'reset_wake_policy') {
+        return await this.withProfile('wake', async client => {
+          await client.resetWakePolicy(payloadString(payload, ['agentId', 'agent_id']));
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, payload),
+          };
+        });
+      }
+
+      if (cmd === 'claim_wake') {
+        return await this.withProfile('wake', async client => {
+          const wakeId = payloadString(payload, ['wakeId', 'wake_id']);
+          await client.claimWakeRequest({
+            wakeId,
+            leaseMs: payloadBigInt(payload, ['leaseMs', 'lease_ms']),
+            registrationId: payloadString(payload, ['registrationId', 'registration_id']),
+            metadataJson: payloadString(payload, ['metadataJson', 'metadata_json']),
+          });
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, {
+              ...payload,
+              wakeId,
+              status: payloadString(payload, ['status'], 'leased'),
+            }),
+          };
+        });
+      }
+
+      if (cmd === 'wait_wake') {
+        return await this.withProfile('wake', async client => {
+          const timeoutMs = payloadNumber(payload, ['timeoutMs', 'timeout_ms'], 30000, 300000);
+          const status = payloadString(payload, ['status'], 'pending');
+          const conversationId = payloadBigInt(payload, ['conversationId', 'conversation_id']);
+          let wake =
+            client
+              .listWakeRequests({ status, conversationId, includeDispatcher: true })
+              .sort(sortWakeRequestsDesc)[0] ??
+            (await client.waitForWakeRequest({
+              status,
+              conversationId,
+              timeoutMs,
+            }));
+
+          if (payloadBoolean(payload, ['claim'], true)) {
+            await client.claimWakeRequest({
+              wakeId: wake.wakeId,
+              leaseMs: payloadBigInt(payload, ['leaseMs', 'lease_ms']),
+              registrationId: payloadString(payload, ['registrationId', 'registration_id']),
+              metadataJson: payloadString(payload, ['metadataJson', 'metadata_json']),
+            });
+            await sleep(250);
+            wake =
+              client
+                .listWakeRequests({
+                  includeDispatcher: true,
+                })
+                .find(row => row.wakeId === wake.wakeId) ?? wake;
+          }
+
+          const context = payloadBoolean(payload, ['context', 'hydrate'], false)
+            ? await this.wakeContext(client, wake)
+            : null;
+          return {
+            id,
+            ok: true,
+            data: {
+              wake: wakeRequestDto(wake),
+              attempts: client.listWakeAttempts(wake.wakeId).map(wakeAttemptDto),
+              context,
+            },
+          };
+        });
+      }
+
+      if (cmd === 'mark_wake_dispatched') {
+        return await this.withProfile('wake', async client => {
+          const wakeId = payloadString(payload, ['wakeId', 'wake_id']);
+          if (!wakeId) {
+            throw new Error('mark_wake_dispatched requires wakeId');
+          }
+          await client.markWakeDispatched(
+            wakeId,
+            payloadString(payload, ['attemptId', 'attempt_id']),
+            payloadString(payload, ['metadataJson', 'metadata_json'])
+          );
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, { ...payload, wakeId }),
+          };
+        });
+      }
+
+      if (cmd === 'ack_wake') {
+        return await this.withProfile('wake', async client => {
+          const wakeId = payloadString(payload, ['wakeId', 'wake_id']);
+          if (!wakeId) {
+            throw new Error('ack_wake requires wakeId');
+          }
+          await client.ackWakeRequest(
+            wakeId,
+            payloadString(payload, ['attemptId', 'attempt_id']),
+            payloadString(payload, ['metadataJson', 'metadata_json'])
+          );
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, { ...payload, wakeId }),
+          };
+        });
+      }
+
+      if (cmd === 'fail_wake') {
+        return await this.withProfile('wake', async client => {
+          const wakeId = payloadString(payload, ['wakeId', 'wake_id']);
+          if (!wakeId) {
+            throw new Error('fail_wake requires wakeId');
+          }
+          await client.failWakeRequest(wakeId, String(payload.error ?? 'wake failed'), {
+            attemptId: payloadString(payload, ['attemptId', 'attempt_id']),
+            retryAfterMs: payloadBigInt(payload, ['retryAfterMs', 'retry_after_ms']),
+            metadataJson: payloadString(payload, ['metadataJson', 'metadata_json']),
+          });
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, { ...payload, wakeId }),
+          };
+        });
+      }
+
+      if (cmd === 'expire_wake_requests') {
+        return await this.withProfile('wake', async client => {
+          await client.expireWakeRequests(payloadBigInt(payload, ['limit']));
+          await sleep(250);
+          return {
+            id,
+            ok: true,
+            data: await this.wakeSnapshot(client, payload),
+          };
+        });
       }
 
       if (cmd === 'init_account' || cmd === 'create_account') {

@@ -172,6 +172,62 @@ export const AgentTask = __t.object("AgentTask", {
 });
 export type AgentTask = __Infer<typeof AgentTask>;
 
+export const AgentWakePolicy = __t.object("AgentWakePolicy", {
+  agentId: __t.string(),
+  wakeOnDirectMessage: __t.bool(),
+  wakeOnMention: __t.bool(),
+  wakeOnGroupMessage: __t.bool(),
+  wakeOnHandoff: __t.bool(),
+  wakeOnBusinessInquiry: __t.bool(),
+  acceptsNewConversations: __t.bool(),
+  minWakeIntervalMs: __t.u64(),
+  coalesceWindowMs: __t.u64(),
+  maxWakesPerMinute: __t.u64(),
+  maxConcurrentWakeJobs: __t.u64(),
+  expectedWakeLatencyMs: __t.option(__t.u64()),
+  availabilityOverride: __t.option(__t.string()),
+  statusText: __t.option(__t.string()),
+  allowedWakeSenderAgentIdsJson: __t.option(__t.string()),
+  blockedWakeSenderAgentIdsJson: __t.option(__t.string()),
+  updatedAt: __t.timestamp(),
+  updatedBy: __t.identity(),
+});
+export type AgentWakePolicy = __Infer<typeof AgentWakePolicy>;
+
+export const AgentWakeProfileView = __t.object("AgentWakeProfileView", {
+  agentId: __t.string(),
+  handle: __t.string(),
+  displayName: __t.string(),
+  role: __t.string(),
+  online: __t.bool(),
+  wakeable: __t.bool(),
+  availability: __t.string(),
+  acceptsNewConversations: __t.bool(),
+  expectedWakeLatencyMs: __t.option(__t.u64()),
+  wakeLatencyClass: __t.option(__t.string()),
+  supportedWakeReasonsJson: __t.string(),
+  statusText: __t.option(__t.string()),
+  updatedAt: __t.timestamp(),
+});
+export type AgentWakeProfileView = __Infer<typeof AgentWakeProfileView>;
+
+export const AgentWakeRegistration = __t.object("AgentWakeRegistration", {
+  registrationId: __t.string(),
+  agentId: __t.string(),
+  ownerIdentity: __t.identity(),
+  kind: __t.string(),
+  endpointRef: __t.option(__t.string()),
+  secretHash: __t.option(__t.string()),
+  enabled: __t.bool(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  lastSuccessAt: __t.option(__t.timestamp()),
+  lastFailureAt: __t.option(__t.timestamp()),
+  failureCount: __t.u64(),
+  metadataJson: __t.option(__t.string()),
+});
+export type AgentWakeRegistration = __Infer<typeof AgentWakeRegistration>;
+
 export const ArchiveBatchRequest = __t.object("ArchiveBatchRequest", {
   key: __t.string(),
   requesterIdentity: __t.identity(),
@@ -473,6 +529,37 @@ export const DeploymentPolicyView = __t.object("DeploymentPolicyView", {
   updatedAt: __t.timestamp(),
 });
 export type DeploymentPolicyView = __Infer<typeof DeploymentPolicyView>;
+
+export const DeploymentWakePolicy = __t.object("DeploymentWakePolicy", {
+  key: __t.string(),
+  disableWakeDispatch: __t.bool(),
+  defaultWakeCoalesceWindowMs: __t.u64(),
+  defaultMinWakeIntervalMs: __t.u64(),
+  defaultMaxWakesPerMinute: __t.u64(),
+  defaultWakeRequestTtlSeconds: __t.u64(),
+  maxWakeAttempts: __t.u64(),
+  maxWakePayloadBytes: __t.u64(),
+  maxPendingWakeRequestsPerAgent: __t.u64(),
+  maintenanceModeMessage: __t.option(__t.string()),
+  updatedAt: __t.timestamp(),
+  updatedBy: __t.option(__t.identity()),
+});
+export type DeploymentWakePolicy = __Infer<typeof DeploymentWakePolicy>;
+
+export const DeploymentWakePolicyView = __t.object("DeploymentWakePolicyView", {
+  key: __t.string(),
+  disableWakeDispatch: __t.bool(),
+  defaultWakeCoalesceWindowMs: __t.u64(),
+  defaultMinWakeIntervalMs: __t.u64(),
+  defaultMaxWakesPerMinute: __t.u64(),
+  defaultWakeRequestTtlSeconds: __t.u64(),
+  maxWakeAttempts: __t.u64(),
+  maxWakePayloadBytes: __t.u64(),
+  maxPendingWakeRequestsPerAgent: __t.u64(),
+  maintenanceModeMessage: __t.option(__t.string()),
+  updatedAt: __t.timestamp(),
+});
+export type DeploymentWakePolicyView = __Infer<typeof DeploymentWakePolicyView>;
 
 export const DirectConversationIndex = __t.object("DirectConversationIndex", {
   pairKey: __t.string(),
@@ -796,6 +883,9 @@ export type VisibleAgentProfile = __Infer<typeof VisibleAgentProfile>;
 export const VisibleAgentSession = __t.object("VisibleAgentSession", {});
 export type VisibleAgentSession = __Infer<typeof VisibleAgentSession>;
 
+export const VisibleAgentWakeProfile = __t.object("VisibleAgentWakeProfile", {});
+export type VisibleAgentWakeProfile = __Infer<typeof VisibleAgentWakeProfile>;
+
 export const VisibleArchiveCandidateMessage = __t.object("VisibleArchiveCandidateMessage", {});
 export type VisibleArchiveCandidateMessage = __Infer<typeof VisibleArchiveCandidateMessage>;
 
@@ -829,8 +919,14 @@ export type VisibleConversationReadCursor = __Infer<typeof VisibleConversationRe
 export const VisibleDeploymentPolicy = __t.object("VisibleDeploymentPolicy", {});
 export type VisibleDeploymentPolicy = __Infer<typeof VisibleDeploymentPolicy>;
 
+export const VisibleDeploymentWakePolicy = __t.object("VisibleDeploymentWakePolicy", {});
+export type VisibleDeploymentWakePolicy = __Infer<typeof VisibleDeploymentWakePolicy>;
+
 export const VisibleDirectConversation = __t.object("VisibleDirectConversation", {});
 export type VisibleDirectConversation = __Infer<typeof VisibleDirectConversation>;
+
+export const VisibleDispatcherWakeRequest = __t.object("VisibleDispatcherWakeRequest", {});
+export type VisibleDispatcherWakeRequest = __Infer<typeof VisibleDispatcherWakeRequest>;
 
 export const VisibleHandoff = __t.object("VisibleHandoff", {});
 export type VisibleHandoff = __Infer<typeof VisibleHandoff>;
@@ -843,6 +939,15 @@ export type VisibleMessage = __Infer<typeof VisibleMessage>;
 
 export const VisibleOperatorScaleSnapshot = __t.object("VisibleOperatorScaleSnapshot", {});
 export type VisibleOperatorScaleSnapshot = __Infer<typeof VisibleOperatorScaleSnapshot>;
+
+export const VisibleOwnWakePolicy = __t.object("VisibleOwnWakePolicy", {});
+export type VisibleOwnWakePolicy = __Infer<typeof VisibleOwnWakePolicy>;
+
+export const VisibleOwnWakeRegistration = __t.object("VisibleOwnWakeRegistration", {});
+export type VisibleOwnWakeRegistration = __Infer<typeof VisibleOwnWakeRegistration>;
+
+export const VisibleOwnWakeRequest = __t.object("VisibleOwnWakeRequest", {});
+export type VisibleOwnWakeRequest = __Infer<typeof VisibleOwnWakeRequest>;
 
 export const VisibleRateLimitBucket = __t.object("VisibleRateLimitBucket", {});
 export type VisibleRateLimitBucket = __Infer<typeof VisibleRateLimitBucket>;
@@ -892,6 +997,9 @@ export type VisibleScaleRepairStat = __Infer<typeof VisibleScaleRepairStat>;
 export const VisibleSelfAgentProfile = __t.object("VisibleSelfAgentProfile", {});
 export type VisibleSelfAgentProfile = __Infer<typeof VisibleSelfAgentProfile>;
 
+export const VisibleSelfAgentWakeProfile = __t.object("VisibleSelfAgentWakeProfile", {});
+export type VisibleSelfAgentWakeProfile = __Infer<typeof VisibleSelfAgentWakeProfile>;
+
 export const VisibleTask = __t.object("VisibleTask", {});
 export type VisibleTask = __Infer<typeof VisibleTask>;
 
@@ -910,6 +1018,9 @@ export type VisibleUnreadConversationMessage = __Infer<typeof VisibleUnreadConve
 export const VisibleUser = __t.object("VisibleUser", {});
 export type VisibleUser = __Infer<typeof VisibleUser>;
 
+export const VisibleWakeAttempt = __t.object("VisibleWakeAttempt", {});
+export type VisibleWakeAttempt = __Infer<typeof VisibleWakeAttempt>;
+
 export const VisibleWatchedMessage = __t.object("VisibleWatchedMessage", {});
 export type VisibleWatchedMessage = __Infer<typeof VisibleWatchedMessage>;
 
@@ -921,6 +1032,104 @@ export type VisibleWorkspaceChannel = __Infer<typeof VisibleWorkspaceChannel>;
 
 export const VisibleWorkspaceMember = __t.object("VisibleWorkspaceMember", {});
 export type VisibleWorkspaceMember = __Infer<typeof VisibleWorkspaceMember>;
+
+export const WakeAttempt = __t.object("WakeAttempt", {
+  attemptId: __t.string(),
+  wakeId: __t.string(),
+  registrationId: __t.option(__t.string()),
+  recipientAgentId: __t.string(),
+  attemptNumber: __t.u64(),
+  status: __t.string(),
+  claimedBy: __t.identity(),
+  claimedAt: __t.timestamp(),
+  dispatchedAt: __t.option(__t.timestamp()),
+  completedAt: __t.option(__t.timestamp()),
+  leaseUntil: __t.timestamp(),
+  error: __t.option(__t.string()),
+  metadataJson: __t.option(__t.string()),
+});
+export type WakeAttempt = __Infer<typeof WakeAttempt>;
+
+export const WakeAttemptView = __t.object("WakeAttemptView", {
+  attemptId: __t.string(),
+  wakeId: __t.string(),
+  registrationId: __t.option(__t.string()),
+  recipientAgentId: __t.string(),
+  attemptNumber: __t.u64(),
+  status: __t.string(),
+  claimedBy: __t.identity(),
+  claimedAt: __t.timestamp(),
+  dispatchedAt: __t.option(__t.timestamp()),
+  completedAt: __t.option(__t.timestamp()),
+  leaseUntil: __t.timestamp(),
+  error: __t.option(__t.string()),
+  metadataJson: __t.option(__t.string()),
+});
+export type WakeAttemptView = __Infer<typeof WakeAttemptView>;
+
+export const WakeRegistrationView = __t.object("WakeRegistrationView", {
+  registrationId: __t.string(),
+  agentId: __t.string(),
+  ownerIdentity: __t.identity(),
+  kind: __t.string(),
+  endpointRef: __t.option(__t.string()),
+  secretConfigured: __t.bool(),
+  enabled: __t.bool(),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  lastSuccessAt: __t.option(__t.timestamp()),
+  lastFailureAt: __t.option(__t.timestamp()),
+  failureCount: __t.u64(),
+  metadataJson: __t.option(__t.string()),
+});
+export type WakeRegistrationView = __Infer<typeof WakeRegistrationView>;
+
+export const WakeRequest = __t.object("WakeRequest", {
+  wakeId: __t.string(),
+  wakeKey: __t.string(),
+  recipientAgentId: __t.string(),
+  recipientIdentity: __t.option(__t.identity()),
+  senderAgentId: __t.string(),
+  senderIdentity: __t.identity(),
+  conversationId: __t.u64(),
+  minSequence: __t.u64(),
+  maxSequence: __t.u64(),
+  reason: __t.string(),
+  status: __t.string(),
+  priority: __t.string(),
+  attemptCount: __t.u64(),
+  nextAttemptAt: __t.timestamp(),
+  leaseUntil: __t.option(__t.timestamp()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  expiresAt: __t.timestamp(),
+  suppressedReason: __t.option(__t.string()),
+  metadataJson: __t.option(__t.string()),
+});
+export type WakeRequest = __Infer<typeof WakeRequest>;
+
+export const WakeRequestView = __t.object("WakeRequestView", {
+  wakeId: __t.string(),
+  wakeKey: __t.string(),
+  recipientAgentId: __t.string(),
+  recipientIdentity: __t.option(__t.identity()),
+  senderAgentId: __t.string(),
+  conversationId: __t.u64(),
+  minSequence: __t.u64(),
+  maxSequence: __t.u64(),
+  reason: __t.string(),
+  status: __t.string(),
+  priority: __t.string(),
+  attemptCount: __t.u64(),
+  nextAttemptAt: __t.timestamp(),
+  leaseUntil: __t.option(__t.timestamp()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  expiresAt: __t.timestamp(),
+  suppressedReason: __t.option(__t.string()),
+  metadataJson: __t.option(__t.string()),
+});
+export type WakeRequestView = __Infer<typeof WakeRequestView>;
 
 export const Workspace = __t.object("Workspace", {
   id: __t.u64(),

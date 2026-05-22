@@ -10,6 +10,7 @@ export type AgentSubscriptionProfile =
   | 'direct-lite'
   | 'daemon-direct'
   | 'account-admin'
+  | 'wake'
   | 'rooms'
   | 'ops'
   | 'all';
@@ -70,6 +71,42 @@ export type DeploymentPolicyInput = {
   maxInboxPageSize?: bigint;
   maxHistoryPageSize?: bigint;
   maxPendingUnreadDeliveries?: bigint;
+};
+
+export type WakeRegistrationInput = {
+  kind: 'webhook' | 'local_daemon' | 'cloud_runner' | 'mcp_session' | 'push_gateway' | 'noop';
+  endpointRef?: string;
+  secretHash?: string;
+  enabled?: boolean;
+  metadataJson?: string;
+  agentId?: string;
+  registrationId?: string;
+};
+
+export type WakePolicyInput = {
+  agentId?: string;
+  wakeOnDirectMessage?: boolean;
+  wakeOnMention?: boolean;
+  wakeOnGroupMessage?: boolean;
+  wakeOnHandoff?: boolean;
+  wakeOnBusinessInquiry?: boolean;
+  acceptsNewConversations?: boolean;
+  minWakeIntervalMs?: bigint;
+  coalesceWindowMs?: bigint;
+  maxWakesPerMinute?: bigint;
+  maxConcurrentWakeJobs?: bigint;
+  expectedWakeLatencyMs?: bigint;
+  availabilityOverride?: 'online' | 'wakeable' | 'sleeping' | 'offline' | 'unavailable';
+  statusText?: string;
+  allowedWakeSenderAgentIdsJson?: string;
+  blockedWakeSenderAgentIdsJson?: string;
+};
+
+export type WakeClaimInput = {
+  wakeId?: string;
+  leaseMs?: bigint;
+  registrationId?: string;
+  metadataJson?: string;
 };
 
 export type ChannelDirectoryRequest = {
@@ -187,9 +224,14 @@ const DIRECTORY_SUBSCRIPTIONS = ['SELECT * FROM visible_requested_account_direct
 const CHANNEL_DIRECTORY_SUBSCRIPTIONS = [
   'SELECT * FROM visible_requested_channel_directory',
 ];
+const PUBLIC_WAKE_PROFILE_SUBSCRIPTIONS = [
+  'SELECT * FROM visible_agent_wake_profile',
+  'SELECT * FROM visible_self_agent_wake_profile',
+];
 
 const IDENTITY_SUBSCRIPTIONS = [
   ...DIRECTORY_SUBSCRIPTIONS,
+  ...PUBLIC_WAKE_PROFILE_SUBSCRIPTIONS,
   'SELECT * FROM visible_user',
   'SELECT * FROM visible_self_agent_profile',
   'SELECT * FROM visible_agent_profile',
@@ -199,6 +241,7 @@ const IDENTITY_SUBSCRIPTIONS = [
 
 const DIRECT_CONVERSATION_SUBSCRIPTIONS = [
   ...DIRECTORY_SUBSCRIPTIONS,
+  ...PUBLIC_WAKE_PROFILE_SUBSCRIPTIONS,
   'SELECT * FROM visible_direct_conversation',
   'SELECT * FROM visible_self_agent_profile',
   'SELECT * FROM visible_agent_profile',
@@ -240,6 +283,18 @@ const ACCOUNT_ADMIN_SUBSCRIPTIONS = [
   'SELECT * FROM visible_rate_limit_pressure',
 ];
 
+const WAKE_SUBSCRIPTIONS = [
+  ...IDENTITY_SUBSCRIPTIONS,
+  'SELECT * FROM visible_own_wake_registration',
+  'SELECT * FROM visible_own_wake_policy',
+  'SELECT * FROM visible_own_wake_request',
+  'SELECT * FROM visible_dispatcher_wake_request',
+  'SELECT * FROM visible_wake_attempt',
+  'SELECT * FROM visible_deployment_wake_policy',
+  'SELECT * FROM visible_client_request_receipt',
+  'SELECT * FROM visible_retention_policy',
+];
+
 const ROOM_SUBSCRIPTIONS = [
   ...DIRECTORY_SUBSCRIPTIONS,
   ...CHANNEL_DIRECTORY_SUBSCRIPTIONS,
@@ -274,6 +329,7 @@ const SUBSCRIPTION_PROFILES: Record<AgentSubscriptionProfile, string[]> = {
   'direct-lite': DAEMON_DIRECT_SUBSCRIPTIONS,
   'daemon-direct': DAEMON_DIRECT_SUBSCRIPTIONS,
   'account-admin': ACCOUNT_ADMIN_SUBSCRIPTIONS,
+  wake: WAKE_SUBSCRIPTIONS,
   rooms: ROOM_SUBSCRIPTIONS,
   ops: OPS_SUBSCRIPTIONS,
   all: OPS_SUBSCRIPTIONS,
@@ -546,6 +602,118 @@ export class AgentRealtimeClient {
 
   async resetDeploymentPolicy() {
     await this.conn.reducers.resetDeploymentPolicy({});
+  }
+
+  async setDeploymentWakePolicy(input: {
+    disableWakeDispatch?: boolean;
+    defaultWakeCoalesceWindowMs?: bigint;
+    defaultMinWakeIntervalMs?: bigint;
+    defaultMaxWakesPerMinute?: bigint;
+    defaultWakeRequestTtlSeconds?: bigint;
+    maxWakeAttempts?: bigint;
+    maxWakePayloadBytes?: bigint;
+    maxPendingWakeRequestsPerAgent?: bigint;
+    maintenanceModeMessage?: string;
+  }) {
+    await this.conn.reducers.setDeploymentWakePolicy({
+      disableWakeDispatch: input.disableWakeDispatch,
+      defaultWakeCoalesceWindowMs: input.defaultWakeCoalesceWindowMs,
+      defaultMinWakeIntervalMs: input.defaultMinWakeIntervalMs,
+      defaultMaxWakesPerMinute: input.defaultMaxWakesPerMinute,
+      defaultWakeRequestTtlSeconds: input.defaultWakeRequestTtlSeconds,
+      maxWakeAttempts: input.maxWakeAttempts,
+      maxWakePayloadBytes: input.maxWakePayloadBytes,
+      maxPendingWakeRequestsPerAgent: input.maxPendingWakeRequestsPerAgent,
+      maintenanceModeMessage: input.maintenanceModeMessage,
+    });
+  }
+
+  async resetDeploymentWakePolicy() {
+    await this.conn.reducers.resetDeploymentWakePolicy({});
+  }
+
+  async registerWake(input: WakeRegistrationInput) {
+    await this.conn.reducers.registerWake({
+      kind: input.kind,
+      endpointRef: input.endpointRef,
+      secretHash: input.secretHash,
+      enabled: input.enabled,
+      metadataJson: input.metadataJson,
+      agentId: input.agentId,
+      registrationId: input.registrationId,
+    });
+  }
+
+  async disableWakeRegistration(input: {
+    registrationId?: string;
+    kind?: WakeRegistrationInput['kind'];
+    agentId?: string;
+  } = {}) {
+    await this.conn.reducers.disableWakeRegistration({
+      registrationId: input.registrationId,
+      kind: input.kind,
+      agentId: input.agentId,
+    });
+  }
+
+  async setWakePolicy(input: WakePolicyInput) {
+    await this.conn.reducers.setWakePolicy({
+      agentId: input.agentId,
+      wakeOnDirectMessage: input.wakeOnDirectMessage,
+      wakeOnMention: input.wakeOnMention,
+      wakeOnGroupMessage: input.wakeOnGroupMessage,
+      wakeOnHandoff: input.wakeOnHandoff,
+      wakeOnBusinessInquiry: input.wakeOnBusinessInquiry,
+      acceptsNewConversations: input.acceptsNewConversations,
+      minWakeIntervalMs: input.minWakeIntervalMs,
+      coalesceWindowMs: input.coalesceWindowMs,
+      maxWakesPerMinute: input.maxWakesPerMinute,
+      maxConcurrentWakeJobs: input.maxConcurrentWakeJobs,
+      expectedWakeLatencyMs: input.expectedWakeLatencyMs,
+      availabilityOverride: input.availabilityOverride,
+      statusText: input.statusText,
+      allowedWakeSenderAgentIdsJson: input.allowedWakeSenderAgentIdsJson,
+      blockedWakeSenderAgentIdsJson: input.blockedWakeSenderAgentIdsJson,
+    });
+  }
+
+  async resetWakePolicy(agentId?: string) {
+    await this.conn.reducers.resetWakePolicy({ agentId });
+  }
+
+  async claimWakeRequest(input: WakeClaimInput = {}) {
+    await this.conn.reducers.claimWakeRequest({
+      wakeId: input.wakeId,
+      leaseMs: input.leaseMs,
+      registrationId: input.registrationId,
+      metadataJson: input.metadataJson,
+    });
+  }
+
+  async markWakeDispatched(wakeId: string, attemptId?: string, metadataJson?: string) {
+    await this.conn.reducers.markWakeDispatched({ wakeId, attemptId, metadataJson });
+  }
+
+  async ackWakeRequest(wakeId: string, attemptId?: string, metadataJson?: string) {
+    await this.conn.reducers.ackWakeRequest({ wakeId, attemptId, metadataJson });
+  }
+
+  async failWakeRequest(
+    wakeId: string,
+    error: string,
+    input: { attemptId?: string; retryAfterMs?: bigint; metadataJson?: string } = {}
+  ) {
+    await this.conn.reducers.failWakeRequest({
+      wakeId,
+      attemptId: input.attemptId,
+      error,
+      retryAfterMs: input.retryAfterMs,
+      metadataJson: input.metadataJson,
+    });
+  }
+
+  async expireWakeRequests(limit?: bigint) {
+    await this.conn.reducers.expireWakeRequests({ limit });
   }
 
   async runRetentionCleanupNow() {
@@ -1148,6 +1316,125 @@ export class AgentRealtimeClient {
       'visibleDeploymentPolicy'
     );
     return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  listDeploymentWakePolicies() {
+    const accessor = findDbAccessor<ModuleTypes.DeploymentWakePolicyView>(
+      this.conn,
+      'visible_deployment_wake_policy',
+      'visibleDeploymentWakePolicy'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  listAgentWakeProfiles() {
+    const accessors = [
+      findDbAccessor<ModuleTypes.AgentWakeProfileView>(
+        this.conn,
+        'visible_agent_wake_profile',
+        'visibleAgentWakeProfile'
+      ),
+      findDbAccessor<ModuleTypes.AgentWakeProfileView>(
+        this.conn,
+        'visible_self_agent_wake_profile',
+        'visibleSelfAgentWakeProfile'
+      ),
+    ].filter(Boolean) as Array<{ iter(): Iterable<ModuleTypes.AgentWakeProfileView> }>;
+    const byAgent = new Map<string, ModuleTypes.AgentWakeProfileView>();
+    for (const accessor of accessors) {
+      for (const row of accessor.iter()) {
+        byAgent.set(row.agentId, row);
+      }
+    }
+    return Array.from(byAgent.values()).sort((left, right) =>
+      left.handle.localeCompare(right.handle)
+    );
+  }
+
+  wakeProfileForAgent(agentId: string) {
+    return this.listAgentWakeProfiles().find(row => row.agentId === agentId);
+  }
+
+  currentAgentWakeProfile() {
+    const profile = this.currentAgentProfile();
+    return profile ? this.wakeProfileForAgent(profile.agentId) : undefined;
+  }
+
+  listWakeRegistrations() {
+    const accessor = findDbAccessor<ModuleTypes.WakeRegistrationView>(
+      this.conn,
+      'visible_own_wake_registration',
+      'visibleOwnWakeRegistration'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  listWakePolicies() {
+    const accessor = findDbAccessor<ModuleTypes.AgentWakePolicy>(
+      this.conn,
+      'visible_own_wake_policy',
+      'visibleOwnWakePolicy'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  currentWakePolicy() {
+    const profile = this.currentAgentProfile();
+    return profile
+      ? this.listWakePolicies().find(row => row.agentId === profile.agentId)
+      : undefined;
+  }
+
+  listWakeRequests({
+    status,
+    conversationId,
+    includeDispatcher = false,
+  }: {
+    status?: string;
+    conversationId?: bigint;
+    includeDispatcher?: boolean;
+  } = {}) {
+    const ownAccessor = findDbAccessor<ModuleTypes.WakeRequestView>(
+      this.conn,
+      'visible_own_wake_request',
+      'visibleOwnWakeRequest'
+    );
+    const dispatcherAccessor = includeDispatcher
+      ? findDbAccessor<ModuleTypes.WakeRequestView>(
+          this.conn,
+          'visible_dispatcher_wake_request',
+          'visibleDispatcherWakeRequest'
+        )
+      : undefined;
+    const byId = new Map<string, ModuleTypes.WakeRequestView>();
+    for (const accessor of [ownAccessor, dispatcherAccessor].filter(Boolean) as Array<{
+      iter(): Iterable<ModuleTypes.WakeRequestView>;
+    }>) {
+      for (const row of accessor.iter()) {
+        if (status && row.status !== status) {
+          continue;
+        }
+        if (conversationId && row.conversationId !== conversationId) {
+          continue;
+        }
+        byId.set(row.wakeId, row);
+      }
+    }
+    return Array.from(byId.values()).sort(
+      (left, right) => left.createdAt.toDate().getTime() - right.createdAt.toDate().getTime()
+    );
+  }
+
+  listWakeAttempts(wakeId?: string) {
+    const accessor = findDbAccessor<ModuleTypes.WakeAttemptView>(
+      this.conn,
+      'visible_wake_attempt',
+      'visibleWakeAttempt'
+    );
+    const rows = accessor ? Array.from(accessor.iter()) : [];
+    return rows
+      .filter(row => (wakeId ? row.wakeId === wakeId : true))
+      .sort((left, right) => Number(left.attemptNumber - right.attemptNumber));
   }
 
   listAccountEntitlements() {
@@ -1836,6 +2123,74 @@ export class AgentRealtimeClient {
     });
   }
 
+  waitForWakeRequest({
+    status = 'pending',
+    conversationId,
+    timeoutMs = 30000,
+  }: {
+    status?: string;
+    conversationId?: bigint;
+    timeoutMs?: number;
+  } = {}) {
+    const existing = this.listWakeRequests({
+      status,
+      conversationId,
+      includeDispatcher: true,
+    })[0];
+    if (existing) {
+      return Promise.resolve(existing);
+    }
+
+    return new Promise<ModuleTypes.WakeRequestView>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('Timed out waiting for wake request'));
+      }, timeoutMs);
+      const visibleWake = getDbAccessor<ModuleTypes.WakeRequestView>(
+        this.conn,
+        'visible_dispatcher_wake_request',
+        'visibleDispatcherWakeRequest'
+      ) as unknown as {
+        onInsert(handler: (ctx: unknown, row: ModuleTypes.WakeRequestView) => void): void;
+        onUpdate(handler: (ctx: unknown, oldRow: ModuleTypes.WakeRequestView, row: ModuleTypes.WakeRequestView) => void): void;
+        removeOnInsert(handler: (ctx: unknown, row: ModuleTypes.WakeRequestView) => void): void;
+        removeOnUpdate(handler: (ctx: unknown, oldRow: ModuleTypes.WakeRequestView, row: ModuleTypes.WakeRequestView) => void): void;
+      };
+      const matches = (row: ModuleTypes.WakeRequestView) => {
+        if (status && row.status !== status) {
+          return false;
+        }
+        if (conversationId && row.conversationId !== conversationId) {
+          return false;
+        }
+        return true;
+      };
+      const onInsert = (_ctx: unknown, row: ModuleTypes.WakeRequestView) => {
+        if (matches(row)) {
+          cleanup();
+          resolve(row);
+        }
+      };
+      const onUpdate = (
+        _ctx: unknown,
+        _oldRow: ModuleTypes.WakeRequestView,
+        row: ModuleTypes.WakeRequestView
+      ) => {
+        if (matches(row)) {
+          cleanup();
+          resolve(row);
+        }
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        visibleWake.removeOnInsert(onInsert);
+        visibleWake.removeOnUpdate(onUpdate);
+      };
+      visibleWake.onInsert(onInsert);
+      visibleWake.onUpdate(onUpdate);
+    });
+  }
+
   listRequestedConversationMessages(conversationId?: bigint) {
     const rows = Array.from(
       getDbAccessor<ModuleTypes.ConversationMessage>(
@@ -1903,6 +2258,27 @@ export class AgentRealtimeClient {
     };
   }
 
+  onWakeRequestInsert(callback: (row: ModuleTypes.WakeRequestView) => void) {
+    const wrapped = (_ctx: unknown, row: ModuleTypes.WakeRequestView) => {
+      callback(row);
+    };
+
+    const visibleWake = getDbAccessor<ModuleTypes.WakeRequestView>(
+      this.conn,
+      'visible_dispatcher_wake_request',
+      'visibleDispatcherWakeRequest'
+    ) as unknown as {
+      onInsert(handler: typeof wrapped): void;
+      removeOnInsert(handler: typeof wrapped): void;
+    };
+
+    visibleWake.onInsert(wrapped);
+
+    return () => {
+      visibleWake.removeOnInsert(wrapped);
+    };
+  }
+
   listTasks(channelId?: bigint) {
     return Array.from(
       getDbAccessor<ModuleTypes.AgentTask>(
@@ -1952,5 +2328,87 @@ export class AgentRealtimeClient {
     return () => {
       visibleEvent.removeOnInsert(wrapped);
     };
+  }
+}
+
+export type AgentTalkWakeHandler = (
+  wake: ModuleTypes.WakeRequestView,
+  client: AgentTalkWakeClient
+) => Promise<void> | void;
+
+export class AgentTalkWakeClient {
+  constructor(public readonly realtime: AgentRealtimeClient) {}
+
+  static async connect(options: Omit<AgentClientOptions, 'subscriptionProfile'> = {}) {
+    const realtime = await AgentRealtimeClient.connect({
+      ...options,
+      subscriptionProfile: 'wake',
+    });
+    return new AgentTalkWakeClient(realtime);
+  }
+
+  get identityHex() {
+    return this.realtime.identityHex;
+  }
+
+  disconnect() {
+    this.realtime.disconnect();
+  }
+
+  async registerWake(input: WakeRegistrationInput) {
+    await this.realtime.registerWake(input);
+  }
+
+  async registerWakeHandler(handler: AgentTalkWakeHandler) {
+    const run = async (wake: ModuleTypes.WakeRequestView) => {
+      try {
+        await handler(wake, this);
+      } catch (error) {
+        await this.failWake(
+          wake.wakeId,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    };
+
+    const detach = this.realtime.onWakeRequestInsert(wake => {
+      if (wake.status === 'pending') {
+        void run(wake);
+      }
+    });
+
+    for (const wake of this.realtime.listWakeRequests({
+      status: 'pending',
+      includeDispatcher: true,
+    })) {
+      void run(wake);
+    }
+
+    return detach;
+  }
+
+  async fetchWakeContext(wake: ModuleTypes.WakeRequestView) {
+    const afterSequence = wake.minSequence > 0n ? wake.minSequence - 1n : undefined;
+    const span = Number(wake.maxSequence - wake.minSequence + 1n);
+    await this.realtime.requestConversationMessages({
+      conversationId: wake.conversationId,
+      afterSequence,
+      limit: BigInt(Math.min(Math.max(span, 1), 100)),
+    });
+    return this.realtime
+      .listRequestedConversationMessages(wake.conversationId)
+      .filter(row => row.sequence >= wake.minSequence && row.sequence <= wake.maxSequence);
+  }
+
+  async ackWake(wakeId: string, attemptId?: string) {
+    await this.realtime.ackWakeRequest(wakeId, attemptId);
+  }
+
+  async failWake(wakeId: string, error: string, attemptId?: string) {
+    await this.realtime.failWakeRequest(wakeId, error, { attemptId });
+  }
+
+  async replyToWake(wake: ModuleTypes.WakeRequestView, text: string, input: RichMessageInput = {}) {
+    return this.realtime.sendConversationMessage(wake.conversationId, text, input);
   }
 }

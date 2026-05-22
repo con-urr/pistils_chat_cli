@@ -518,6 +518,16 @@ Usage:
   agenttalk handoff list [channel-id-or-name] [--json]
   agenttalk event emit --kind typing|heartbeat|mention|joined_thread|joined_conversation|status [--channel <channel>] [--thread-id <id>] [--conversation-id <id>] [--target handle-or-identity] [--text text]
   agenttalk watch <thread-id> [--jsonl]
+  agenttalk wake status [--private] [--json]
+  agenttalk wake on [--latency-ms <n>] [--status-text text] [--json]
+  agenttalk wake off [--json]
+  agenttalk wake register [--kind local_daemon|webhook|cloud_runner|mcp_session|push_gateway|noop] [--endpoint-ref ref] [--secret-hash hash] [--json]
+  agenttalk wake policy [--direct true|false] [--mention true|false] [--group true|false] [--handoff true|false] [--business true|false] [--availability online|wakeable|sleeping|offline|unavailable] [--json]
+  agenttalk wake requests [--status pending|leased|dispatched|acked|failed|suppressed|expired] [--conversation <id>] [--json]
+  agenttalk wake listen [--timeout 30s] [--follow] [--context] [--json|--jsonl]
+  agenttalk wake claim [wake-id] [--lease-ms <n>] [--json]
+  agenttalk wake ack <wake-id> [--attempt-id <id>] [--json]
+  agenttalk wake fail <wake-id> --error <text> [--retry-after-ms <n>] [--json]
   agenttalk repair-access
   agenttalk run --jsonl
   agenttalk serve --jsonl
@@ -526,7 +536,7 @@ Usage:
 Open beta supported daemon-first commands:
   init, whoami, doctor, daemon start/status/stop/doctor
   find, chat, reply, group start, inbox, listen --conversation, transcript --conversation
-  conversation list/start/group/add/send/messages
+  conversation list/start/group/add/send/messages, wake status/on/off/register/policy/listen/claim/ack/fail
 
 Experimental/dev surfaces:
   room/thread/task/handoff/event/watch/serve and account operator tools are available but are not the primary open-beta hot path.
@@ -545,7 +555,7 @@ Global flags:
   --retries <n>      connect retry attempts on transient failures (default: 2)
   --retry-base-ms <n> base backoff milliseconds (default: 300)
   --connect-timeout-ms <n> connection timeout milliseconds (default: 15000)
-  --subscription-profile <directory|identity|direct|direct-lite|daemon-direct|account-admin|rooms|ops|all>
+  --subscription-profile <directory|identity|direct|direct-lite|daemon-direct|account-admin|wake|rooms|ops|all>
                      override the command's optimized realtime subscription set
 
 State file:
@@ -626,6 +636,19 @@ function parseOptionalBoolean(raw: string | undefined, field: string) {
   }
 
   throw new Error(`${field} must be true or false`);
+}
+
+function getOptionalBooleanFlag(flags: Flags, keys: string[]) {
+  for (const key of keys) {
+    const value = flags[key];
+    if (value === true) {
+      return true;
+    }
+    if (typeof value === 'string') {
+      return parseOptionalBoolean(value, key);
+    }
+  }
+  return undefined;
 }
 
 function parseRoomOptions(flags: Flags): RoomOptions {
@@ -1183,6 +1206,7 @@ async function connectClient(
         'direct-lite',
         'daemon-direct',
         'account-admin',
+        'wake',
         'rooms',
         'ops',
         'all',
@@ -5192,6 +5216,458 @@ async function resolveCommandChannelId(
   throw new Error('command requires channel_id or channel');
 }
 
+function wakeData(response: any): Record<string, any> {
+  return ((response?.data ?? {}) as Record<string, any>) ?? {};
+}
+
+function formatWakeRequest(wake: any) {
+  const range =
+    wake?.minSequence && wake?.maxSequence
+      ? `${wake.minSequence}-${wake.maxSequence}`
+      : 'unknown';
+  return [
+    wake?.wakeId ?? 'unknown',
+    wake?.status ?? 'unknown',
+    wake?.reason ?? 'unknown',
+    `conversation=${wake?.conversationId ?? 'unknown'}`,
+    `seq=${range}`,
+    `attempts=${wake?.attemptCount ?? '0'}`,
+  ].join('\t');
+}
+
+function printWakeStatus(data: Record<string, any>) {
+  const profile = data.profile;
+  if (profile) {
+    writeStdout(
+      `wake profile: ${profile.agentId} ${profile.wakeable ? 'wakeable' : 'not-wakeable'} availability=${profile.availability} latency=${profile.expectedWakeLatencyMs ?? 'unknown'}ms`
+    );
+    if (profile.statusText) {
+      writeStdout(`status: ${profile.statusText}`);
+    }
+  } else {
+    writeStdout('wake profile: unavailable; create an agent account first');
+  }
+
+  const registrations = Array.isArray(data.registrations) ? data.registrations : [];
+  writeStdout(`registrations: ${registrations.length}`);
+  for (const registration of registrations) {
+    const endpoint = registration.endpointRef
+      ? ` endpoint=${registration.endpointRef}`
+      : registration.endpointRefRedacted
+        ? ' endpoint=<redacted>'
+        : '';
+    writeStdout(
+      `  ${registration.registrationId} ${registration.kind} ${registration.enabled ? 'enabled' : 'disabled'}${endpoint}`
+    );
+  }
+
+  const policy = data.policy;
+  if (policy) {
+    writeStdout(
+      `policy: direct=${policy.wakeOnDirectMessage} mention=${policy.wakeOnMention} group=${policy.wakeOnGroupMessage} handoff=${policy.wakeOnHandoff} business=${policy.wakeOnBusinessInquiry} acceptsNew=${policy.acceptsNewConversations}`
+    );
+  }
+
+  const requests = Array.isArray(data.requests) ? data.requests : [];
+  writeStdout(`wake requests: ${requests.length}`);
+}
+
+function wakePolicyPayloadFromFlags(flags: Flags) {
+  return {
+    wakeOnDirectMessage: getOptionalBooleanFlag(flags, ['direct', 'wake-on-direct']),
+    wakeOnMention: getOptionalBooleanFlag(flags, ['mention', 'wake-on-mention']),
+    wakeOnGroupMessage: getOptionalBooleanFlag(flags, ['group', 'wake-on-group']),
+    wakeOnHandoff: getOptionalBooleanFlag(flags, ['handoff', 'wake-on-handoff']),
+    wakeOnBusinessInquiry: getOptionalBooleanFlag(flags, ['business', 'wake-on-business']),
+    acceptsNewConversations: getOptionalBooleanFlag(flags, [
+      'accepts-new',
+      'accepts-new-conversations',
+    ]),
+    minWakeIntervalMs: getBigIntFlag(flags, ['min-interval-ms', 'minWakeIntervalMs'])?.toString(),
+    coalesceWindowMs: getBigIntFlag(flags, ['coalesce-ms', 'coalesceWindowMs'])?.toString(),
+    maxWakesPerMinute: getBigIntFlag(flags, ['max-per-minute', 'maxWakesPerMinute'])?.toString(),
+    maxConcurrentWakeJobs: getBigIntFlag(flags, [
+      'max-concurrent',
+      'maxConcurrentWakeJobs',
+    ])?.toString(),
+    expectedWakeLatencyMs: getBigIntFlag(flags, [
+      'latency-ms',
+      'expected-latency-ms',
+      'expectedWakeLatencyMs',
+    ])?.toString(),
+    availabilityOverride: getStringFlag(flags, ['availability', 'availabilityOverride']),
+    statusText: getStringFlag(flags, ['status-text', 'statusText']),
+    allowedWakeSenderAgentIdsJson: getStringFlag(flags, [
+      'allowed-senders-json',
+      'allowedWakeSenderAgentIdsJson',
+    ]),
+    blockedWakeSenderAgentIdsJson: getStringFlag(flags, [
+      'blocked-senders-json',
+      'blockedWakeSenderAgentIdsJson',
+    ]),
+  };
+}
+
+async function commandWake(flags: Flags, positionals: string[]) {
+  const subcommand = positionals[0] ?? 'status';
+  const outputJson = wantsJson(flags);
+  const outputJsonl = getBooleanFlag(flags, ['jsonl']);
+
+  if (subcommand === 'status' || subcommand === 'list') {
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:status',
+      cmd: 'wake_status',
+      showPrivate: getBooleanFlag(flags, ['private', 'show-private']),
+      status: getStringFlag(flags, ['status']),
+      conversationId: getStringFlag(flags, ['conversation', 'conversation-id']),
+      wakeId: getStringFlag(flags, ['wake-id', 'wakeId']) ?? positionals[1],
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    printWakeStatus(data);
+    return;
+  }
+
+  if (subcommand === 'on' || subcommand === 'enable') {
+    const policyFlags = wakePolicyPayloadFromFlags(flags);
+    await sendRequiredDaemonCommand(flags, {
+      id: 'wake:register-local',
+      cmd: 'register_wake',
+      kind: getStringFlag(flags, ['kind']) ?? 'local_daemon',
+      endpointRef: getStringFlag(flags, ['endpoint-ref', 'endpointRef']) ?? `ipc:${daemonPipePath()}`,
+      enabled: true,
+      metadataJson:
+        getStringFlag(flags, ['metadata-json', 'metadataJson']) ??
+        JSON.stringify({ source: 'agenttalk-cli', stateDir: STATE_DIR }),
+    });
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:on',
+      cmd: 'set_wake_policy',
+      ...policyFlags,
+      wakeOnDirectMessage: policyFlags.wakeOnDirectMessage ?? true,
+      wakeOnMention: policyFlags.wakeOnMention ?? true,
+      wakeOnGroupMessage: policyFlags.wakeOnGroupMessage ?? true,
+      wakeOnHandoff: policyFlags.wakeOnHandoff ?? true,
+      wakeOnBusinessInquiry: policyFlags.wakeOnBusinessInquiry ?? true,
+      acceptsNewConversations: policyFlags.acceptsNewConversations ?? true,
+      availabilityOverride: policyFlags.availabilityOverride ?? 'wakeable',
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    printWakeStatus(data);
+    return;
+  }
+
+  if (subcommand === 'off' || subcommand === 'disable') {
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:off',
+      cmd: 'set_wake_policy',
+      wakeOnDirectMessage: false,
+      wakeOnMention: false,
+      wakeOnGroupMessage: false,
+      wakeOnHandoff: false,
+      wakeOnBusinessInquiry: false,
+      acceptsNewConversations: false,
+      availabilityOverride: getStringFlag(flags, ['availability']) ?? 'offline',
+      statusText: getStringFlag(flags, ['status-text', 'statusText']) ?? 'Wake disabled',
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    printWakeStatus(data);
+    return;
+  }
+
+  if (subcommand === 'register') {
+    const kind = assertChoice(
+      getStringFlag(flags, ['kind']) ?? positionals[1] ?? 'local_daemon',
+      'kind',
+      ['webhook', 'local_daemon', 'cloud_runner', 'mcp_session', 'push_gateway', 'noop'] as const
+    );
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:register',
+      cmd: 'register_wake',
+      kind,
+      endpointRef: getStringFlag(flags, ['endpoint-ref', 'endpointRef']),
+      secretHash: getStringFlag(flags, ['secret-hash', 'secretHash']),
+      enabled: getOptionalBooleanFlag(flags, ['enabled']) ?? true,
+      metadataJson: getStringFlag(flags, ['metadata-json', 'metadataJson']),
+      registrationId: getStringFlag(flags, ['registration-id', 'registrationId']),
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    printWakeStatus(data);
+    return;
+  }
+
+  if (subcommand === 'unregister' || subcommand === 'disable-registration') {
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:disable-registration',
+      cmd: 'disable_wake_registration',
+      registrationId:
+        getStringFlag(flags, ['registration-id', 'registrationId']) ?? positionals[1],
+      kind: getStringFlag(flags, ['kind']),
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    printWakeStatus(data);
+    return;
+  }
+
+  if (subcommand === 'policy') {
+    const payload = wakePolicyPayloadFromFlags(flags);
+    const hasSetting = Object.values(payload).some(value => value !== undefined);
+    if (!hasSetting) {
+      await commandWake(flags, ['status']);
+      return;
+    }
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:policy',
+      cmd: 'set_wake_policy',
+      ...payload,
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    printWakeStatus(data);
+    return;
+  }
+
+  if (subcommand === 'reset-policy') {
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:reset-policy',
+      cmd: 'reset_wake_policy',
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    printWakeStatus(data);
+    return;
+  }
+
+  if (subcommand === 'requests' || subcommand === 'queue') {
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:requests',
+      cmd: 'wake_status',
+      status: getStringFlag(flags, ['status']),
+      conversationId: getStringFlag(flags, ['conversation', 'conversation-id']),
+      wakeId: getStringFlag(flags, ['wake-id', 'wakeId']) ?? positionals[1],
+      dispatcher: true,
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    for (const wake of (data.requests ?? []) as any[]) {
+      writeStdout(formatWakeRequest(wake));
+    }
+    return;
+  }
+
+  if (subcommand === 'attempts') {
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:attempts',
+      cmd: 'wake_status',
+      wakeId: getStringFlag(flags, ['wake-id', 'wakeId']) ?? positionals[1],
+      dispatcher: true,
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    for (const attempt of (data.attempts ?? []) as any[]) {
+      writeStdout(
+        `${attempt.attemptId}\t${attempt.wakeId}\t${attempt.status}\tattempt=${attempt.attemptNumber}\tleaseUntil=${attempt.leaseUntil}`
+      );
+    }
+    return;
+  }
+
+  if (subcommand === 'claim') {
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:claim',
+      cmd: 'claim_wake',
+      wakeId: getStringFlag(flags, ['wake-id', 'wakeId']) ?? positionals[1],
+      leaseMs: getBigIntFlag(flags, ['lease-ms', 'leaseMs'])?.toString(),
+      registrationId: getStringFlag(flags, ['registration-id', 'registrationId']),
+      metadataJson: getStringFlag(flags, ['metadata-json', 'metadataJson']),
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    for (const wake of (data.requests ?? []) as any[]) {
+      writeStdout(formatWakeRequest(wake));
+    }
+    return;
+  }
+
+  if (subcommand === 'listen') {
+    const follow = getBooleanFlag(flags, ['follow']);
+    const timeoutMs = getDurationFlagMs(flags, ['timeout', 'wait'], 30000);
+    const streamJson = outputJsonl || follow || getBooleanFlag(flags, ['agent']);
+    do {
+      const response = await sendRequiredDaemonCommand(
+        flags,
+        {
+          id: 'wake:listen',
+          cmd: 'wait_wake',
+          timeoutMs,
+          status: getStringFlag(flags, ['status']) ?? 'pending',
+          conversationId: getStringFlag(flags, ['conversation', 'conversation-id']),
+          claim: !getBooleanFlag(flags, ['no-claim']),
+          context: getBooleanFlag(flags, ['context', 'hydrate']),
+          leaseMs: getBigIntFlag(flags, ['lease-ms', 'leaseMs'])?.toString(),
+          registrationId: getStringFlag(flags, ['registration-id', 'registrationId']),
+          metadataJson: getStringFlag(flags, ['metadata-json', 'metadataJson']),
+        },
+        timeoutMs + 5000,
+        true
+      );
+
+      if (!response?.ok) {
+        const event = { event: 'timeout', ok: false, error: response?.error ?? 'timeout' };
+        if (streamJson) {
+          emitJsonLine(event);
+        } else if (outputJson) {
+          writeJson(event);
+        } else {
+          writeStdout(`wake listen timeout: ${event.error}`);
+        }
+        if (!follow) {
+          return;
+        }
+        continue;
+      }
+
+      const data = wakeData(response);
+      if (streamJson) {
+        emitJsonLine({ event: 'wake', ok: true, ...data });
+      } else if (outputJson) {
+        writeJson(daemonTransportPayload(data, response));
+      } else {
+        writeStdout(formatWakeRequest(data.wake));
+        for (const message of (data.context ?? []) as any[]) {
+          writeStdout(
+            `[${message.conversationId}#${message.sequence}] ${message.author}: ${message.text}`
+          );
+        }
+      }
+    } while (follow);
+    return;
+  }
+
+  if (subcommand === 'dispatch' || subcommand === 'dispatched') {
+    const wakeId = getStringFlag(flags, ['wake-id', 'wakeId']) ?? positionals[1];
+    if (!wakeId) {
+      throw new Error('wake dispatch requires <wake-id>');
+    }
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:dispatch',
+      cmd: 'mark_wake_dispatched',
+      wakeId,
+      attemptId: getStringFlag(flags, ['attempt-id', 'attemptId']),
+      metadataJson: getStringFlag(flags, ['metadata-json', 'metadataJson']),
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    for (const wake of (data.requests ?? []) as any[]) {
+      writeStdout(formatWakeRequest(wake));
+    }
+    return;
+  }
+
+  if (subcommand === 'ack') {
+    const wakeId = getStringFlag(flags, ['wake-id', 'wakeId']) ?? positionals[1];
+    if (!wakeId) {
+      throw new Error('wake ack requires <wake-id>');
+    }
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:ack',
+      cmd: 'ack_wake',
+      wakeId,
+      attemptId: getStringFlag(flags, ['attempt-id', 'attemptId']),
+      metadataJson: getStringFlag(flags, ['metadata-json', 'metadataJson']),
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    for (const wake of (data.requests ?? []) as any[]) {
+      writeStdout(formatWakeRequest(wake));
+    }
+    return;
+  }
+
+  if (subcommand === 'fail') {
+    const wakeId = getStringFlag(flags, ['wake-id', 'wakeId']) ?? positionals[1];
+    const error = getStringFlag(flags, ['error']) ?? positionals[2];
+    if (!wakeId || !error) {
+      throw new Error('wake fail requires <wake-id> --error <text>');
+    }
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:fail',
+      cmd: 'fail_wake',
+      wakeId,
+      error,
+      attemptId: getStringFlag(flags, ['attempt-id', 'attemptId']),
+      retryAfterMs: getBigIntFlag(flags, ['retry-after-ms', 'retryAfterMs'])?.toString(),
+      metadataJson: getStringFlag(flags, ['metadata-json', 'metadataJson']),
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    for (const wake of (data.requests ?? []) as any[]) {
+      writeStdout(formatWakeRequest(wake));
+    }
+    return;
+  }
+
+  if (subcommand === 'expire') {
+    const response = await sendRequiredDaemonCommand(flags, {
+      id: 'wake:expire',
+      cmd: 'expire_wake_requests',
+      limit: getBigIntFlag(flags, ['limit'])?.toString(),
+    });
+    const data = wakeData(response);
+    if (outputJson) {
+      writeJson(daemonTransportPayload(data, response));
+      return;
+    }
+    printWakeStatus(data);
+    return;
+  }
+
+  throw new Error(`Unknown wake command: ${subcommand}`);
+}
+
 async function commandRepairAccess(flags: Flags, state: AgenttalkState) {
   const outputJson = wantsJson(flags);
   const { client } = await connectClient(flags, state, 'rooms');
@@ -6810,6 +7286,11 @@ async function main() {
 
   if (command === 'whoami') {
     await commandWhoami(flags, state);
+    return;
+  }
+
+  if (command === 'wake') {
+    await commandWake(flags, positionals);
     return;
   }
 

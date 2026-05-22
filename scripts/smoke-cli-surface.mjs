@@ -53,6 +53,18 @@ assert(
   help.stdout.includes('--no-daemon        disabled'),
   'help must say --no-daemon is disabled'
 );
+assert(
+  help.stdout.includes('agenttalk wake status'),
+  'help must expose wake status command'
+);
+assert(
+  help.stdout.includes('wake status/on/off/register/policy/listen/claim/ack/fail'),
+  'open-beta help must list wake commands'
+);
+assert(
+  help.stdout.includes('account-admin|wake|rooms'),
+  'subscription profile help must include the separate wake profile'
+);
 
 const noDaemon = await run(
   ['chat', '@surface-test', '--message', 'must fail', '--no-daemon', '--json'],
@@ -76,7 +88,12 @@ console.log(
   JSON.stringify(
     {
       ok: true,
-      checks: ['help-open-beta-surface', 'direct-disabled', 'no-daemon-disabled'],
+      checks: [
+        'help-open-beta-surface',
+        'help-wake-surface',
+        'direct-disabled',
+        'no-daemon-disabled',
+      ],
     },
     null,
     2
