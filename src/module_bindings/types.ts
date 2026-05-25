@@ -706,8 +706,44 @@ export const RetentionCleanupStat = __t.object("RetentionCleanupStat", {
   expiredMessageBacklogRemaining: __t.u64(),
   durationMicros: __t.u64(),
   nextScheduledAt: __t.option(__t.timestamp()),
+  wakeRequestDeleted: __t.u64(),
+  wakeAttemptDeleted: __t.u64(),
+  expiredWakeRequestBacklogRemaining: __t.u64(),
+  staleWakeAttemptBacklogRemaining: __t.u64(),
 });
 export type RetentionCleanupStat = __Infer<typeof RetentionCleanupStat>;
+
+export const RetentionCleanupStatDetailView = __t.object("RetentionCleanupStatDetailView", {
+  key: __t.string(),
+  lastRunAt: __t.timestamp(),
+  reason: __t.string(),
+  deliveryDeleted: __t.u64(),
+  receiptDeleted: __t.u64(),
+  accountDirectoryRequestDeleted: __t.u64(),
+  channelDirectoryRequestDeleted: __t.u64(),
+  conversationMessageRequestDeleted: __t.u64(),
+  archiveBatchRequestDeleted: __t.u64(),
+  inboxDeliveryRequestDeleted: __t.u64(),
+  conversationListRequestDeleted: __t.u64(),
+  conversationMemberRequestDeleted: __t.u64(),
+  rateLimitBucketDeleted: __t.u64(),
+  requestLogDeleted: __t.u64(),
+  agentEventDeleted: __t.u64(),
+  conversationMessageDeleted: __t.u64(),
+  wakeRequestDeleted: __t.u64(),
+  wakeAttemptDeleted: __t.u64(),
+  expiredDeliveryBacklogRemaining: __t.u64(),
+  expiredReceiptBacklogRemaining: __t.u64(),
+  staleRequestBacklogRemaining: __t.u64(),
+  staleRateLimitBucketBacklogRemaining: __t.u64(),
+  expiredMessageBacklogRemaining: __t.u64(),
+  expiredWakeRequestBacklogRemaining: __t.u64(),
+  staleWakeAttemptBacklogRemaining: __t.u64(),
+  durationMicros: __t.u64(),
+  nextScheduledAt: __t.option(__t.timestamp()),
+  capped: __t.bool(),
+});
+export type RetentionCleanupStatDetailView = __Infer<typeof RetentionCleanupStatDetailView>;
 
 export const RetentionCleanupStatLegacyView = __t.object("RetentionCleanupStatLegacyView", {
   key: __t.string(),
@@ -978,6 +1014,9 @@ export type VisibleRequestedInboxDelivery = __Infer<typeof VisibleRequestedInbox
 
 export const VisibleRetentionCleanupStat = __t.object("VisibleRetentionCleanupStat", {});
 export type VisibleRetentionCleanupStat = __Infer<typeof VisibleRetentionCleanupStat>;
+
+export const VisibleRetentionCleanupStatDetail = __t.object("VisibleRetentionCleanupStatDetail", {});
+export type VisibleRetentionCleanupStatDetail = __Infer<typeof VisibleRetentionCleanupStatDetail>;
 
 export const VisibleRetentionPolicy = __t.object("VisibleRetentionPolicy", {});
 export type VisibleRetentionPolicy = __Infer<typeof VisibleRetentionPolicy>;

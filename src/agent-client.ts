@@ -73,6 +73,10 @@ export type DeploymentPolicyInput = {
   maxPendingUnreadDeliveries?: bigint;
 };
 
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export type WakeRegistrationInput = {
   kind: 'webhook' | 'local_daemon' | 'cloud_runner' | 'mcp_session' | 'push_gateway' | 'noop';
   endpointRef?: string;
@@ -277,6 +281,7 @@ const ACCOUNT_ADMIN_SUBSCRIPTIONS = [
   ...IDENTITY_SUBSCRIPTIONS,
   'SELECT * FROM visible_account_entitlement',
   'SELECT * FROM visible_retention_cleanup_stat',
+  'SELECT * FROM visible_retention_cleanup_stat_detail',
   'SELECT * FROM visible_scale_repair_stat',
   'SELECT * FROM visible_agent_delivery_counter',
   'SELECT * FROM visible_operator_scale_snapshot',
@@ -1269,6 +1274,15 @@ export class AgentRealtimeClient {
       this.conn,
       'visible_retention_cleanup_stat',
       'visibleRetentionCleanupStat'
+    );
+    return accessor ? Array.from(accessor.iter()) : [];
+  }
+
+  listRetentionCleanupStatDetails() {
+    const accessor = findDbAccessor<ModuleTypes.RetentionCleanupStatDetailView>(
+      this.conn,
+      'visible_retention_cleanup_stat_detail',
+      'visibleRetentionCleanupStatDetail'
     );
     return accessor ? Array.from(accessor.iter()) : [];
   }
@@ -2331,8 +2345,13 @@ export class AgentRealtimeClient {
   }
 }
 
+export type AgentTalkWakeHandlerContext = {
+  wake: ModuleTypes.WakeRequestView;
+  attemptId: string;
+};
+
 export type AgentTalkWakeHandler = (
-  wake: ModuleTypes.WakeRequestView,
+  context: AgentTalkWakeHandlerContext,
   client: AgentTalkWakeClient
 ) => Promise<void> | void;
 
@@ -2360,14 +2379,41 @@ export class AgentTalkWakeClient {
   }
 
   async registerWakeHandler(handler: AgentTalkWakeHandler) {
+    const inFlightWakeIds = new Set<string>();
     const run = async (wake: ModuleTypes.WakeRequestView) => {
+      if (inFlightWakeIds.has(wake.wakeId)) {
+        return;
+      }
+      inFlightWakeIds.add(wake.wakeId);
+      let attemptId: string | undefined;
       try {
-        await handler(wake, this);
+        await this.realtime.claimWakeRequest({ wakeId: wake.wakeId });
+        await sleep(250);
+        const claimedWake =
+          this.realtime
+            .listWakeRequests({ includeDispatcher: true })
+            .find(row => row.wakeId === wake.wakeId) ?? wake;
+        const latestAttempt = this.realtime
+          .listWakeAttempts(wake.wakeId)
+          .sort((left, right) =>
+            left.attemptNumber < right.attemptNumber
+              ? 1
+              : left.attemptNumber > right.attemptNumber
+                ? -1
+                : 0
+          )[0];
+        attemptId = latestAttempt?.attemptId;
+        if (!attemptId) {
+          throw new Error(`Wake ${wake.wakeId} was claimed but no attempt row is visible`);
+        }
+        await handler({ wake: claimedWake, attemptId }, this);
       } catch (error) {
-        await this.failWake(
-          wake.wakeId,
-          error instanceof Error ? error.message : String(error)
-        );
+        const message = error instanceof Error ? error.message : String(error);
+        if (attemptId) {
+          await this.failWake(wake.wakeId, message, attemptId);
+        }
+      } finally {
+        inFlightWakeIds.delete(wake.wakeId);
       }
     };
 

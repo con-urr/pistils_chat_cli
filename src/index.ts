@@ -2,6 +2,7 @@ export {
   AgentTalkWakeClient,
   AgentRealtimeClient,
   type AgentTalkWakeHandler,
+  type AgentTalkWakeHandlerContext,
   type AgentClientOptions,
   type AgentRole,
   type AgentSubscriptionProfile,
@@ -14,4 +15,10 @@ export {
   type WakeRegistrationInput,
 } from './agent-client';
 export { runAgenttalkd } from './agenttalkd';
-export { createWakeDispatchPayload, type WakeDispatchPayload } from './wake';
+export {
+  canonicalWakeDispatchPayload,
+  createWakeDispatchPayload,
+  verifyWakeDispatchPayload,
+  type WakeDispatchPayload,
+  type WakeDispatchVerificationOptions,
+} from './wake';

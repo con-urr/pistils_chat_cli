@@ -149,6 +149,7 @@ import VisibleRequestedConversationMessageRow from "./visible_requested_conversa
 import VisibleRequestedConversationSummaryRow from "./visible_requested_conversation_summary_table";
 import VisibleRequestedInboxDeliveryRow from "./visible_requested_inbox_delivery_table";
 import VisibleRetentionCleanupStatRow from "./visible_retention_cleanup_stat_table";
+import VisibleRetentionCleanupStatDetailRow from "./visible_retention_cleanup_stat_detail_table";
 import VisibleRetentionPolicyRow from "./visible_retention_policy_table";
 import VisibleRichMessageRow from "./visible_rich_message_table";
 import VisibleRoomConfigRow from "./visible_room_config_table";
@@ -452,6 +453,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VisibleRetentionCleanupStatRow),
+  visible_retention_cleanup_stat_detail: __table({
+    name: 'visible_retention_cleanup_stat_detail',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VisibleRetentionCleanupStatDetailRow),
   visible_retention_policy: __table({
     name: 'visible_retention_policy',
     indexes: [

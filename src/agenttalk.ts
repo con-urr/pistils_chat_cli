@@ -524,7 +524,7 @@ Usage:
   agenttalk wake register [--kind local_daemon|webhook|cloud_runner|mcp_session|push_gateway|noop] [--endpoint-ref ref] [--secret-hash hash] [--json]
   agenttalk wake policy [--direct true|false] [--mention true|false] [--group true|false] [--handoff true|false] [--business true|false] [--availability online|wakeable|sleeping|offline|unavailable] [--json]
   agenttalk wake requests [--status pending|leased|dispatched|acked|failed|suppressed|expired] [--conversation <id>] [--json]
-  agenttalk wake listen [--timeout 30s] [--follow] [--context] [--json|--jsonl]
+  agenttalk wake listen [--timeout 30s] [--follow] [--context] [--exec "<command>"] [--no-auto-ack] [--json|--jsonl]
   agenttalk wake claim [wake-id] [--lease-ms <n>] [--json]
   agenttalk wake ack <wake-id> [--attempt-id <id>] [--json]
   agenttalk wake fail <wake-id> --error <text> [--retry-after-ms <n>] [--json]
@@ -5235,6 +5235,171 @@ function formatWakeRequest(wake: any) {
   ].join('\t');
 }
 
+function latestWakeAttempt(data: Record<string, any>) {
+  const attempts = Array.isArray(data.attempts) ? data.attempts : [];
+  return attempts
+    .filter(attempt => attempt?.attemptId)
+    .sort((left, right) => {
+      const leftNumber = BigInt(String(left.attemptNumber ?? '0'));
+      const rightNumber = BigInt(String(right.attemptNumber ?? '0'));
+      return leftNumber < rightNumber ? 1 : leftNumber > rightNumber ? -1 : 0;
+    })[0];
+}
+
+function wakeExecEnvironment(data: Record<string, any>, flags: Flags) {
+  const wake = (data.wake ?? {}) as Record<string, any>;
+  const attempt = latestWakeAttempt(data) ?? {};
+  const state = loadStateSync();
+  const conversationId = String(wake.conversationId ?? '');
+  const minSequence = String(wake.minSequence ?? '');
+  const maxSequence = String(wake.maxSequence ?? '');
+  const reason = String(wake.reason ?? '');
+  const payload = {
+    wake,
+    attempts: Array.isArray(data.attempts) ? data.attempts : [],
+    context: Array.isArray(data.context) ? data.context : [],
+  };
+  return {
+    AGENTTALK_WAKE_ID: String(wake.wakeId ?? ''),
+    AGENTTALK_WAKE_ATTEMPT_ID: String(attempt.attemptId ?? ''),
+    AGENTTALK_WAKE_CONVERSATION_ID: conversationId,
+    AGENTTALK_WAKE_MIN_SEQUENCE: minSequence,
+    AGENTTALK_WAKE_MAX_SEQUENCE: maxSequence,
+    AGENTTALK_WAKE_REASON: reason,
+    AGENTTALK_CONVERSATION_ID: conversationId,
+    AGENTTALK_MIN_SEQUENCE: minSequence,
+    AGENTTALK_MAX_SEQUENCE: maxSequence,
+    AGENTTALK_REASON: reason,
+    AGENTTALK_WAKE_PRIORITY: String(wake.priority ?? ''),
+    AGENTTALK_WAKE_STATUS: String(wake.status ?? ''),
+    AGENTTALK_WAKE_SENDER_AGENT_ID: String(wake.senderAgentId ?? ''),
+    AGENTTALK_WAKE_RECIPIENT_AGENT_ID: String(wake.recipientAgentId ?? ''),
+    AGENTTALK_STATE_DIR: STATE_DIR,
+    AGENTTALK_HOST: getStringFlag(flags, ['host']) ?? state.host ?? DEFAULT_HOST,
+    AGENTTALK_DB: getStringFlag(flags, ['db']) ?? state.databaseName ?? DEFAULT_DB,
+    AGENTTALK_WAKE_PAYLOAD_JSON: JSON.stringify(payload),
+    AGENTTALK_WAKE_CONTEXT_JSON: JSON.stringify(payload.context),
+  };
+}
+
+type WakeExecResult = {
+  command: string;
+  ok: boolean;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  durationMs: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+};
+
+function appendLimited(current: string, chunk: Buffer, limit = 16384) {
+  const next = current + chunk.toString();
+  return next.length > limit ? next.slice(next.length - limit) : next;
+}
+
+function runWakeExecCommand(
+  command: string,
+  data: Record<string, any>,
+  flags: Flags,
+  routeStdoutToStderr: boolean
+): Promise<WakeExecResult> {
+  const started = Date.now();
+  const env = {
+    ...process.env,
+    ...wakeExecEnvironment(data, flags),
+  };
+  return new Promise(resolve => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const settle = (result: Omit<WakeExecResult, 'command' | 'durationMs'>) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve({
+        command,
+        durationMs: Date.now() - started,
+        stdout: stdout || undefined,
+        stderr: stderr || undefined,
+        ...result,
+      });
+    };
+
+    const child = spawn(command, {
+      shell: true,
+      windowsHide: true,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    child.stdout?.on('data', chunk => {
+      stdout = appendLimited(stdout, chunk);
+      writeSync(routeStdoutToStderr ? 2 : 1, chunk);
+    });
+    child.stderr?.on('data', chunk => {
+      stderr = appendLimited(stderr, chunk);
+      writeSync(2, chunk);
+    });
+    child.on('error', error => {
+      settle({
+        ok: false,
+        exitCode: null,
+        signal: null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    child.on('close', (exitCode, signal) => {
+      settle({
+        ok: exitCode === 0,
+        exitCode,
+        signal,
+      });
+    });
+  });
+}
+
+function wakeExecFailureMessage(result: WakeExecResult) {
+  if (result.error) {
+    return result.error;
+  }
+  if (result.signal) {
+    return `wake exec terminated by ${result.signal}`;
+  }
+  return `wake exec exited with code ${result.exitCode ?? 'unknown'}`;
+}
+
+async function completeWakeExec(
+  flags: Flags,
+  data: Record<string, any>,
+  result: WakeExecResult
+) {
+  const wakeId = data.wake?.wakeId;
+  if (!wakeId) {
+    throw new Error('wake listen --exec could not find wakeId to ack/fail');
+  }
+  const attemptId = latestWakeAttempt(data)?.attemptId;
+  if (result.ok) {
+    await sendRequiredDaemonCommand(flags, {
+      id: 'wake:exec:ack',
+      cmd: 'ack_wake',
+      wakeId,
+      attemptId,
+    });
+    return { action: 'ack', ok: true, wakeId, attemptId };
+  }
+
+  await sendRequiredDaemonCommand(flags, {
+    id: 'wake:exec:fail',
+    cmd: 'fail_wake',
+    wakeId,
+    attemptId,
+    error: wakeExecFailureMessage(result),
+  });
+  return { action: 'fail', ok: true, wakeId, attemptId };
+}
+
 function printWakeStatus(data: Record<string, any>) {
   const profile = data.profile;
   if (profile) {
@@ -5349,9 +5514,9 @@ async function commandWake(flags: Flags, positionals: string[]) {
       ...policyFlags,
       wakeOnDirectMessage: policyFlags.wakeOnDirectMessage ?? true,
       wakeOnMention: policyFlags.wakeOnMention ?? true,
-      wakeOnGroupMessage: policyFlags.wakeOnGroupMessage ?? true,
-      wakeOnHandoff: policyFlags.wakeOnHandoff ?? true,
-      wakeOnBusinessInquiry: policyFlags.wakeOnBusinessInquiry ?? true,
+      wakeOnGroupMessage: policyFlags.wakeOnGroupMessage ?? false,
+      wakeOnHandoff: policyFlags.wakeOnHandoff ?? false,
+      wakeOnBusinessInquiry: policyFlags.wakeOnBusinessInquiry ?? false,
       acceptsNewConversations: policyFlags.acceptsNewConversations ?? true,
       availabilityOverride: policyFlags.availabilityOverride ?? 'wakeable',
     });
@@ -5527,6 +5692,10 @@ async function commandWake(flags: Flags, positionals: string[]) {
     const follow = getBooleanFlag(flags, ['follow']);
     const timeoutMs = getDurationFlagMs(flags, ['timeout', 'wait'], 30000);
     const streamJson = outputJsonl || follow || getBooleanFlag(flags, ['agent']);
+    const execCommand = getStringFlag(flags, ['exec', 'command']);
+    if (flags.exec === true || flags.command === true) {
+      throw new Error('wake listen --exec requires a command string');
+    }
     do {
       const response = await sendRequiredDaemonCommand(
         flags,
@@ -5562,17 +5731,43 @@ async function commandWake(flags: Flags, positionals: string[]) {
       }
 
       const data = wakeData(response);
-      if (streamJson) {
-        emitJsonLine({ event: 'wake', ok: true, ...data });
-      } else if (outputJson) {
-        writeJson(daemonTransportPayload(data, response));
-      } else {
+      let execResult: WakeExecResult | undefined;
+      let execCompletion: { action: string; ok: boolean; [key: string]: unknown } | undefined;
+      if (!streamJson && !outputJson) {
         writeStdout(formatWakeRequest(data.wake));
         for (const message of (data.context ?? []) as any[]) {
           writeStdout(
             `[${message.conversationId}#${message.sequence}] ${message.author}: ${message.text}`
           );
         }
+      }
+      if (execCommand) {
+        execResult = await runWakeExecCommand(execCommand, data, flags, streamJson || outputJson);
+        if (getBooleanFlag(flags, ['no-auto-ack', 'noAutoAck', 'manual-ack'])) {
+          execCompletion = {
+            action: 'none',
+            ok: true,
+            reason: 'no-auto-ack',
+          };
+        } else {
+          execCompletion = await completeWakeExec(flags, data, execResult);
+        }
+        if (!streamJson && !outputJson) {
+          writeStdout(
+            `wake exec ${execResult.ok ? 'succeeded' : 'failed'}; completion=${execCompletion.action}`
+          );
+        }
+        if (!execResult.ok && !follow) {
+          process.exitCode = 1;
+        }
+      }
+      const eventData = execResult
+        ? { ...data, exec: execResult, completion: execCompletion }
+        : data;
+      if (streamJson) {
+        emitJsonLine({ event: 'wake', ok: true, ...eventData });
+      } else if (outputJson) {
+        writeJson(daemonTransportPayload(eventData, response));
       }
     } while (follow);
     return;
