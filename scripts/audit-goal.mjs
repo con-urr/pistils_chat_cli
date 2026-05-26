@@ -214,10 +214,15 @@ if (existsSync(agentTalkMcpRepo)) {
 }
 
 const targetServiceCheck = checkByName(renderPayload, 'render:target_service_absent');
+const targetService = renderPayload?.targetService;
 const serviceCreated =
-  targetServiceCheck?.status === 'warn' && /already exists/i.test(targetServiceCheck.detail ?? '');
-if (!renderUrl && serviceCreated && renderPayload?.targetService?.url) {
-  renderUrl = renderPayload.targetService.url;
+  targetServiceCheck?.status === 'warn' &&
+  /already exists/i.test(targetServiceCheck.detail ?? '') &&
+  targetService?.projectName === 'My project' &&
+  targetService?.environmentName === 'Cervaris' &&
+  targetService?.environmentId === 'evm-d7ampnp4tr6s739q3q9g';
+if (!renderUrl && serviceCreated && targetService?.url) {
+  renderUrl = targetService.url;
 }
 const sourceAccessReady =
   serviceCreated ||
@@ -234,8 +239,8 @@ checks.push(
 );
 checks.push(
   serviceCreated
-    ? check('pass', 'render:service_created', 'agent-talk-mcp exists in Render inventory')
-    : check('fail', 'render:service_created', 'agent-talk-mcp is not present in Render inventory')
+    ? check('pass', 'render:service_created', 'agent-talk-mcp exists in the target Render project/environment')
+    : check('fail', 'render:service_created', 'agent-talk-mcp is not present in the target Render project/environment')
 );
 checks.push(
   checkByName(renderPayload, 'render:crisistrainingsim_untouched')?.status === 'pass'
