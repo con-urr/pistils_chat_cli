@@ -3021,6 +3021,22 @@ Still open after fresh real connector smoke and audit-doc refresh:
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
 
+Work log - 2026-05-26, pistils CI ready-for-review trigger probe
+
+Completed in pistils_chat_cli / GitHub:
+
+- Confirmed PR #1 was open, draft, mergeable, and pointed at `03e7bf240ce13fabe03e02dd8d615acf342abf72`.
+- Used GitHub GraphQL to mark PR #1 ready for review, waited, and checked current-head check-runs and branch workflow runs.
+- GitHub still created no check-runs on `03e7bf240ce13fabe03e02dd8d615acf342abf72`; latest visible pistils CI workflow run remained `26447404260` on `56a9664650761d00753a1098b3d34de55766b3d5`.
+- Converted PR #1 back to draft through GitHub GraphQL.
+- Verified final PR state returned to open/draft at the same head.
+
+Still open after pistils CI ready-for-review trigger probe:
+
+- Current-head pistils GitHub checks remain blocked with no check-suite created by GitHub.
+- The known non-destructive trigger repairs have now failed: push/synchronize, close/reopen, ready-for-review, and manual workflow dispatch.
+- Do not fabricate check-runs; keep `github:pistils_chat_cli_checks` failed until GitHub creates real `validate (20)` and `validate (22)` check-runs on the current head.
+
 Work log - 2026-05-26, Hermes OAuth default-timeout post-push audit
 
 Completed in pistils_chat_cli:
