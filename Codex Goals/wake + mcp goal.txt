@@ -1570,3 +1570,46 @@ Still open after connector self-reply contract:
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive provider credentials and rerun the real Hermes connector smoke.
 - Real OpenClaw/Hermes/Codex runtime self-reply behavior still depends on each runtime choosing to execute the provided AgentTalk reply command; the contract is now explicit and smoke-covered, but Hermes credentials and runtime behavior remain external gates.
+
+Work log - 2026-05-26, GHCR image build retry and Render deploy gate
+
+Completed:
+
+- Fixed the GitHub dependency install boundary for `Agent-Talk-MCP` Docker builds:
+  - `pistils-chat-cli` now runs `npm run build` from `prepare`.
+  - `package-lock.json` now includes the newer MCP and supervisor bins in the root package metadata.
+- Verified a fresh temp install of `github:con-urr/pistils_chat_cli#codex/agenttalk-mcp-supervisor` now produces built `dist` exports required by `pistils-chat-cli/mcp`.
+- Reran the failed GitHub Actions image workflow job for `con-urr/Agent-Talk-MCP`.
+- The rerun completed successfully; the Docker build and push step is green.
+- Rechecked Render service inventory after deploy attempts; only `CrisisTrainingSim` exists, so no accidental `agent-talk-mcp` service was created and `CrisisTrainingSim` was not modified.
+
+Validation passed:
+
+- pistils_chat_cli: npm run check
+- Fresh temp GitHub dependency install:
+  - `dist/index.d.ts` present
+  - `dist/agent-client.d.ts` present
+  - `dist/mcp/server.d.ts` present
+  - `dist/mcp/server.js` present
+  - `dist/agenttalk-supervisor.js` present
+- Agent-Talk-MCP: npm install --no-package-lock
+- Agent-Talk-MCP: npm run check
+  - build passed
+  - smoke:http passed with authMode private-beta-bearer and 22 MCP tools
+- GitHub Actions workflow rerun:
+  - run 26431340212, job 77806008693, publish, conclusion success
+
+Still open after GHCR image build retry:
+
+- Public GHCR manifest probe for `ghcr.io/con-urr/agent-talk-mcp:codex-render-mcp-service` still returns HTTP 401 Unauthorized.
+- Render image-backed creation without a registry credential fails because Render cannot fetch the private image.
+- Render Git-backed creation still fails because the private repo is invalid or unfetchable to Render's GitHub integration.
+- Render workspace has no existing registry credential to reuse for GHCR.
+- The local GitHub credential available to this machine does not have GHCR package-read permission and should not be stored in Render.
+- Next deploy path requires one of:
+  - grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, then use the Blueprint/direct Git path;
+  - make the GHCR package public if exposing the image is acceptable;
+  - create a narrow GHCR read-only credential and add it to Render, then pass it with `--registry-credential`.
+- Create the new free Render service `agent-talk-mcp` only after one of those source-access gates is resolved.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+- Configure Hermes with non-interactive provider credentials and rerun the real Hermes connector smoke.
