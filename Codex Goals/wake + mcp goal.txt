@@ -2598,3 +2598,27 @@ Still open after Hermes local endpoint readiness evidence:
 - Rerun `npm run preflight:hermes` and require `realHermesConnectorSmoke` to become ready.
 - Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle a real wake.
 - Render service creation/deployed smoke remains blocked on Render GitHub/GHCR source access.
+
+Work log - 2026-05-26, hosted MCP PR CI
+
+Completed in Agent-Talk-MCP:
+
+- Added `.github/workflows/ci.yml` so pull requests and pushes validate the hosted MCP server before review/merge.
+- The CI job runs on Ubuntu with Node 20.x and Node 22.x, installs dependencies with `npm install`, and runs `npm run check`.
+- Pushed Agent-Talk-MCP commit `a03aa8c8bed7213ee3d90f29a7d321ef327f47c7` to `codex/render-mcp-service`.
+- Updated `docs/agenttalk-production-readiness-audit.md` so the repo-state evidence and Render artifact checklist include the new CI workflow.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run check`
+  - TypeScript build passed.
+  - HTTP smoke passed with private-beta bearer auth and 22 MCP tools.
+- Agent-Talk-MCP: `git diff --check`
+
+Still open after hosted MCP PR CI:
+
+- Wait for GitHub Actions to report the new Agent-Talk-MCP CI result on PR `con-urr/Agent-Talk-MCP#1`.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a separate narrow GHCR read credential to Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
