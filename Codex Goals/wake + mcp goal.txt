@@ -2756,3 +2756,38 @@ Still open after Render preflight Windows user API-key fallback:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
 - Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render plugin install verification and guarded create retry
+
+Completed in the local Codex/Render environment:
+
+- Re-ran `render skills install --tool codex --scope user --confirm -o text`; Render CLI reported `Installed 21 skill(s) to 1 tool(s)`.
+- Verified `render whoami` is authenticated as Connor's Render account.
+- Verified `codex mcp list` and `codex mcp get render` show the Render MCP registration enabled as streamable HTTP at `https://mcp.render.com/mcp` using `RENDER_API_KEY`.
+- Verified the current PowerShell process does not inherit `RENDER_API_KEY`, while the Windows user environment does; a Codex Desktop restart is still expected before the current app session exposes Render MCP tools directly.
+- Queried Render inventory and confirmed the target environment still contains only `CrisisTrainingSim`.
+- Checked `CrisisTrainingSim` deploy state and public HTTP response:
+  - latest deploy is `live`;
+  - `curl -I https://crisistrainingsim.onrender.com/` returned HTTP 200;
+  - recent logs show local Redis startup failures and fallback to in-memory session storage.
+- Retried the branch-correct Git-backed Render service creation for the new `agent-talk-mcp` service in environment `evm-d7ampnp4tr6s739q3q9g`.
+- The create retry failed before service creation with: `passed in repository URL is invalid or unfetchable: https://github.com/con-urr/Agent-Talk-MCP`.
+- Re-queried Render inventory after the failed create attempt and confirmed `agent-talk-mcp` was not created and `CrisisTrainingSim` remains untouched.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run preflight:render`
+  - Render CLI auth, Render API auth, Render MCP auth, target project, and target environment pass.
+  - `agent-talk-mcp` remains absent.
+  - GHCR anonymous image pull remains HTTP 401.
+  - Git-backed deploy remains blocked on Render GitHub integration access.
+- pistils_chat_cli: `npm run audit:goal`
+  - repo heads/worktrees, GitHub Actions checks, Render auth/target, and Hermes preflight still pass;
+  - final completion remains blocked by Render source/service/deployed smoke and Hermes credential/real-smoke gates.
+
+Still open after Render plugin install verification and guarded create retry:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a separate narrow GHCR read credential to Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris after one source-access path is available.
+- Run `npm run smoke:deployed` or `npm run audit:goal -- --strict` after deployment so the deployed `/healthz`, `/auth/status`, `/readyz`, and `/mcp` gates are verified.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
