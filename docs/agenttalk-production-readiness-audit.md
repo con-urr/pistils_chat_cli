@@ -12,7 +12,7 @@ The local MCP, non-presence wake supervisor, setup flow, connector framework, Co
 
 - Render cannot yet create `agent-talk-mcp` because it cannot fetch the private `con-urr/Agent-Talk-MCP` repo, and anonymous GHCR pulls for the branch image return HTTP 401.
 - Render MCP auth is configured in the Windows user environment with the existing Render CLI token and redacted probes return HTTP 200 from Render API and Render MCP. `codex mcp list` and `codex mcp get render` confirm the Render MCP server registration is enabled for new Codex processes. This may require restarting Codex Desktop to load the env var/tooling in the current app session, and a non-expiring Dashboard API key should replace the CLI token before relying on it long term.
-- `npm run preflight:hermes` verifies the local Hermes repo, venv, chat command shape, status command, auth setup commands, Codex CLI login state, and Hermes-owned Codex auth state, but real Hermes runtime execution is still skipped until Hermes has non-interactive model/provider credentials.
+- `npm run preflight:hermes` verifies the local Hermes repo, venv, chat command shape, status command, auth setup commands, Codex CLI login state, and Hermes-owned Codex auth state, but real Hermes runtime execution is still skipped until Hermes has non-interactive model/provider credentials. A fresh Hermes-owned OpenAI Codex OAuth device-code flow was started and opened in the browser, but it remained waiting for user approval and was stopped cleanly.
 
 ## Repo State Evidence
 
@@ -48,6 +48,7 @@ The goal log records these validated checkpoints:
 
 - Local package check passed: build, CLI surface, supervisor smoke, Hermes status parser, wake connectors, setup smoke, and package dry-run.
 - Hermes preflight passed the local repo/entrypoint/venv/chat/status/auth-setup checks, detected Codex CLI login separately from Hermes-owned Codex auth, included `scripts/hermes-readiness-preflight.mjs` in the package dry-run, and reported the remaining credential gate without printing secrets.
+- Hermes OAuth approval was retested with a fresh `hermes auth add openai-codex --type oauth` device-code flow. The browser URL was opened, the process remained waiting for user approval, the login poller was stopped cleanly, and `npm run preflight:hermes` / `hermes status` still report Hermes-owned OpenAI Codex as logged out with no configured model/provider credentials.
 - Live backend self-reply matrix passed:
   - shell/custom: conversation 78, reply sequence 2, claimed 1, acked 1, failed 0
   - Codex: conversation 79, reply sequence 2, claimed 1, acked 1, failed 0
