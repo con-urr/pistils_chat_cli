@@ -288,6 +288,154 @@ async function agentTalkMcpActionChecks(branch, head) {
       });
 }
 
+async function githubCommitStatus(repo, head) {
+  return fetchGitHubJson(`/repos/con-urr/${repo}/commits/${head}/status`);
+}
+
+async function githubCommitCheckRuns(repo, head) {
+  return fetchGitHubJson(`/repos/con-urr/${repo}/commits/${head}/check-runs?per_page=30`);
+}
+
+function summarizeCheckRuns(runs) {
+  const result = {};
+  for (const run of runs) {
+    if (!run?.name) {
+      continue;
+    }
+    result[run.name] = {
+      status: run.status,
+      conclusion: run.conclusion,
+      url: run.html_url,
+    };
+  }
+  return result;
+}
+
+async function pistilsChatCliCheckRuns(head) {
+  if (!head) {
+    return check(
+      'fail',
+      'github:pistils_chat_cli_checks',
+      'pistils_chat_cli head is unavailable for GitHub check-run verification'
+    );
+  }
+  let response;
+  try {
+    response = await githubCommitCheckRuns('pistils_chat_cli', head);
+  } catch (error) {
+    return check(
+      'fail',
+      'github:pistils_chat_cli_checks',
+      `GitHub check-run API failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!response.ok) {
+    return check(
+      'fail',
+      'github:pistils_chat_cli_checks',
+      `GitHub check-run API failed with HTTP ${response.status}`
+    );
+  }
+  const runs = Array.isArray(response.json?.check_runs) ? response.json.check_runs : [];
+  const required = ['validate (20)', 'validate (22)'];
+  const missing = required.filter(
+    name =>
+      !runs.some(
+        run =>
+          run?.name === name &&
+          run?.status === 'completed' &&
+          run?.conclusion === 'success'
+      )
+  );
+  return missing.length === 0
+    ? check('pass', 'github:pistils_chat_cli_checks', 'pistils_chat_cli GitHub check-runs passed on the current head', {
+        head,
+        runs: summarizeCheckRuns(runs.filter(run => required.includes(run?.name))),
+      })
+    : check('fail', 'github:pistils_chat_cli_checks', 'pistils_chat_cli GitHub check-runs are not all green on the current head', {
+        head,
+        missing,
+        runs: summarizeCheckRuns(runs),
+      });
+}
+
+async function liveChatDeploymentChecks(head) {
+  if (!head) {
+    return check(
+      'fail',
+      'github:live_chat_checks',
+      'live-chat head is unavailable for GitHub/Vercel status verification'
+    );
+  }
+  let statusResponse;
+  let checksResponse;
+  try {
+    [statusResponse, checksResponse] = await Promise.all([
+      githubCommitStatus('live-chat', head),
+      githubCommitCheckRuns('live-chat', head),
+    ]);
+  } catch (error) {
+    return check(
+      'fail',
+      'github:live_chat_checks',
+      `GitHub status API failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!statusResponse.ok) {
+    return check(
+      'fail',
+      'github:live_chat_checks',
+      `GitHub combined status API failed with HTTP ${statusResponse.status}`
+    );
+  }
+  if (!checksResponse.ok) {
+    return check(
+      'fail',
+      'github:live_chat_checks',
+      `GitHub check-run API failed with HTTP ${checksResponse.status}`
+    );
+  }
+  const statuses = Array.isArray(statusResponse.json?.statuses)
+    ? statusResponse.json.statuses
+    : [];
+  const checkRuns = Array.isArray(checksResponse.json?.check_runs)
+    ? checksResponse.json.check_runs
+    : [];
+  const vercelStatus = statuses.find(
+    item => item?.context === 'Vercel' && item?.state === 'success'
+  );
+  const vercelPreviewComments = checkRuns.find(
+    item =>
+      item?.name === 'Vercel Preview Comments' &&
+      item?.status === 'completed' &&
+      item?.conclusion === 'success'
+  );
+  const state = statusResponse.json?.state;
+  return state === 'success' && vercelStatus && vercelPreviewComments
+    ? check('pass', 'github:live_chat_checks', 'live-chat Vercel status and preview-comment check passed on the current head', {
+        head,
+        combinedState: state,
+        statuses: [
+          {
+            context: vercelStatus.context,
+            state: vercelStatus.state,
+            url: vercelStatus.target_url,
+          },
+        ],
+        runs: summarizeCheckRuns([vercelPreviewComments]),
+      })
+    : check('fail', 'github:live_chat_checks', 'live-chat GitHub/Vercel checks are not green on the current head', {
+        head,
+        combinedState: state ?? 'unknown',
+        statuses: statuses.map(item => ({
+          context: item.context,
+          state: item.state,
+          url: item.target_url,
+        })),
+        runs: summarizeCheckRuns(checkRuns),
+      });
+}
+
 const checks = [];
 const repoStates = {};
 
@@ -345,6 +493,9 @@ for (const [name, repo] of [
       : check('pass', `repo:${name}:tracked_worktree`, `${name} has no tracked worktree changes`)
   );
 }
+
+checks.push(await pistilsChatCliCheckRuns(repoStates.pistils_chat_cli?.head));
+checks.push(await liveChatDeploymentChecks(repoStates['live-chat']?.head));
 
 if (existsSync(agentTalkMcpRepo)) {
   checks.push(

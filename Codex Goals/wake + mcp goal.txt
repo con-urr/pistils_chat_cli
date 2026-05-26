@@ -2651,3 +2651,32 @@ Still open after hosted MCP GitHub Actions audit gate:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
 - Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, all-repo GitHub check audit gate
+
+Completed in pistils_chat_cli:
+
+- Expanded `scripts/audit-goal.mjs` beyond hosted MCP Actions verification.
+- Added `github:pistils_chat_cli_checks`, requiring current-head GitHub check-runs:
+  - `validate (20)`;
+  - `validate (22)`.
+- Added `github:live_chat_checks`, requiring current-head live-chat GitHub/Vercel evidence:
+  - combined commit status is `success`;
+  - Vercel status context is `success`;
+  - `Vercel Preview Comments` check-run is `success`.
+- Kept `github:agent_talk_mcp_actions` for hosted MCP CI pull_request, CI push, and image publish runs.
+- Updated `docs/agenttalk-production-readiness-audit.md` so the validation matrix and final audit description cover all three repos' current-head hosted check evidence.
+
+Current result:
+
+- `npm run audit:goal` reports:
+  - `github:pistils_chat_cli_checks` pass for head `f626b1818e946f3eb9ff00a6329b284ed3541caf`;
+  - `github:live_chat_checks` pass for head `7e0a759935f2856d618f76983c4a4cce0d7adb80`;
+  - `github:agent_talk_mcp_actions` pass for head `a03aa8c8bed7213ee3d90f29a7d321ef327f47c7`.
+
+Still open after all-repo GitHub check audit gate:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a separate narrow GHCR read credential to Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
