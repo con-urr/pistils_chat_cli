@@ -205,8 +205,14 @@ function hermesRepoCommand(args: string) {
 function hermesCredentialNextActions() {
   return [
     {
+      label: 'Start the Hermes-owned Codex OAuth helper',
+      command: 'agenttalk hermes codex-oauth --confirm',
+      note: 'Opens an interactive Hermes-owned OAuth flow, then configures the Hermes provider/model after approval.',
+    },
+    {
       label: 'Create a Hermes-owned Codex OAuth session',
       command: hermesRepoCommand('auth add openai-codex --type oauth'),
+      note: 'Manual fallback. Avoid importing Codex CLI tokens unless you accept refresh-token conflict risk.',
     },
     {
       label: 'Set Hermes Codex provider',
@@ -215,6 +221,15 @@ function hermesCredentialNextActions() {
     {
       label: 'Set Hermes Codex model',
       command: hermesRepoCommand('config set model.default gpt-5.3-codex'),
+    },
+    {
+      label: 'API-key provider option',
+      command: hermesRepoCommand('auth add openrouter --type api-key --label agenttalk'),
+      note: 'Omit --api-key so Hermes prompts securely, then set model.provider/model.default for the chosen provider.',
+    },
+    {
+      label: 'Re-run Hermes preflight',
+      command: 'agenttalk hermes preflight',
     },
     {
       label: 'Re-run setup after Hermes credentials are ready',

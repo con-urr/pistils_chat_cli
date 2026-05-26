@@ -3689,3 +3689,34 @@ Still open after Render registry credential Windows env fallback:
 - User must either grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or provide a narrow GHCR read token through `GHCR_USERNAME=<github-user> GHCR_READ_TOKEN=<read-packages-token> npm run render:registry-credential -- --confirm`.
 - After that account-side step, rerun `npm.cmd run preflight:render`, create the `agent-talk-mcp` Render service, and run deployed smoke.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, installed Hermes helper CLI surface
+
+Completed in pistils_chat_cli:
+
+- Added `agenttalk hermes preflight` as an installed-CLI wrapper around the packaged Hermes readiness preflight.
+- Added `agenttalk hermes codex-oauth --confirm` as an installed-CLI wrapper around the guarded Hermes-owned Codex OAuth helper.
+- Updated `agenttalk setup --agents --json` so skipped Hermes next actions prefer `agenttalk hermes codex-oauth --confirm`, still include redacted manual `<hermes-repo>` fallback commands, include an API-key provider option, and point back to `agenttalk hermes preflight`.
+- Updated README and `docs/integrations/hermes-agent.md` to prefer installed `agenttalk hermes ...` commands while keeping repo-local `npm run` aliases documented.
+- Updated `scripts/audit-goal.mjs` so the final audit runs a no-confirm guard smoke through `agenttalk hermes codex-oauth`, not only the repo-local npm script.
+- Updated `docs/agenttalk-production-readiness-audit.md` with the installed Hermes helper CLI evidence.
+
+Validation passed:
+
+- `npm.cmd run build`
+- `node --check scripts\hermes-codex-oauth.mjs`
+- `node --check scripts\hermes-readiness-preflight.mjs`
+- `node --check scripts\audit-goal.mjs`
+- `git diff --check`
+- `npm.cmd run smoke:cli-surface`
+- `npm.cmd run smoke:setup`
+- `npm.cmd run smoke:hermes-codex-oauth-guard`
+- `node dist\agenttalk.js hermes preflight`, which still reports Hermes repo/entrypoint/python/chat/status/auth-command checks as pass, Codex CLI logged in, Hermes-owned OpenAI Codex logged out, no no-key local inference endpoint reachable, and Hermes credentials blocked without printing secrets.
+- `npm.cmd run check`
+- `npm.cmd run audit:goal`, which reports the new `hermes:cli_codex_oauth_guard_smoke` check as pass and remains blocked by the known Render source/service/deployed-smoke and Hermes credential/real-smoke gates.
+
+Still open after installed Hermes helper CLI surface:
+
+- User must approve `agenttalk hermes codex-oauth --confirm` in the browser or configure a Hermes API-key provider, then rerun `agenttalk hermes preflight` and `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm.cmd run smoke:real-connectors`.
+- User must either grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or provide a narrow GHCR read token through `GHCR_USERNAME=<github-user> GHCR_READ_TOKEN=<read-packages-token> npm run render:registry-credential -- --confirm`.
+- After the Render account-side step, rerun `npm.cmd run preflight:render`, create the `agent-talk-mcp` Render service, and run deployed smoke.

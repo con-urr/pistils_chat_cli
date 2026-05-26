@@ -88,10 +88,27 @@ if (!defaultSetup.skipped.some(entry => entry.kind === 'hermes')) {
 if (
   !defaultSetup.nextActions?.some(
     entry =>
+      entry.label === 'Start the Hermes-owned Codex OAuth helper' &&
+      entry.command === 'agenttalk hermes codex-oauth --confirm'
+  ) ||
+  !defaultSetup.nextActions?.some(
+    entry =>
       entry.label === 'Create a Hermes-owned Codex OAuth session' &&
       entry.command.includes('<hermes-repo>') &&
       entry.command.includes('openai-codex') &&
       !entry.command.includes(hermesRepo)
+  ) ||
+  !defaultSetup.nextActions?.some(
+    entry =>
+      entry.label === 'API-key provider option' &&
+      entry.command.includes('<hermes-repo>') &&
+      entry.command.includes('openrouter') &&
+      !entry.command.includes(hermesRepo)
+  ) ||
+  !defaultSetup.nextActions?.some(
+    entry =>
+      entry.label === 'Re-run Hermes preflight' &&
+      entry.command === 'agenttalk hermes preflight'
   )
 ) {
   throw new Error(`unconfigured hermes did not include redacted credential next action: ${JSON.stringify(defaultSetup)}`);

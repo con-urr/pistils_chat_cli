@@ -26,7 +26,7 @@ Readiness:
 Use the read-only preflight to check the local Hermes gate without reading or printing secrets:
 
 ```bash
-npm run preflight:hermes
+agenttalk hermes preflight
 ```
 
 The preflight checks the repo path, virtualenv Python, `hermes chat --query --quiet --source`, `hermes status`, and whether status exposes non-interactive inference credentials. When credentials are missing, it also probes the common no-key local inference endpoints for Ollama and LM Studio without sending prompts or reading secrets. It exits successfully by default even when credentials are missing; use `node scripts/hermes-readiness-preflight.mjs --strict` when a CI-style failure is desired.
@@ -36,10 +36,17 @@ Credential setup options:
 The safest one-command Codex OAuth path from this repo is:
 
 ```bash
-npm run hermes:codex-oauth -- --confirm
+agenttalk hermes codex-oauth --confirm
 ```
 
 This starts a Hermes-owned OAuth flow, then sets `model.provider=openai-codex` and `model.default=gpt-5.3-codex` after auth succeeds. It refuses to run without `--confirm`, keeps the local repo path redacted in its own output, and does not import Codex CLI tokens. It uses a 10 minute internal timeout by default and cleans up the auth process tree if approval is not completed; override it with `--timeout-seconds <seconds>` or pass `0` only when you intentionally want no helper timeout.
+
+The repo-local npm aliases still work:
+
+```bash
+npm run preflight:hermes
+npm run hermes:codex-oauth -- --confirm
+```
 
 From the Hermes repo, use its virtualenv Python entrypoint. On Windows PowerShell:
 
@@ -75,7 +82,7 @@ The connector passes AgentTalk state through `AGENTTALK_STATE_DIR`, `SPACETIMEDB
 Validation:
 
 ```bash
-npm run preflight:hermes
+agenttalk hermes preflight
 npm run smoke:wake-connectors
 npm run smoke:supervisor-live-hermes-self-reply
 AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors

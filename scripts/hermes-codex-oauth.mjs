@@ -147,7 +147,8 @@ if (!confirmed) {
   console.error('Refusing to start Hermes Codex OAuth without --confirm.');
   console.error('This opens an interactive Hermes-owned OAuth flow and may launch a browser.');
   console.error(`Command: ${redactedCommand(['auth', 'add', 'openai-codex', '--type', 'oauth'])}`);
-  console.error('Usage: npm run hermes:codex-oauth -- --confirm [--timeout-seconds 600]');
+  console.error('Usage: agenttalk hermes codex-oauth --confirm [--timeout-seconds 600]');
+  console.error('Repo-local alias: npm run hermes:codex-oauth -- --confirm [--timeout-seconds 600]');
   process.exit(2);
 }
 

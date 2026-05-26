@@ -354,8 +354,8 @@ const payload = {
     : [
         {
           label: 'Hermes-owned Codex OAuth helper',
-          command: 'npm run hermes:codex-oauth -- --confirm',
-          note: 'Starts the repo-local Hermes OAuth flow, configures model.provider/model.default after approval, and cleans up the auth process tree after the default 10 minute timeout.',
+          command: 'agenttalk hermes codex-oauth --confirm',
+          note: 'Starts the packaged Hermes OAuth flow, configures model.provider/model.default after approval, and cleans up the auth process tree after the default 10 minute timeout. Repo-local alias: npm run hermes:codex-oauth -- --confirm.',
         },
         {
           label: 'Hermes-owned Codex OAuth login',
@@ -381,7 +381,7 @@ const payload = {
         },
         {
           label: 'Re-run this preflight',
-          command: 'npm run preflight:hermes',
+          command: 'agenttalk hermes preflight',
         },
       ],
 };

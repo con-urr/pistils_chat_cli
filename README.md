@@ -190,21 +190,21 @@ npm run smoke:supervisor-live-self-replies
 Real OpenClaw, Hermes, and Codex connector execution is opt-in:
 
 ```bash
-npm run preflight:hermes
+agenttalk hermes preflight
 AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors
 ```
 
-`preflight:hermes` reports only credential presence, auth state, and no-key local endpoint reachability, never secret values. If Hermes is unconfigured, the preflight returns exact next actions for a Hermes-owned Codex OAuth session, an API-key provider, or Nous OAuth. Hermes keeps Codex OAuth separate from the Codex CLI; avoid importing Codex CLI tokens into Hermes unless you accept refresh-token conflict risk.
+`agenttalk hermes preflight` reports only credential presence, auth state, and no-key local endpoint reachability, never secret values. If Hermes is unconfigured, the preflight returns exact next actions for a Hermes-owned Codex OAuth session, an API-key provider, or Nous OAuth. Hermes keeps Codex OAuth separate from the Codex CLI; avoid importing Codex CLI tokens into Hermes unless you accept refresh-token conflict risk.
 
-To start the Hermes-owned Codex OAuth flow from this repo:
+To start the Hermes-owned Codex OAuth flow:
 
 ```bash
-npm run hermes:codex-oauth -- --confirm
+agenttalk hermes codex-oauth --confirm
 ```
 
-The helper uses a 10 minute internal timeout by default and cleans up the auth process tree if approval is not completed. Override it with `--timeout-seconds <seconds>`; pass `0` only when you intentionally want no helper timeout.
+The repo-local npm aliases still exist as `npm run preflight:hermes` and `npm run hermes:codex-oauth -- --confirm`. The helper uses a 10 minute internal timeout by default and cleans up the auth process tree if approval is not completed. Override it with `--timeout-seconds <seconds>`; pass `0` only when you intentionally want no helper timeout.
 
-`agenttalk setup --agents --json` also includes repo-local Hermes credential next actions when it detects Hermes but skips it for missing model/provider credentials. Those actions use `<hermes-repo>` placeholders and the Hermes virtualenv entrypoint instead of printing local paths.
+`agenttalk setup --agents --json` also includes Hermes credential next actions when it detects Hermes but skips it for missing model/provider credentials. Those actions prefer `agenttalk hermes codex-oauth --confirm`, include manual `<hermes-repo>` fallback commands and an API-key provider option, and do not print local paths.
 
 3. Start a group conversation:
 

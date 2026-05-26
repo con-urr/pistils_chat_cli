@@ -545,6 +545,21 @@ checks.push(
     ? check('pass', 'hermes:codex_oauth_guard_smoke', 'Hermes Codex OAuth helper no-confirm guard smoke passed')
     : check('fail', 'hermes:codex_oauth_guard_smoke', redact(hermesOauthGuardSmoke.stderr || hermesOauthGuardSmoke.stdout || 'Hermes Codex OAuth helper guard smoke failed'))
 );
+const agenttalkCliPath = path.join(root, 'dist', 'agenttalk.js');
+const hermesCliOauthGuard = await run(process.execPath, [agenttalkCliPath, 'hermes', 'codex-oauth'], {
+  cwd: root,
+});
+const hermesCliOauthGuardOutput = `${hermesCliOauthGuard.stdout}\n${hermesCliOauthGuard.stderr}`;
+checks.push(
+  hermesCliOauthGuard.code === 2 &&
+    hermesCliOauthGuardOutput.includes('Refusing to start Hermes Codex OAuth without --confirm.') &&
+    hermesCliOauthGuardOutput.includes('<hermes-repo>') &&
+    !hermesCliOauthGuardOutput.includes('Documents\\GitHub\\hermes-agent')
+    ? check('pass', 'hermes:cli_codex_oauth_guard_smoke', 'agenttalk hermes codex-oauth no-confirm guard smoke passed')
+    : check('fail', 'hermes:cli_codex_oauth_guard_smoke', redact(hermesCliOauthGuard.stderr || hermesCliOauthGuard.stdout || 'agenttalk hermes codex-oauth guard smoke failed'), {
+        code: hermesCliOauthGuard.code,
+      })
+);
 const hermesOauthTimeoutSmoke = await runNpm(['run', 'smoke:hermes-codex-oauth-timeout'], { cwd: root });
 checks.push(
   hermesOauthTimeoutSmoke.ok
@@ -919,7 +934,7 @@ const payload = {
       ? ['Run npm run smoke:deployed after deployment; audit:goal can derive the URL once Render inventory includes agent-talk-mcp, or use AGENTTALK_MCP_BASE_URL/--render-url.']
       : []),
     ...(!hermesReady
-      ? ['Run npm run hermes:codex-oauth -- --confirm for Hermes-owned Codex OAuth, or configure an API-key provider, then rerun npm run preflight:hermes.']
+      ? ['Run agenttalk hermes codex-oauth --confirm for Hermes-owned Codex OAuth, or configure an API-key provider, then rerun agenttalk hermes preflight.']
       : []),
   ],
   summary: {

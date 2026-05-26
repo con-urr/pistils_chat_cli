@@ -529,6 +529,8 @@ Usage:
   agenttalk wake ack <wake-id> [--attempt-id <id>] [--json]
   agenttalk wake fail <wake-id> --error <text> [--retry-after-ms <n>] [--json]
   agenttalk setup --agents [--dry-run] [--json]
+  agenttalk hermes preflight [--strict] [--repo <hermes-repo>]
+  agenttalk hermes codex-oauth --confirm [--timeout-seconds 600] [--repo <hermes-repo>]
   agenttalk mcp [serve|stdio] [--transport stdio]
   agenttalk mcp config [--client codex|claude|cursor|all] [--dev] [--url https://<service>/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN] [--json]
   agenttalk mcp install-codex [--name agenttalk] [--dev] [--url https://<service>/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN] [--dry-run] [--json]
@@ -541,7 +543,7 @@ Usage:
 Open beta supported daemon-first commands:
   init, whoami, doctor, daemon start/status/stop/doctor
   find, chat, reply, group start, inbox, listen --conversation, transcript --conversation
-  conversation list/start/group/add/send/messages, wake status/on/off/register/policy/listen/claim/ack/fail, setup, mcp, supervisor
+  conversation list/start/group/add/send/messages, wake status/on/off/register/policy/listen/claim/ack/fail, setup, hermes, mcp, supervisor
 
 Experimental/dev surfaces:
   room/thread/task/handoff/event/watch/serve and account operator tools are available but are not the primary open-beta hot path.
@@ -837,6 +839,42 @@ function runToolCommand(command: string, args: string[]) {
     child.on('error', reject);
     child.on('close', code => {
       resolve({ stdout, stderr, code });
+    });
+  });
+}
+
+function flagsToArgs(flags: Flags) {
+  const args: string[] = [];
+  for (const [key, value] of Object.entries(flags)) {
+    if (value === true) {
+      args.push(`--${key}`);
+    } else if (typeof value === 'string') {
+      args.push(`--${key}`, value);
+    }
+  }
+  return args;
+}
+
+function packagedScriptPath(fileName: string) {
+  return path.resolve(__dirname, '..', 'scripts', fileName);
+}
+
+async function runPackagedNodeScript(fileName: string, args: string[]) {
+  const scriptPath = packagedScriptPath(fileName);
+  if (!existsSync(scriptPath)) {
+    throw new Error(`Packaged helper script was not found: ${fileName}`);
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptPath, ...args], {
+      stdio: 'inherit',
+      windowsHide: false,
+      env: process.env,
+    });
+    child.on('error', reject);
+    child.on('close', code => {
+      process.exitCode = code ?? 1;
+      resolve();
     });
   });
 }
@@ -2482,6 +2520,34 @@ async function commandMcp(flags: Flags, positionals: string[]) {
   }
   const { runAgentTalkMcpServer } = await import('./mcp/server');
   await runAgentTalkMcpServer();
+}
+
+async function commandHermes(flags: Flags, positionals: string[]) {
+  const subcommand = positionals[0] ?? 'help';
+  const helperArgs = [...positionals.slice(1), ...flagsToArgs(flags)];
+
+  if (subcommand === 'help' || subcommand === '--help') {
+    writeStdout(`agenttalk hermes
+
+Usage:
+  agenttalk hermes preflight [--strict] [--repo <hermes-repo>]
+  agenttalk hermes codex-oauth --confirm [--timeout-seconds 600] [--repo <hermes-repo>]
+
+These commands wrap the packaged Hermes readiness and Codex OAuth helpers. They do not print local repo paths or secret values.`);
+    return;
+  }
+
+  if (subcommand === 'preflight' || subcommand === 'readiness') {
+    await runPackagedNodeScript('hermes-readiness-preflight.mjs', helperArgs);
+    return;
+  }
+
+  if (subcommand === 'codex-oauth' || subcommand === 'oauth') {
+    await runPackagedNodeScript('hermes-codex-oauth.mjs', helperArgs);
+    return;
+  }
+
+  throw new Error(`Unknown Hermes command: ${subcommand}`);
 }
 
 async function commandGroup(flags: Flags, positionals: string[], state: AgenttalkState) {
@@ -7797,6 +7863,11 @@ async function main() {
   if (command === 'setup') {
     const { runSetupCommand } = await import('./setup');
     await runSetupCommand(flags);
+    return;
+  }
+
+  if (command === 'hermes') {
+    await commandHermes(flags, positionals);
     return;
   }
 

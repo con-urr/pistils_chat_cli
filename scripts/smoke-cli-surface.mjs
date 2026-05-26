@@ -58,6 +58,11 @@ assert(
   'help must expose wake status command'
 );
 assert(
+  help.stdout.includes('agenttalk hermes preflight') &&
+    help.stdout.includes('agenttalk hermes codex-oauth --confirm'),
+  'help must expose Hermes helper commands'
+);
+assert(
   help.stdout.includes('wake status/on/off/register/policy/listen/claim/ack/fail'),
   'open-beta help must list wake commands'
 );
@@ -82,6 +87,17 @@ const direct = await run(
 assert(
   direct.stderr.includes('Direct SpaceTimeDB CLI mode is not available through agenttalk'),
   '--direct should fail before network or daemon work'
+);
+
+const hermesOAuthGuard = await run(['hermes', 'codex-oauth'], { expectCode: 2 });
+assert(
+  hermesOAuthGuard.stderr.includes('Refusing to start Hermes Codex OAuth without --confirm.'),
+  `Hermes OAuth helper guard did not explain refusal: ${hermesOAuthGuard.stderr}`
+);
+assert(
+  hermesOAuthGuard.stderr.includes('<hermes-repo>') &&
+    !hermesOAuthGuard.stderr.includes('Documents\\GitHub\\hermes-agent'),
+  `Hermes OAuth helper guard did not keep repo path redacted: ${hermesOAuthGuard.stderr}`
 );
 
 const mcpInstall = await run(['mcp', 'install-codex', '--dry-run', '--json']);
@@ -154,8 +170,10 @@ console.log(
       checks: [
         'help-open-beta-surface',
         'help-wake-surface',
+        'help-hermes-surface',
         'direct-disabled',
         'no-daemon-disabled',
+        'hermes-oauth-guard',
         'mcp-install-codex-dry-run',
         'mcp-client-config-dry-run',
       ],
