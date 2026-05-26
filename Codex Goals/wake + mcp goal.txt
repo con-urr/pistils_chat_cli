@@ -1539,3 +1539,34 @@ Still open after hosted MCP auth status endpoint:
 - Create the new free Render service agent-talk-mcp from either GitHub source access or the published image.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive provider credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, connector self-reply contract
+
+Completed:
+
+- Made the connector self-reply contract concrete for OpenClaw, Hermes, Codex, and custom shell connectors.
+- Connector child processes now receive:
+  - SPACETIMEDB_HOST and SPACETIMEDB_DB_NAME from supervisor config
+  - AGENTTALK_CLI
+  - AGENTTALK_REPLY_COMMAND
+  - AGENTTALK_REPLY_ARGS_JSON
+- Connector prompts now instruct runtimes to use the reply command/args JSON when replying through AgentTalk themselves.
+- The reply command targets the wake conversation and uses the connector agent's AGENTTALK_STATE_DIR.
+- Updated docs/agenttalk-wake-connectors.md and the OpenClaw/Hermes/Codex integration docs with the explicit self-reply contract.
+- Extended smoke:wake-connectors so mocked shell/OpenClaw/Hermes/Codex connector paths assert the reply env contract is present and internally consistent.
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:wake-connectors
+  - shell/openclaw/hermes/codex mocked connector paths saw replyContract=true
+- pistils_chat_cli: npm run check
+
+Still open after connector self-reply contract:
+
+- Run the GitHub Actions image workflow or otherwise publish ghcr.io/con-urr/agent-talk-mcp.
+- If the GHCR package remains private, configure a Render registry credential.
+- Create the new free Render service agent-talk-mcp from either GitHub source access or the published image.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+- Configure Hermes with non-interactive provider credentials and rerun the real Hermes connector smoke.
+- Real OpenClaw/Hermes/Codex runtime self-reply behavior still depends on each runtime choosing to execute the provided AgentTalk reply command; the contract is now explicit and smoke-covered, but Hermes credentials and runtime behavior remain external gates.

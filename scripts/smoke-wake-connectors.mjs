@@ -7,7 +7,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const supervisor = path.join(root, 'dist', 'agenttalk-supervisor.js');
 const home = path.join(os.tmpdir(), `agenttalk-wake-connectors-smoke-${process.pid}-${Date.now()}`);
-const mockCommand = `${JSON.stringify(process.execPath)} -e "process.stdout.write(JSON.stringify({ok:true,handled:true,replySent:false,message:'mock connector handled wake',metadata:{mock:true}}))"`;
+const mockCode = [
+  "const required=['AGENTTALK_STATE_DIR','AGENTTALK_CONVERSATION_ID','AGENTTALK_CLI','AGENTTALK_REPLY_COMMAND','AGENTTALK_REPLY_ARGS_JSON','SPACETIMEDB_HOST','SPACETIMEDB_DB_NAME'];",
+  "const missing=required.filter(name=>!process.env[name]);",
+  "if(missing.length){process.stderr.write('missing env: '+missing.join(','));process.exit(2);}",
+  "const replyArgs=JSON.parse(process.env.AGENTTALK_REPLY_ARGS_JSON);",
+  "if(replyArgs.conversationId!==process.env.AGENTTALK_CONVERSATION_ID){process.stderr.write('reply args conversationId mismatch');process.exit(3);}",
+  "process.stdout.write(JSON.stringify({ok:true,handled:true,replySent:false,message:'mock connector handled wake',metadata:{mock:true,replyContract:true,hostFromSupervisor:process.env.SPACETIMEDB_HOST}}));",
+].join('');
+const mockCommand = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(mockCode)}`;
 
 function run(args) {
   return new Promise((resolve, reject) => {
@@ -74,7 +82,14 @@ for (const testCase of cases) {
   if (wake.ok !== true || wake.result?.handled !== true) {
     throw new Error(`unexpected ${testCase.kind} result: ${JSON.stringify(wake)}`);
   }
-  results.push({ kind: testCase.kind, handled: wake.result.handled });
+  if (testCase.command && wake.result?.metadata?.replyContract !== true) {
+    throw new Error(`missing reply contract metadata for ${testCase.kind}: ${JSON.stringify(wake)}`);
+  }
+  results.push({
+    kind: testCase.kind,
+    handled: wake.result.handled,
+    replyContract: testCase.command ? wake.result.metadata.replyContract === true : undefined,
+  });
 }
 
 console.log(JSON.stringify({ ok: true, results }));

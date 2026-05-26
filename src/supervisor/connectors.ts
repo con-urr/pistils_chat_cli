@@ -48,6 +48,28 @@ type ProcessResult = {
 
 const MAX_CAPTURE_BYTES = 1024 * 1024;
 
+function agenttalkCliPath() {
+  return path.resolve(__dirname, '..', 'agenttalk.js');
+}
+
+function commandLineFromArgs(args: string[]) {
+  return args
+    .map(arg => (/^[A-Za-z0-9_./:=@+-]+$/.test(arg) ? arg : `"${arg.replace(/"/g, '\\"')}"`))
+    .join(' ');
+}
+
+function replyCommandArgs(input: WakeConnectorInput) {
+  return [
+    process.execPath,
+    agenttalkCliPath(),
+    'reply',
+    input.wake.conversationId.toString(),
+    '--message',
+    '<message>',
+    '--json',
+  ];
+}
+
 function truncateText(value: string, max = 4000) {
   if (value.length <= max) {
     return value;
@@ -76,10 +98,11 @@ ${messages}
 
 Instructions:
 - Decide whether you need to reply.
-- If replying, use AgentTalk through the provided state dir or configured MCP/CLI.
-- Do not reveal secrets or local paths.
+- If replying yourself, send through AgentTalk with AGENTTALK_REPLY_COMMAND or AGENTTALK_REPLY_ARGS_JSON.
+- Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
+- Do not reveal secrets, env values, or local paths in user-facing replies.
 - Return or print a structured connector result JSON when possible:
-  {"ok":true,"handled":true,"replySent":false,"message":"..."}
+  {"ok":true,"handled":true,"replySent":true,"message":"replied through AgentTalk"}
 `;
 }
 
@@ -94,6 +117,7 @@ function connectorEnv(
   }
 ) {
   const openclawAgentId = process.env.OPENCLAW_AGENT_ID ?? agent.connector?.openclawAgentId ?? agent.name;
+  const replyArgs = replyCommandArgs(input);
   return {
     ...process.env,
     AGENTTALK_WAKE_ID: input.wake.wakeId,
@@ -108,6 +132,17 @@ function connectorEnv(
     AGENTTALK_STATE_DIR: input.stateDir,
     AGENTTALK_HOST: config.host,
     AGENTTALK_DB: config.databaseName,
+    SPACETIMEDB_HOST: config.host,
+    SPACETIMEDB_DB_NAME: config.databaseName,
+    AGENTTALK_CLI: agenttalkCliPath(),
+    AGENTTALK_REPLY_COMMAND: commandLineFromArgs(replyArgs),
+    AGENTTALK_REPLY_ARGS_JSON: JSON.stringify({
+      command: replyArgs[0],
+      args: replyArgs.slice(1),
+      messagePlaceholder: '<message>',
+      conversationId: input.wake.conversationId.toString(),
+      requiredEnv: ['AGENTTALK_STATE_DIR', 'SPACETIMEDB_HOST', 'SPACETIMEDB_DB_NAME'],
+    }),
     AGENTTALK_WAKE_INPUT_JSON: paths.inputPath,
     AGENTTALK_WAKE_CONTEXT_JSON: paths.contextJson,
     AGENTTALK_WAKE_PAYLOAD_JSON: paths.payloadJson,

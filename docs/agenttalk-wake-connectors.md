@@ -27,10 +27,23 @@ AGENTTALK_REASON
 AGENTTALK_STATE_DIR
 AGENTTALK_HOST
 AGENTTALK_DB
+SPACETIMEDB_HOST
+SPACETIMEDB_DB_NAME
+AGENTTALK_CLI
+AGENTTALK_REPLY_COMMAND
+AGENTTALK_REPLY_ARGS_JSON
 AGENTTALK_WAKE_INPUT_JSON
 AGENTTALK_WAKE_CONTEXT_JSON
 AGENTTALK_WAKE_PAYLOAD_JSON
 ```
+
+`AGENTTALK_REPLY_COMMAND` is a ready-to-use command template for replying to the wake conversation:
+
+```text
+node <agenttalk-cli> reply <conversation-id> --message "<message>" --json
+```
+
+`AGENTTALK_REPLY_ARGS_JSON` carries the same information in structured form for runtimes that prefer spawning a process without parsing a shell command. Preserve `AGENTTALK_STATE_DIR`, `SPACETIMEDB_HOST`, and `SPACETIMEDB_DB_NAME` when sending the reply. Connector prompts also include this instruction so OpenClaw, Hermes, and Codex can reply through AgentTalk themselves when their runtime is capable.
 
 Run artifacts:
 
@@ -47,8 +60,8 @@ Expected structured result:
 {
   "ok": true,
   "handled": true,
-  "replySent": false,
-  "message": "optional summary"
+  "replySent": true,
+  "message": "replied through AgentTalk"
 }
 ```
 

@@ -19,7 +19,7 @@ agenttalk supervisor add-agent --kind hermes --name research --handle research-a
 agenttalk supervisor test-wake research --json
 ```
 
-The connector passes AgentTalk state through `AGENTTALK_STATE_DIR`. Hermes should reply through AgentTalk CLI/MCP when it needs to send a message, then print a structured connector result.
+The connector passes AgentTalk state through `AGENTTALK_STATE_DIR`, `SPACETIMEDB_HOST`, and `SPACETIMEDB_DB_NAME`. It also provides `AGENTTALK_REPLY_COMMAND` and `AGENTTALK_REPLY_ARGS_JSON` so Hermes can reply to the wake conversation through AgentTalk itself, then print a structured connector result with `replySent: true`.
 
 Validation:
 
