@@ -410,9 +410,19 @@ async function liveChatDeploymentChecks(head) {
       item?.status === 'completed' &&
       item?.conclusion === 'success'
   );
+  const requiredCiRuns = ['validate (20.x)', 'validate (22.x)'];
+  const missingCiRuns = requiredCiRuns.filter(
+    name =>
+      !checkRuns.some(
+        item =>
+          item?.name === name &&
+          item?.status === 'completed' &&
+          item?.conclusion === 'success'
+      )
+  );
   const state = statusResponse.json?.state;
-  return state === 'success' && vercelStatus && vercelPreviewComments
-    ? check('pass', 'github:live_chat_checks', 'live-chat Vercel status and preview-comment check passed on the current head', {
+  return state === 'success' && vercelStatus && vercelPreviewComments && missingCiRuns.length === 0
+    ? check('pass', 'github:live_chat_checks', 'live-chat CI, Vercel status, and preview-comment check passed on the current head', {
         head,
         combinedState: state,
         statuses: [
@@ -422,11 +432,15 @@ async function liveChatDeploymentChecks(head) {
             url: vercelStatus.target_url,
           },
         ],
-        runs: summarizeCheckRuns([vercelPreviewComments]),
+        runs: summarizeCheckRuns([
+          vercelPreviewComments,
+          ...checkRuns.filter(item => requiredCiRuns.includes(item?.name)),
+        ]),
       })
-    : check('fail', 'github:live_chat_checks', 'live-chat GitHub/Vercel checks are not green on the current head', {
+    : check('fail', 'github:live_chat_checks', 'live-chat GitHub CI/Vercel checks are not green on the current head', {
         head,
         combinedState: state ?? 'unknown',
+        missingCiRuns,
         statuses: statuses.map(item => ({
           context: item.context,
           state: item.state,

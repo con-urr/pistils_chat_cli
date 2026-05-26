@@ -2680,3 +2680,43 @@ Still open after all-repo GitHub check audit gate:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
 - Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, live-chat CI and audit hardening
+
+Completed in live-chat:
+
+- Added `.github/workflows/ci.yml` for the wake-presence/backend PR.
+- CI runs on Node 20.x and Node 22.x for pull requests and pushes to `main` / `codex/agenttalk-wake-presence`.
+- The workflow runs:
+  - `npm ci`;
+  - `npm run build`;
+  - `npx tsc -p spacetimedb/tsconfig.json`;
+  - `npm run agenttalk:pkg:check`;
+  - `npm test`.
+- Pushed live-chat commit `37193cccd20dd93eca6424d771a05689d729aacc`.
+- GitHub Actions completed successfully:
+  - pull_request run `26441345242`;
+  - push run `26441344896`.
+
+Completed in pistils_chat_cli:
+
+- Tightened `scripts/audit-goal.mjs` so `github:live_chat_checks` now requires live-chat CI check-runs:
+  - `validate (20.x)`;
+  - `validate (22.x)`.
+- Kept the existing live-chat Vercel status and `Vercel Preview Comments` checks.
+- Updated `docs/agenttalk-production-readiness-audit.md` with the new live-chat head and CI evidence.
+
+Validation passed:
+
+- live-chat: `npm run build`
+- live-chat: `npx tsc -p spacetimedb/tsconfig.json`
+- live-chat: `npm run agenttalk:pkg:check`
+- live-chat: `npm test`
+- live-chat: `git diff --check`
+
+Still open after live-chat CI and audit hardening:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a separate narrow GHCR read credential to Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
