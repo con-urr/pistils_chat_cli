@@ -2980,6 +2980,27 @@ Still open after pistils CI event repair attempt:
 - Current-head pistils GitHub checks remain blocked with no check-suite created by GitHub.
 - Avoid blind sync commits; the next likely repair is to update/merge the default-branch workflow so it can run branch pushes or manual dispatches, or rerun from the GitHub UI with the workflow definition available on `main`.
 
+Work log - 2026-05-26, pistils CI manual-dispatch probe
+
+Completed in pistils_chat_cli:
+
+- Added `workflow_dispatch` to `.github/workflows/ci.yml` on `codex/agenttalk-mcp-supervisor`.
+- Validated locally with `npm run check` and `git diff --check`.
+- Committed and pushed `3cd91806b4658b6b42ae368c19e0d7fe522c3b5a` (`Allow manual pistils CI dispatch`).
+
+Manual dispatch probe:
+
+- Called GitHub Actions workflow dispatch for `ci.yml` with `ref=codex/agenttalk-mcp-supervisor`.
+- Retried with workflow ID `238895942` and an explicit empty `inputs` object.
+- Both dispatch attempts returned GitHub HTTP 500.
+- After waiting, GitHub still had no check-runs on `3cd91806b4658b6b42ae368c19e0d7fe522c3b5a`; latest visible pistils CI workflow run remained `26447404260` on `56a9664650761d00753a1098b3d34de55766b3d5`.
+
+Still open after pistils CI manual-dispatch probe:
+
+- Current-head pistils GitHub checks remain blocked with no check-suite created by GitHub.
+- Keep `workflow_dispatch` in the branch so CI can be manually run once GitHub accepts dispatches for this workflow/ref or once the workflow definition is available on `main`.
+- Do not fabricate check-runs; the audit should continue to fail `github:pistils_chat_cli_checks` until real `validate (20)` and `validate (22)` runs exist on the current head.
+
 Work log - 2026-05-26, Hermes OAuth default-timeout post-push audit
 
 Completed in pistils_chat_cli:
