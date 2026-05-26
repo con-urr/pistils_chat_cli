@@ -2986,3 +2986,29 @@ Still open after Render create guard CI coverage:
 - Run deployed MCP smoke after service creation.
 - Wait for the Agent-Talk-MCP GitHub CI/image workflows on commit `2e98b00`, then rerun the top-level goal audit.
 - Complete Hermes credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, top-level audit covers Render create guard
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/audit-goal.mjs` so `npm run audit:goal` explicitly verifies the Render deploy safety artifacts in Agent-Talk-MCP.
+- Added audit checks for:
+  - `render:create_guard_artifacts`, verifying `scripts/render-create-service.mjs`, `scripts/smoke-render-create-guard.mjs`, `render:create`, `smoke:render-create-guard`, and `npm run check` wiring;
+  - `render:create_guard_smoke`, running the no-confirm guard smoke from Agent-Talk-MCP;
+  - `render:mcp_readonly_probe`, requiring the Render MCP tool catalog and same-session workspace/service listing probes to pass;
+  - `render:mcp_create_scope_boundary`, requiring the preflight to record that Render MCP `create_web_service` cannot target the required project environment.
+
+Validation passed:
+
+- pistils_chat_cli: `node --check scripts\audit-goal.mjs`
+- pistils_chat_cli: `npm run audit:goal`
+  - new Render create guard and Render MCP boundary checks pass;
+  - final completion remains blocked by the same external Render source/service/deployed-smoke and Hermes credential/real-smoke gates.
+
+Still open after top-level audit covers Render create guard:
+
+- Commit and push the audit/log update, wait for GitHub checks, and rerun `npm run audit:goal` on the clean current head.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
+- Complete Hermes credentials and rerun the real Hermes connector smoke.

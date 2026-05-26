@@ -518,6 +518,36 @@ if (existsSync(agentTalkMcpRepo)) {
       repoStates['Agent-Talk-MCP']?.head
     )
   );
+
+  const mcpPackagePath = path.join(agentTalkMcpRepo, 'package.json');
+  const renderCreatePath = path.join(agentTalkMcpRepo, 'scripts', 'render-create-service.mjs');
+  const renderCreateGuardSmokePath = path.join(agentTalkMcpRepo, 'scripts', 'smoke-render-create-guard.mjs');
+  let mcpPackage;
+  try {
+    mcpPackage = JSON.parse(readFileSync(mcpPackagePath, 'utf8'));
+  } catch {
+    mcpPackage = undefined;
+  }
+  const scripts = mcpPackage?.scripts ?? {};
+  checks.push(
+    existsSync(renderCreatePath) &&
+      existsSync(renderCreateGuardSmokePath) &&
+      scripts['render:create'] === 'node scripts/render-create-service.mjs' &&
+      scripts['smoke:render-create-guard'] === 'node scripts/smoke-render-create-guard.mjs' &&
+      scripts.check?.includes('smoke:render-create-guard')
+      ? check('pass', 'render:create_guard_artifacts', 'Agent-Talk-MCP has the guarded Render create helper and CI smoke wired into check')
+      : check('fail', 'render:create_guard_artifacts', 'Agent-Talk-MCP guarded Render create helper or CI smoke wiring is missing')
+  );
+
+  const guardSmoke = await runNpm(['run', 'smoke:render-create-guard'], {
+    cwd: agentTalkMcpRepo,
+    env: process.env,
+  });
+  checks.push(
+    guardSmoke.ok
+      ? check('pass', 'render:create_guard_smoke', 'Render create no-confirm guard smoke passed')
+      : check('fail', 'render:create_guard_smoke', redact(guardSmoke.stderr || guardSmoke.stdout || 'Render create guard smoke failed'))
+  );
 }
 
 const renderEnv = { ...process.env };
@@ -544,6 +574,29 @@ if (existsSync(agentTalkMcpRepo)) {
 }
 
 const targetServiceCheck = checkByName(renderPayload, 'render:target_service_absent');
+const renderMcpToolCatalog = checkByName(renderPayload, 'render:mcp_tool_catalog');
+const renderMcpWorkspaceSession = checkByName(renderPayload, 'render:mcp_workspace_session');
+const renderMcpCreateScope = checkByName(renderPayload, 'render:mcp_create_scope');
+checks.push(
+  renderMcpToolCatalog?.status === 'pass' &&
+    renderMcpWorkspaceSession?.status === 'pass'
+    ? check('pass', 'render:mcp_readonly_probe', 'Render MCP read-only tool catalog and workspace/service listing probes passed')
+    : check('fail', 'render:mcp_readonly_probe', 'Render MCP read-only probes did not pass', {
+        toolCatalogStatus: renderMcpToolCatalog?.status ?? 'missing',
+        workspaceSessionStatus: renderMcpWorkspaceSession?.status ?? 'missing',
+      })
+);
+checks.push(
+  renderMcpCreateScope?.status === 'warn' &&
+    renderMcpCreateScope?.hasCreateWebService === true &&
+    renderMcpCreateScope?.supportsEnvironmentId === false
+    ? check('pass', 'render:mcp_create_scope_boundary', 'Render MCP create_web_service limitation is recorded; CLI/REST remains required for environment-targeted deploy')
+    : check('fail', 'render:mcp_create_scope_boundary', 'Render MCP create scope boundary was not reported as expected', {
+        status: renderMcpCreateScope?.status ?? 'missing',
+        hasCreateWebService: renderMcpCreateScope?.hasCreateWebService,
+        supportsEnvironmentId: renderMcpCreateScope?.supportsEnvironmentId,
+      })
+);
 const targetService = renderPayload?.targetService;
 const serviceCreated =
   targetServiceCheck?.status === 'warn' &&
