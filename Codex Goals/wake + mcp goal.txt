@@ -3169,3 +3169,26 @@ Still open after Hermes helper current-head verification:
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
 - Rerun real Hermes connector smoke after credentials are configured.
+
+Work log - 2026-05-26, blocked gate retest
+
+Retested the two remaining external gates:
+
+- `npm run audit:goal` still reports:
+  - pass: 26
+  - warn: 2
+  - fail: 5
+- Agent-Talk-MCP `npm run preflight:render` still passes Render CLI/API/MCP auth and target workspace/project/environment checks, but remains blocked because:
+  - `con-urr/Agent-Talk-MCP` is private and Render GitHub App access is not proven;
+  - anonymous GHCR image pulls return HTTP 401;
+  - local GitHub credential still cannot read package metadata and must not be used as a Render registry credential.
+- `npm run preflight:hermes` still reports Hermes-owned OpenAI Codex auth as logged out, no inference env credentials, and no reachable Ollama/LM Studio fallback endpoints.
+- Attempted `npm run hermes:codex-oauth -- --confirm` to start the Hermes-owned OAuth path. It did not complete within the 10 minute command timeout, and Hermes auth state remained logged out afterward.
+- Cleaned up only the stale OAuth command process from that attempt. Pre-existing Hermes gateway/dashboard processes were left running.
+
+Still open after blocked gate retest:
+
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
