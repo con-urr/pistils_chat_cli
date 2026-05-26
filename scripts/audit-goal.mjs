@@ -594,6 +594,8 @@ if (existsSync(agentTalkMcpRepo)) {
   const renderCreateGuardSmokePath = path.join(agentTalkMcpRepo, 'scripts', 'smoke-render-create-guard.mjs');
   const renderRegistryCredentialPath = path.join(agentTalkMcpRepo, 'scripts', 'render-create-registry-credential.mjs');
   const renderRegistryCredentialGuardSmokePath = path.join(agentTalkMcpRepo, 'scripts', 'smoke-render-registry-credential-guard.mjs');
+  const renderPreflightPath = path.join(agentTalkMcpRepo, 'scripts', 'render-preflight.mjs');
+  const renderDeployDocPath = path.join(agentTalkMcpRepo, 'docs', 'render-deploy.md');
   let mcpPackage;
   try {
     mcpPackage = JSON.parse(readFileSync(mcpPackagePath, 'utf8'));
@@ -618,6 +620,30 @@ if (existsSync(agentTalkMcpRepo)) {
       scripts.check?.includes('smoke:render-registry-credential-guard')
       ? check('pass', 'render:registry_credential_guard_artifacts', 'Agent-Talk-MCP has the guarded Render registry credential helper and CI smoke wired into check')
       : check('fail', 'render:registry_credential_guard_artifacts', 'Agent-Talk-MCP guarded Render registry credential helper or CI smoke wiring is missing')
+  );
+  const renderRegistryCredentialSource = existsSync(renderRegistryCredentialPath)
+    ? readFileSync(renderRegistryCredentialPath, 'utf8')
+    : '';
+  const renderCreateSource = existsSync(renderCreatePath)
+    ? readFileSync(renderCreatePath, 'utf8')
+    : '';
+  const renderPreflightSource = existsSync(renderPreflightPath)
+    ? readFileSync(renderPreflightPath, 'utf8')
+    : '';
+  const renderDeployDocs = existsSync(renderDeployDocPath)
+    ? readFileSync(renderDeployDocPath, 'utf8')
+    : '';
+  checks.push(
+    renderRegistryCredentialSource.includes("envValue('GHCR_USERNAME')") &&
+      renderRegistryCredentialSource.includes("envValue('GITHUB_USERNAME')") &&
+      renderRegistryCredentialSource.includes('envValue(tokenEnvName)') &&
+      renderRegistryCredentialSource.includes("envValue('RENDER_REGISTRY_CREDENTIAL_NAME')") &&
+      renderCreateSource.includes("readWindowsUserEnv('RENDER_REGISTRY_CREDENTIAL_ID')") &&
+      renderPreflightSource.includes("readWindowsUserEnv('RENDER_REGISTRY_CREDENTIAL_ID')") &&
+      renderPreflightSource.includes("readWindowsUserEnv('RENDER_REGISTRY_CREDENTIAL')") &&
+      /Windows user environment/.test(renderDeployDocs)
+      ? check('pass', 'render:registry_credential_windows_user_env_fallback', 'Render registry credential helper, create helper, preflight, and docs support Windows user environment fallback')
+      : check('fail', 'render:registry_credential_windows_user_env_fallback', 'Render registry credential Windows user environment fallback is missing from helper, preflight, create helper, or docs')
   );
 
   const guardSmoke = await runNpm(['run', 'smoke:render-create-guard'], {

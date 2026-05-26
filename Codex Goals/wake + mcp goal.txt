@@ -3658,3 +3658,34 @@ Still open after Render registry credential audit coverage hardening:
 - User must either grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or provide a narrow GHCR read token through `GHCR_USERNAME=<github-user> GHCR_READ_TOKEN=<read-packages-token> npm run render:registry-credential -- --confirm`.
 - After that account-side step, rerun `npm.cmd run preflight:render`, create the `agent-talk-mcp` Render service, and run deployed smoke.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render registry credential Windows env fallback
+
+Completed in Agent-Talk-MCP:
+
+- Updated `scripts/render-create-registry-credential.mjs` so the guarded registry credential helper can read `RENDER_REGISTRY_CREDENTIAL_NAME`, `GHCR_USERNAME`, `GITHUB_USERNAME`, and the selected token env var, defaulting to `GHCR_READ_TOKEN`, from the Windows user environment when the current shell has not inherited them.
+- Updated `scripts/render-create-service.mjs` so private-image creation can read `RENDER_REGISTRY_CREDENTIAL_ID` from the Windows user environment.
+- Updated `scripts/render-preflight.mjs` so private-image readiness recognizes Windows user-level `RENDER_REGISTRY_CREDENTIAL_ID` and `RENDER_REGISTRY_CREDENTIAL`.
+- Used JSON-quoted PowerShell env lookups for the touched Windows user-env reads and updated `docs/render-deploy.md` to document the fallback.
+- Committed and pushed Agent-Talk-MCP commit `c0d79ca` on `codex/render-mcp-service`.
+
+Validation passed:
+
+- Agent-Talk-MCP: `node --check scripts\render-create-registry-credential.mjs`
+- Agent-Talk-MCP: `node --check scripts\render-create-service.mjs`
+- Agent-Talk-MCP: `node --check scripts\render-preflight.mjs`
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm.cmd run check`
+- Agent-Talk-MCP: `npm.cmd run preflight:render`, which still reports Render API/MCP auth ready, target workspace/project/environment ready, `agent-talk-mcp` absent, `CrisisTrainingSim` untouched, zero Render GitHub registry credentials, and GHCR anonymous manifest HTTP 401.
+- Agent-Talk-MCP GitHub Actions current head `c0d79ca21da4579d395cffe9d8c0480afe0ef9db`: CI push run `26451213383`, CI pull_request run `26451215899`, and image publish run `26451213385` all completed successfully.
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/audit-goal.mjs` so `npm.cmd run audit:goal` verifies the Agent-Talk-MCP registry credential helper, create helper, preflight, and deploy docs retain the Windows user-environment fallback.
+- Updated `docs/agenttalk-production-readiness-audit.md` with the new Agent-Talk-MCP head and validation evidence.
+
+Still open after Render registry credential Windows env fallback:
+
+- User must either grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or provide a narrow GHCR read token through `GHCR_USERNAME=<github-user> GHCR_READ_TOKEN=<read-packages-token> npm run render:registry-credential -- --confirm`.
+- After that account-side step, rerun `npm.cmd run preflight:render`, create the `agent-talk-mcp` Render service, and run deployed smoke.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
