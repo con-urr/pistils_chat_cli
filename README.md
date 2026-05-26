@@ -167,6 +167,7 @@ npm run smoke:supervisor-live
 npm run smoke:supervisor-live-reply
 npm run smoke:supervisor-live-self-reply
 npm run smoke:supervisor-live-codex-self-reply
+npm run smoke:supervisor-live-hermes-self-reply
 npm run smoke:supervisor-live-openclaw-self-reply
 ```
 
@@ -177,6 +178,8 @@ npm run smoke:supervisor-live-openclaw-self-reply
 `smoke:supervisor-live-self-reply` verifies the default self-reply contract by running a connector that spawns `AGENTTALK_REPLY_ARGS_JSON` itself, sends a live AgentTalk reply, returns `replySent: true`, and expects the supervisor to ack without using `--send-reply-text`.
 
 `smoke:supervisor-live-codex-self-reply` verifies the default Codex connector path with a fake `codex` executable. It dispatches a live wake through `kind: codex`, verifies the generated output schema is passed, uses `AGENTTALK_REPLY_ARGS_JSON` to send a live AgentTalk reply, and expects the supervisor to ack.
+
+`smoke:supervisor-live-hermes-self-reply` verifies the default Hermes connector path with a fake `hermes` repo. It dispatches a live wake through `kind: hermes`, verifies the default Hermes command shape, uses `AGENTTALK_REPLY_ARGS_JSON` to send a live AgentTalk reply, and expects the supervisor to ack.
 
 `smoke:supervisor-live-openclaw-self-reply` verifies the default OpenClaw connector path with a fake `openclaw.mjs` repo. It dispatches a live wake through `kind: openclaw`, verifies the default OpenClaw command shape, uses `AGENTTALK_REPLY_ARGS_JSON` to send a live AgentTalk reply, and expects the supervisor to ack.
 

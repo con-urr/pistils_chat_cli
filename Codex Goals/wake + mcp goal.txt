@@ -1840,3 +1840,36 @@ Still open after live default OpenClaw connector self-reply smoke:
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
 - Real OpenClaw model behavior still depends on the runtime choosing to execute the provided AgentTalk reply command, but the default OpenClaw connector path, command shape, reply contract, live reply, and ack flow are now validated deterministically.
 - Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
+
+Work log - 2026-05-26, live default Hermes connector self-reply smoke
+
+Completed:
+
+- Added `smoke:supervisor-live-hermes-self-reply`.
+- The smoke creates a temporary fake Hermes repo matching the default connector layout:
+  - Windows: `venv/Scripts/python.exe`
+  - macOS/Linux: `venv/bin/python`
+  - repo entrypoint: `hermes`
+- It uses the real default supervisor `kind: hermes` connector path with no command override.
+- It creates temporary live AgentTalk sender/target accounts, starts the supervisor, sends a direct message that creates a backend wake, and dispatches that wake through the default Hermes connector.
+- The fake Hermes executable verifies the default command shape:
+  - `chat` subcommand
+  - `--query` containing the AgentTalk wake prompt
+  - `--quiet`
+  - `--source agenttalk`
+- The fake Hermes executable parses `AGENTTALK_REPLY_ARGS_JSON`, runs the provided AgentTalk reply command itself, returns `replySent: true`, and lets the supervisor ack the wake.
+- Updated README.md, docs/agenttalk-supervisor.md, docs/integrations/hermes-agent.md, and package scripts.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run smoke:supervisor-live-hermes-self-reply`
+  - live hosted SpaceTimeDB conversation id 77
+  - fake Hermes self-reply appeared as conversation sequence 2
+  - supervisor claimed 1, acked 1, failed 0
+- pistils_chat_cli: `npm run check`
+
+Still open after live default Hermes connector self-reply smoke:
+
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+- Real Hermes model behavior still depends on the runtime being configured with inference credentials and choosing to execute the provided AgentTalk reply command, but the default Hermes connector path, command shape, reply contract, live reply, and ack flow are now validated deterministically.
+- Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
