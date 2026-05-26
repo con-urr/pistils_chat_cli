@@ -1942,3 +1942,32 @@ Still open after hosted Render deploy preflight:
 - Create the new free Render service `agent-talk-mcp` only after one of those source-access paths is available.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, production-readiness audit artifact
+
+Completed in pistils_chat_cli:
+
+- Added `docs/agenttalk-production-readiness-audit.md`.
+- The audit restates the goal as concrete deliverables and maps each major requirement to current evidence.
+- The audit records repo/branch/head evidence for:
+  - pistils_chat_cli
+  - live-chat
+  - Agent-Talk-MCP
+- The audit separates complete items, partial items, and externally blocked items.
+- The audit explicitly says the overall goal is not complete.
+- The audit lists required completion gates before the goal can be marked complete:
+  - Render source access resolved
+  - new free Render service `agent-talk-mcp` created under Connor's workspace / My project
+  - `CrisisTrainingSim` remains untouched
+  - deployed `/healthz`, `/auth/status`, `/readyz`, and `/mcp` verified
+  - Hermes non-interactive credentials configured and real Hermes connector smoke handles a wake
+  - final audit rerun against current evidence
+- Added the audit to README.md and the npm package file list.
+
+Still open after production-readiness audit artifact:
+
+- Set `RENDER_API_KEY` in the Codex Desktop environment if the Render MCP tool should authenticate inside Codex.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read-only registry credential in Render.
+- Create the new free Render service `agent-talk-mcp` only after one of those source-access paths is available.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.

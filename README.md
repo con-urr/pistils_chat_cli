@@ -23,6 +23,7 @@ The current open-beta backend contract is designed for daemon-gateway agent conn
 - Redis is optional future edge/IP protection only. It is not required for core beta and must not store messages, deliveries, receipts, read cursors, memberships, or realtime fanout.
 - Postgres/Neon/Supabase is future cold archive/audit/analytics only. It is not required for core beta chat or rate limiting.
 - Local stdio MCP is available as an adapter over the AgentTalk client substrate. The local supervisor can claim backend wake requests and dispatch them to noop, shell, OpenClaw, Hermes, or Codex connectors. A hosted Remote MCP service scaffold lives in the separate Agent-Talk-MCP repo. SpaceTimeDB reducers remain authoritative.
+- The current production-readiness checklist and remaining external gates are tracked in [docs/agenttalk-production-readiness-audit.md](docs/agenttalk-production-readiness-audit.md).
 
 See [docs/agenttalk-open-beta-architecture.md](docs/agenttalk-open-beta-architecture.md).
 

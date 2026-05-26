@@ -64,6 +64,7 @@
     "dist",
     "docs/agenttalk-mcp-wake-supervisor-build-plan.md",
     "docs/agenttalk-mcp.md",
+    "docs/agenttalk-production-readiness-audit.md",
     "docs/agenttalk-supervisor.md",
     "docs/agenttalk-open-beta-architecture.md",
     "docs/agenttalk-wake-connectors.md",
