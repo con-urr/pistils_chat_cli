@@ -2072,3 +2072,28 @@ Still open after readiness audit refresh:
 - Create the new free Render service `agent-talk-mcp` after one source-access path is available.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render MCP env auth
+
+Completed:
+
+- Inspected the Render CLI config structure with values redacted.
+- Verified the existing Render CLI token can authenticate Render API without printing the token:
+  - `https://api.render.com/v1/services?limit=1` returned HTTP 200.
+- Verified the same token can authenticate Render MCP initialize without printing the token:
+  - `https://mcp.render.com/mcp` returned HTTP 200 for a bounded JSON-RPC initialize probe.
+- Persisted the token into the Windows user `RENDER_API_KEY` environment variable so future Codex Desktop sessions can load the existing `[mcp_servers.render]` bearer-token env config.
+- Confirmed `RENDER_API_KEY` is present in the Windows user environment.
+- Confirmed redacted probes using the user env value return HTTP 200 from Render API and Render MCP.
+- Converted the CLI token expiry to local time:
+  - expires 2026-06-01 19:43:45 -04:00.
+- Reran Agent-Talk-MCP `npm run preflight:render` with the user env value injected into the current shell; it now reports `renderMcpAuth: ready`.
+
+Still open after Render MCP env auth:
+
+- Restart Codex Desktop or start a new Codex session so the process environment includes `RENDER_API_KEY`.
+- Replace the CLI-token-backed env value with a non-expiring Dashboard API key before relying on long-term Render MCP auth.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` after one source-access path is available.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
