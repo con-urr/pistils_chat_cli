@@ -20,7 +20,7 @@ The local MCP, non-presence wake supervisor, setup flow, connector framework, Co
 | --- | --- | --- |
 | `pistils_chat_cli` | `codex/agenttalk-mcp-supervisor` | PR `con-urr/pistils_chat_cli#1`; this committed audit is on the pushed branch; only an unrelated untracked image remains locally. |
 | `live-chat` | `codex/agenttalk-wake-presence` | Head `7e0a759935f2856d618f76983c4a4cce0d7adb80`; PR `con-urr/live-chat#1`. |
-| `Agent-Talk-MCP` | `codex/render-mcp-service` | Head `799342648f6911cd41a2b39dbbf1e1a70d843947`; PR `con-urr/Agent-Talk-MCP#1`. |
+| `Agent-Talk-MCP` | `codex/render-mcp-service` | Head `c2167a9da698271d82dc4ecba68444a77582efc6`; PR `con-urr/Agent-Talk-MCP#1`. |
 
 ## Checklist
 
@@ -65,7 +65,7 @@ The goal log records these validated checkpoints:
 - Agent-Talk-MCP README.md and docs/render-deploy.md now explicitly say the current deploy branch is `codex/render-mcp-service`; Dashboard Blueprint users must select that branch manually before merge, or use the branch-correct preflight-reported CLI command.
 - Agent-Talk-MCP adds `npm run smoke:deployed` for the post-Render completion gate. Local validation against `dist/index.js` passed both without a token, verifying unauthenticated `/mcp` returns 401, and with a fake bearer token, verifying MCP tool listing returns 22 tools including `agenttalk_whoami`.
 - `agenttalk mcp config --client all` now prints setup material for Codex, Claude Code, and Cursor in local stdio mode; `--client cursor --url ... --json` prints the remote Render MCP Cursor JSON with a `<AGENTTALK_MCP_TOKEN>` placeholder, not a token value. `npm run smoke:cli-surface` and `npm run check` validate the command.
-- `npm run audit:goal` now performs the conservative final-gate audit in one command: it checks source-of-truth docs, repo heads/worktrees, Agent-Talk-MCP `preflight:render`, optional deployed smoke with `AGENTTALK_MCP_BASE_URL`, Hermes `preflight:hermes`, and real Hermes connector smoke when Hermes is ready. Non-strict mode reports JSON without failing; `npm run audit:goal -- --strict` exits nonzero until the Render and Hermes gates are actually satisfied.
+- `npm run audit:goal` now performs the conservative final-gate audit in one command: it checks source-of-truth docs, repo heads/worktrees, Agent-Talk-MCP `preflight:render`, deployed smoke using `AGENTTALK_MCP_BASE_URL` / `--render-url` / the Render inventory `targetService.url`, Hermes `preflight:hermes`, and real Hermes connector smoke when Hermes is ready. Non-strict mode reports JSON without failing; `npm run audit:goal -- --strict` exits nonzero until the Render and Hermes gates are actually satisfied.
 - Render CLI direct Git-backed creation was retried with both accepted URL shapes and failed before creating a service because the private repository remains invalid or unfetchable to Render.
 - Post-retry Render inventory still lists only `CrisisTrainingSim`; `agent-talk-mcp` is absent and the existing service remains untouched.
 

@@ -9,7 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const strict = process.argv.includes('--strict');
 const renderUrlFlagIndex = process.argv.indexOf('--render-url');
-const renderUrl =
+let renderUrl =
   renderUrlFlagIndex >= 0 && process.argv[renderUrlFlagIndex + 1]
     ? process.argv[renderUrlFlagIndex + 1]
     : process.env.AGENTTALK_MCP_BASE_URL;
@@ -216,6 +216,9 @@ if (existsSync(agentTalkMcpRepo)) {
 const targetServiceCheck = checkByName(renderPayload, 'render:target_service_absent');
 const serviceCreated =
   targetServiceCheck?.status === 'warn' && /already exists/i.test(targetServiceCheck.detail ?? '');
+if (!renderUrl && serviceCreated && renderPayload?.targetService?.url) {
+  renderUrl = renderPayload.targetService.url;
+}
 const sourceAccessReady =
   serviceCreated ||
   renderPayload?.createCommands?.gitBacked?.status === 'ready' ||
@@ -267,7 +270,11 @@ if (renderUrl && existsSync(agentTalkMcpRepo)) {
   );
 } else {
   checks.push(
-    check('fail', 'render:deployed_smoke', 'AGENTTALK_MCP_BASE_URL or --render-url is required for deployed smoke')
+    check(
+      'fail',
+      'render:deployed_smoke',
+      'AGENTTALK_MCP_BASE_URL, --render-url, or target service URL from Render inventory is required for deployed smoke'
+    )
   );
 }
 
@@ -336,7 +343,7 @@ const payload = {
       ? ['Create the free agent-talk-mcp Render service after source/image access is ready.']
       : []),
     ...(checks.find(item => item.name === 'render:deployed_smoke')?.status !== 'pass'
-      ? ['Run npm run smoke:deployed with AGENTTALK_MCP_BASE_URL after deployment.']
+      ? ['Run npm run smoke:deployed after deployment; audit:goal can derive the URL once Render inventory includes agent-talk-mcp, or use AGENTTALK_MCP_BASE_URL/--render-url.']
       : []),
     ...(!hermesReady
       ? ['Configure Hermes-owned OAuth or an API-key provider, then rerun npm run preflight:hermes.']

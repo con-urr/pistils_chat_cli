@@ -2472,3 +2472,34 @@ Still open after hosted MCP Render branch-selection docs:
 - Run `AGENTTALK_MCP_BASE_URL=https://<service>.onrender.com npm run smoke:deployed` after deployment.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
 - Rerun `npm run audit:goal -- --strict` and require it to pass before marking the overall goal complete.
+
+Work log - 2026-05-26, deployed URL derivation for final audit
+
+Completed across Agent-Talk-MCP and pistils_chat_cli:
+
+- Updated Agent-Talk-MCP `scripts/render-preflight.mjs` so the read-only preflight emits `targetService` when `agent-talk-mcp` already exists in Render inventory.
+- `targetService` includes the service id, name, deployed URL, dashboard URL, project name, environment name, and environment id. It is omitted while the service is still absent.
+- Updated pistils_chat_cli `scripts/audit-goal.mjs` so deployed smoke can use:
+  - explicit `--render-url`;
+  - `AGENTTALK_MCP_BASE_URL`;
+  - or `renderPayload.targetService.url` after the Render service exists.
+- Updated Agent-Talk-MCP README.md and docs/render-deploy.md with the new preflight `targetService.url` handoff.
+- Pushed Agent-Talk-MCP commit `c2167a9da698271d82dc4ecba68444a77582efc6`.
+- Updated this audit trail and `docs/agenttalk-production-readiness-audit.md` so the final gate no longer requires manually copying the deployed URL once Render inventory includes `agent-talk-mcp`.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run preflight:render` with the Windows user `RENDER_API_KEY` injected
+  - still reports `agent-talk-mcp` absent;
+  - still reports Render API/MCP auth and target project/environment ready;
+  - still reports source/image access blocked.
+- pistils_chat_cli: `npm run audit:goal`
+  - reports it can use `AGENTTALK_MCP_BASE_URL`, `--render-url`, or target service URL from Render inventory for deployed smoke;
+  - still reports Render source/image access, service creation, deployed smoke, Hermes credentials, and real Hermes smoke blocked.
+
+Still open after deployed URL derivation for final audit:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup; it should derive the Render URL automatically once `agent-talk-mcp` appears in inventory.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
