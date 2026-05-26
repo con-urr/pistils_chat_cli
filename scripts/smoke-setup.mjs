@@ -48,7 +48,16 @@ function parseJson(result) {
 }
 
 await fs.mkdir(openclawRepo, { recursive: true });
-await fs.writeFile(path.join(openclawRepo, 'openclaw.mjs'), 'console.log("openclaw stub");\n', 'utf8');
+await fs.writeFile(
+  path.join(openclawRepo, 'openclaw.mjs'),
+  `if (process.argv.includes('agents') && process.argv.includes('list') && process.argv.includes('--json')) {
+  console.log(JSON.stringify([{ id: 'main', isDefault: true }]));
+} else {
+  console.log('openclaw stub');
+}
+`,
+  'utf8'
+);
 await fs.mkdir(path.dirname(hermesPython), { recursive: true });
 await fs.writeFile(path.join(hermesRepo, 'hermes'), '# hermes stub\n', 'utf8');
 await fs.writeFile(hermesPython, '', 'utf8');

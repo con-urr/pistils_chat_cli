@@ -21,6 +21,9 @@ export type SupervisorAgentConfig = {
   kind: AgentConnectorKind;
   repoPath?: string;
   command?: string;
+  connector?: {
+    openclawAgentId?: string;
+  };
   enabled: boolean;
   autoInit: boolean;
   maxConcurrentWakeJobs: number;
@@ -168,4 +171,3 @@ export function redactConfig(config: SupervisorConfig) {
     })),
   };
 }
-

@@ -93,6 +93,7 @@ function connectorEnv(
     payloadJson: string;
   }
 ) {
+  const openclawAgentId = process.env.OPENCLAW_AGENT_ID ?? agent.connector?.openclawAgentId ?? agent.name;
   return {
     ...process.env,
     AGENTTALK_WAKE_ID: input.wake.wakeId,
@@ -110,7 +111,7 @@ function connectorEnv(
     AGENTTALK_WAKE_INPUT_JSON: paths.inputPath,
     AGENTTALK_WAKE_CONTEXT_JSON: paths.contextJson,
     AGENTTALK_WAKE_PAYLOAD_JSON: paths.payloadJson,
-    OPENCLAW_AGENT_ID: process.env.OPENCLAW_AGENT_ID ?? agent.name,
+    OPENCLAW_AGENT_ID: openclawAgentId,
     OPENCLAW_TIMEOUT_SECONDS:
       process.env.OPENCLAW_TIMEOUT_SECONDS ??
       Math.max(1, Math.ceil(agent.connectorTimeoutMs / 1000)).toString(),
@@ -126,6 +127,7 @@ function defaultOpenClawSpec(agent: SupervisorAgentConfig, input: WakeConnectorI
   if (!agent.repoPath) {
     throw new Error('openclaw connector requires --repo <openclaw repo path> or --command');
   }
+  const openclawAgentId = process.env.OPENCLAW_AGENT_ID ?? agent.connector?.openclawAgentId ?? agent.name;
   const entrypoint = path.join(agent.repoPath, 'openclaw.mjs');
   return {
     command: process.execPath,
@@ -133,7 +135,7 @@ function defaultOpenClawSpec(agent: SupervisorAgentConfig, input: WakeConnectorI
       entrypoint,
       'agent',
       '--agent',
-      process.env.OPENCLAW_AGENT_ID ?? agent.name,
+      openclawAgentId,
       '--session-key',
       `agenttalk:${input.handle}:${input.wake.conversationId.toString()}`,
       '--message',
@@ -156,7 +158,7 @@ function defaultHermesSpec(agent: SupervisorAgentConfig, input: WakeConnectorInp
   const hermes = path.join(agent.repoPath, 'hermes');
   return {
     command: python,
-    args: [hermes, '--oneshot', wakeText(input), '--quiet', '--source', 'agenttalk'],
+    args: [hermes, 'chat', '--query', wakeText(input), '--quiet', '--source', 'agenttalk'],
     cwd: agent.repoPath,
   };
 }

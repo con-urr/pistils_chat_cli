@@ -208,6 +208,7 @@ async function commandAddAgent(flags: SupervisorFlags) {
   );
   const timeoutMs = getIntFlag(flags, ['timeout-ms', 'connectorTimeoutMs'], 300_000);
   const maxConcurrentWakeJobs = getIntFlag(flags, ['max-concurrent', 'maxConcurrentWakeJobs'], 1);
+  const openclawAgentId = getStringFlag(flags, ['openclaw-agent-id', 'openclawAgentId']);
   const agent: SupervisorAgentConfig = {
     name,
     handle,
@@ -217,6 +218,7 @@ async function commandAddAgent(flags: SupervisorFlags) {
       ? path.resolve(expandHome(getStringFlag(flags, ['repo', 'repo-path', 'repoPath'])!))
       : undefined,
     command: getStringFlag(flags, ['command']),
+    connector: openclawAgentId && kind === 'openclaw' ? { openclawAgentId } : undefined,
     enabled: !getBooleanFlag(flags, ['disabled']),
     autoInit: !getBooleanFlag(flags, ['no-auto-init']),
     maxConcurrentWakeJobs,

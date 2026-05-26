@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +20,7 @@ type DetectedAgent = {
   handle: string;
   kind: AgentConnectorKind;
   repoPath?: string;
+  connector?: SupervisorAgentConfig['connector'];
   ready: boolean;
   reason?: string;
 };
@@ -116,6 +118,47 @@ async function findOnPath(command: string) {
   return undefined;
 }
 
+function runCommand(command: string, args: string[], cwd?: string) {
+  return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code !== 0) {
+        reject(new Error(`${command} ${args.join(' ')} exited ${code}; ${stderr || stdout}`));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function detectOpenClawAgentId(repo: string) {
+  try {
+    const result = await runCommand(
+      process.execPath,
+      [path.join(repo, 'openclaw.mjs'), 'agents', 'list', '--json'],
+      repo
+    );
+    const parsed = JSON.parse(result.stdout) as Array<{ id?: unknown; isDefault?: unknown }>;
+    const selected = parsed.find(agent => agent.isDefault === true) ?? parsed[0];
+    return typeof selected?.id === 'string' && selected.id.trim() ? selected.id.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function detectOpenClaw(flags: SetupFlags): Promise<DetectedAgent | undefined> {
   if (getBooleanFlag(flags, ['no-openclaw', 'skip-openclaw'])) {
     return undefined;
@@ -124,13 +167,21 @@ async function detectOpenClaw(flags: SetupFlags): Promise<DetectedAgent | undefi
     repoCandidates('openclaw', getStringFlag(flags, ['openclaw-repo', 'openclawRepo'])),
     'openclaw.mjs'
   );
+  const openclawAgentId = repo
+    ? getStringFlag(flags, ['openclaw-agent-id', 'openclawAgentId']) ?? await detectOpenClawAgentId(repo)
+    : undefined;
   return {
     name: 'support',
     handle: 'support-agent',
     kind: 'openclaw',
     repoPath: repo,
-    ready: Boolean(repo),
-    reason: repo ? undefined : 'openclaw.mjs was not found',
+    connector: openclawAgentId ? { openclawAgentId } : undefined,
+    ready: Boolean(repo && openclawAgentId),
+    reason: repo
+      ? openclawAgentId
+        ? undefined
+        : 'OpenClaw agents list did not return a configured agent id'
+      : 'openclaw.mjs was not found',
   };
 }
 
@@ -181,6 +232,7 @@ function toSupervisorAgent(detected: DetectedAgent): SupervisorAgentConfig {
     kind: detected.kind,
     stateDir: defaultAgentStateDir(detected.name),
     repoPath: detected.repoPath,
+    connector: detected.connector,
     enabled: true,
     autoInit: true,
     maxConcurrentWakeJobs: 1,

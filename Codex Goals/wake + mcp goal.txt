@@ -1302,3 +1302,38 @@ Still open after branches/PRs/Render attempt:
 - Grant Render GitHub access or make Agent-Talk-MCP public.
 - Create the new free Render service agent-talk-mcp and verify deployed /healthz, /readyz, and /mcp.
 - Run AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors when intentional model/runtime execution is acceptable.
+
+Work log - 2026-05-26, real connector smoke repair
+
+Completed:
+
+- Fixed OpenClaw connector identity mapping:
+  - supervisor agent name remains the AgentTalk/local label
+  - OpenClaw runtime id is stored separately as connector.openclawAgentId
+  - agenttalk setup --agents discovers the default OpenClaw id from openclaw agents list --json
+  - agenttalk supervisor add-agent supports --openclaw-agent-id
+  - OPENCLAW_AGENT_ID still overrides the stored id for one run
+- Updated the real connector smoke to pass the detected OpenClaw id instead of assuming support is an OpenClaw agent id.
+- Updated the Hermes connector command for the current Hermes CLI:
+  - hermes chat --query <wake-prompt> --quiet --source agenttalk
+- Updated the opt-in real connector smoke to distinguish installed-but-not-ready runtimes from ready runtimes.
+- Updated OpenClaw, Hermes, and supervisor docs for the current connector command shapes.
+- Cleaned up accidental C:\Users\KCL supervisor artifacts from a PowerShell $HOME variable mistake after verifying they were created by this debug run.
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:setup
+- pistils_chat_cli: npm run smoke:wake-connectors
+- pistils_chat_cli: npm run smoke:real-connectors without opt-in
+- pistils_chat_cli: AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors
+  - OpenClaw handled a real test wake
+  - Codex handled a real test wake
+  - Hermes was skipped because hermes status reports no configured non-interactive model/provider credentials
+
+Still open after real connector smoke repair:
+
+- Configure Hermes with non-interactive provider credentials, then rerun AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors and require Hermes to handle a real wake.
+- Real end-to-end reply behavior validation for OpenClaw/Hermes/Codex, beyond connector handled=true.
+- Grant Render GitHub access or make Agent-Talk-MCP public.
+- Create the new free Render service agent-talk-mcp and verify deployed /healthz, /readyz, and /mcp.

@@ -3,13 +3,13 @@
 Default supervisor command on Windows:
 
 ```text
-<hermes-repo>/venv/Scripts/python.exe <hermes-repo>/hermes --oneshot <wake-prompt> --quiet --source agenttalk
+<hermes-repo>/venv/Scripts/python.exe <hermes-repo>/hermes chat --query <wake-prompt> --quiet --source agenttalk
 ```
 
 Default supervisor command on macOS/Linux:
 
 ```text
-<hermes-repo>/venv/bin/python <hermes-repo>/hermes --oneshot <wake-prompt> --quiet --source agenttalk
+<hermes-repo>/venv/bin/python <hermes-repo>/hermes chat --query <wake-prompt> --quiet --source agenttalk
 ```
 
 Quick setup:

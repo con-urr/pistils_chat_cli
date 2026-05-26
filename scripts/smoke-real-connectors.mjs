@@ -48,6 +48,35 @@ function parseJson(result) {
   return JSON.parse(result.stdout);
 }
 
+function runRaw(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd ?? root,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        ...(options.env ?? {}),
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code !== 0) {
+        reject(new Error(`${command} ${args.join(' ')} exited ${code}; ${stderr || stdout}`));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
 async function findOnPath(command) {
   const exts = process.platform === 'win32'
     ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').map(ext => ext.toLowerCase())
@@ -65,28 +94,73 @@ async function findOnPath(command) {
   return false;
 }
 
+async function detectOpenClawAgentId(openclawRepo) {
+  const result = await runRaw(
+    process.execPath,
+    [path.join(openclawRepo, 'openclaw.mjs'), 'agents', 'list', '--json'],
+    { cwd: openclawRepo }
+  );
+  const agents = JSON.parse(result.stdout);
+  const selected = agents.find(agent => agent.isDefault === true) ?? agents[0];
+  if (!selected?.id) {
+    throw new Error('OpenClaw agents list did not return a configured agent id');
+  }
+  return selected.id;
+}
+
+function section(text, start, end) {
+  const startIndex = text.indexOf(start);
+  if (startIndex < 0) {
+    return '';
+  }
+  const endIndex = text.indexOf(end, startIndex + start.length);
+  return endIndex < 0 ? text.slice(startIndex) : text.slice(startIndex, endIndex);
+}
+
+async function detectHermesReady(hermesRepo, hermesPython) {
+  try {
+    const hermes = path.join(hermesRepo, 'hermes');
+    const result = await runRaw(hermesPython, [hermes, 'status'], { cwd: hermesRepo });
+    const credentialStatus = [
+      section(result.stdout, '◆ API Keys', '◆ Auth Providers'),
+      section(result.stdout, '◆ Auth Providers', '◆ API-Key Providers'),
+      section(result.stdout, '◆ API-Key Providers', '◆ Terminal Backend'),
+    ].join('\n');
+    return /✓/.test(credentialStatus);
+  } catch {
+    return false;
+  }
+}
+
 async function detect() {
   const openclaw = path.join(githubRoot, 'openclaw');
   const hermes = path.join(githubRoot, 'hermes-agent');
   const codexWorkdir = root;
   const found = [];
   if (await exists(path.join(openclaw, 'openclaw.mjs'))) {
+    const openclawAgentId = await detectOpenClawAgentId(openclaw);
     found.push({
       kind: 'openclaw',
       name: 'support',
       handle: `real-openclaw-${process.pid}`,
       repo: openclaw,
+      openclawAgentId,
     });
   }
   const hermesPython = process.platform === 'win32'
     ? path.join(hermes, 'venv', 'Scripts', 'python.exe')
     : path.join(hermes, 'venv', 'bin', 'python');
   if ((await exists(path.join(hermes, 'hermes'))) && (await exists(hermesPython))) {
+    const hermesReady = await detectHermesReady(hermes, hermesPython);
     found.push({
       kind: 'hermes',
       name: 'research',
       handle: `real-hermes-${process.pid}`,
       repo: hermes,
+      ready: hermesReady,
+      reason: hermesReady
+        ? undefined
+        : 'Hermes has no configured model/provider credentials in this non-interactive environment.',
     });
   }
   if (await findOnPath('codex')) {
@@ -95,6 +169,7 @@ async function detect() {
       name: 'coder',
       handle: `real-codex-${process.pid}`,
       repo: codexWorkdir,
+      ready: true,
     });
   }
   return found;
@@ -107,7 +182,11 @@ if (process.env.AGENTTALK_RUN_REAL_CONNECTOR_TESTS !== '1') {
       ok: true,
       skipped: true,
       reason: 'Set AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 to run local agent runtimes.',
-      detected: candidates.map(candidate => ({ kind: candidate.kind, ready: true })),
+      detected: candidates.map(candidate => ({
+        kind: candidate.kind,
+        ready: candidate.ready !== false,
+        reason: candidate.reason,
+      })),
     })
   );
   process.exit(0);
@@ -115,27 +194,32 @@ if (process.env.AGENTTALK_RUN_REAL_CONNECTOR_TESTS !== '1') {
 
 const candidates = await detect();
 const results = [];
+const skipped = candidates
+  .filter(candidate => candidate.ready === false)
+  .map(candidate => ({ kind: candidate.kind, reason: candidate.reason }));
 try {
   parseJson(await run(['init', '--json']));
-  for (const candidate of candidates) {
-    parseJson(
-      await run([
-        'add-agent',
-        '--kind',
-        candidate.kind,
-        '--name',
-        candidate.name,
-        '--handle',
-        candidate.handle,
-        '--repo',
-        candidate.repo,
-        '--state-dir',
-        path.join(home, 'agents', candidate.name),
-        '--timeout-ms',
-        candidate.kind === 'codex' ? '120000' : '60000',
-        '--json',
-      ])
-    );
+  for (const candidate of candidates.filter(candidate => candidate.ready !== false)) {
+    const args = [
+      'add-agent',
+      '--kind',
+      candidate.kind,
+      '--name',
+      candidate.name,
+      '--handle',
+      candidate.handle,
+      '--repo',
+      candidate.repo,
+      '--state-dir',
+      path.join(home, 'agents', candidate.name),
+      '--timeout-ms',
+      candidate.kind === 'codex' ? '120000' : '60000',
+    ];
+    if (candidate.kind === 'openclaw') {
+      args.push('--openclaw-agent-id', candidate.openclawAgentId);
+    }
+    args.push('--json');
+    parseJson(await run(args));
     const result = parseJson(await run(['test-wake', candidate.name, '--json']));
     results.push({ kind: candidate.kind, handled: result.result?.handled === true });
   }
@@ -147,4 +231,4 @@ if (results.some(result => !result.handled)) {
   throw new Error(`one or more real connectors did not handle test wake: ${JSON.stringify(results)}`);
 }
 
-console.log(JSON.stringify({ ok: true, results }));
+console.log(JSON.stringify({ ok: true, results, skipped }));
