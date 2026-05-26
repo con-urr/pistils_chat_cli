@@ -3293,3 +3293,24 @@ Still open after process-tree cleanup current-head check note:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
+
+Work log - 2026-05-26, pistils CI push-trigger hardening
+
+Observed after process-tree cleanup:
+
+- PR head `8f8d4a8a9d37d3d82bfc86edbfd0d197a310230a` did not receive `validate (20)` / `validate (22)` check-runs after multiple waits.
+- A fresh source-of-truth-only synchronization commit `a34ff499585b285099547c25873c8199d7823b4b` also did not receive those check-runs.
+- Direct GitHub Actions metadata confirmed the newest visible pistils workflow run remained the earlier successful run on `56a9664650761d00753a1098b3d34de55766b3d5`.
+
+Completed in pistils_chat_cli:
+
+- Updated `.github/workflows/ci.yml` so pushes to `codex/**` branches also run CI, not only `main` pushes and `pull_request` events.
+- This should let the current working branch produce check-runs even if PR synchronize events fail to attach.
+
+Still open after pistils CI push-trigger hardening:
+
+- Push this CI workflow update, wait for the push-triggered checks, and rerun `npm run audit:goal` on the clean current head.
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
