@@ -2352,7 +2352,7 @@ Completed in pistils_chat_cli:
   - Codex `codex mcp add ...`
   - Claude Code `claude mcp add ...`
   - Cursor `.cursor/mcp.json` / `~/.cursor/mcp.json` JSON.
-- Remote mode prints client config using `AGENTTALK_MCP_TOKEN` as an env placeholder and does not print token values.
+- Remote mode prints client config using `<AGENTTALK_MCP_TOKEN>` as a token placeholder and does not print token values.
 - `agenttalk setup --agents` now includes a next action to print local MCP config for Codex, Claude Code, and Cursor.
 - Updated `docs/agenttalk-mcp.md` with Claude Code and Cursor setup examples.
 - Updated `scripts/smoke-cli-surface.mjs` to validate local all-client config and remote Cursor JSON config.

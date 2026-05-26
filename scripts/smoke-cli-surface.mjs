@@ -141,7 +141,9 @@ assert(
   mcpConfigRemotePayload.clients.cursor.json.mcpServers['agenttalk-remote'].url ===
     'https://agent-talk-mcp.onrender.com/mcp' &&
     mcpConfigRemotePayload.clients.cursor.json.mcpServers['agenttalk-remote'].headers.Authorization ===
-      'Bearer ${AGENTTALK_MCP_TOKEN}',
+      'Bearer <AGENTTALK_MCP_TOKEN>' &&
+    mcpConfigRemotePayload.clients.cursor.json.mcpServers['agenttalk-remote'].tokenPlaceholder ===
+      '<AGENTTALK_MCP_TOKEN>',
   `unexpected remote MCP client config payload: ${mcpConfigRemote.stdout}`
 );
 

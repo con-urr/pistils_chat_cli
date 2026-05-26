@@ -62,7 +62,7 @@ The goal log records these validated checkpoints:
   - GHCR branch image anonymous manifest returns HTTP 401
   - Git-backed creation still needs Render GitHub access to the private repo
 - Agent-Talk-MCP adds `npm run smoke:deployed` for the post-Render completion gate. Local validation against `dist/index.js` passed both without a token, verifying unauthenticated `/mcp` returns 401, and with a fake bearer token, verifying MCP tool listing returns 22 tools including `agenttalk_whoami`.
-- `agenttalk mcp config --client all` now prints setup material for Codex, Claude Code, and Cursor in local stdio mode; `--client cursor --url ... --json` prints the remote Render MCP Cursor JSON with `AGENTTALK_MCP_TOKEN` placeholder, not a token value. `npm run smoke:cli-surface` and `npm run check` validate the command.
+- `agenttalk mcp config --client all` now prints setup material for Codex, Claude Code, and Cursor in local stdio mode; `--client cursor --url ... --json` prints the remote Render MCP Cursor JSON with a `<AGENTTALK_MCP_TOKEN>` placeholder, not a token value. `npm run smoke:cli-surface` and `npm run check` validate the command.
 - Render CLI direct Git-backed creation was retried with both accepted URL shapes and failed before creating a service because the private repository remains invalid or unfetchable to Render.
 - Post-retry Render inventory still lists only `CrisisTrainingSim`; `agent-talk-mcp` is absent and the existing service remains untouched.
 

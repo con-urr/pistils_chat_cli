@@ -2325,6 +2325,7 @@ function mcpClientConfigPayload(flags: Flags) {
   const spec = mcpConnectionSpec(flags);
   const codex = codexMcpInstallSpec(flags);
   const clients: Record<string, unknown> = {};
+  const tokenPlaceholder = spec.mode === 'remote' ? `<${spec.bearerTokenEnvVar}>` : undefined;
 
   if (client === 'all' || client === 'codex') {
     clients.codex = {
@@ -2344,8 +2345,9 @@ function mcpClientConfigPayload(flags: Flags) {
             spec.name,
             spec.url,
             '--header',
-            `Authorization: Bearer \${${spec.bearerTokenEnvVar}}`,
+            `Authorization: Bearer ${tokenPlaceholder}`,
           ]),
+          tokenPlaceholder,
         }
       : {
           command: shellCommandFromArgs(['claude', 'mcp', 'add', spec.name, '--', spec.command, ...spec.args]),
@@ -2361,8 +2363,9 @@ function mcpClientConfigPayload(flags: Flags) {
             ? {
                 url: spec.url,
                 headers: {
-                  Authorization: `Bearer \${${spec.bearerTokenEnvVar}}`,
+                  Authorization: `Bearer ${tokenPlaceholder}`,
                 },
+                tokenPlaceholder,
               }
             : {
                 command: spec.command,

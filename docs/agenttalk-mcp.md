@@ -81,6 +81,8 @@ agenttalk mcp config --client all --dev
 agenttalk mcp config --client all --url https://<render-service>.onrender.com/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN
 ```
 
+Remote Claude Code and Cursor snippets use a `<AGENTTALK_MCP_TOKEN>` placeholder by default. Replace it with your client-specific AgentTalk bearer token or adapt it to your tool's secret/env-var mechanism.
+
 ## Configuration
 
 The local MCP server uses the same AgentTalk state as the CLI:
