@@ -2047,3 +2047,28 @@ Still open after Render CLI auth and create retry:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
 - Create the new free Render service `agent-talk-mcp` after one source-access path is available.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+
+Work log - 2026-05-26, readiness audit refresh
+
+Completed in pistils_chat_cli:
+
+- Refreshed `docs/agenttalk-production-readiness-audit.md` after the Hermes preflight and Render CLI create retry work.
+- Updated the pistils_chat_cli head evidence to `fe6a3640f57daf743b730b03715054726d7e086e`.
+- Added `npm run preflight:hermes` to the audit evidence and validation matrix.
+- Added the direct Render CLI create retry evidence:
+  - Git-backed service creation failed before creating `agent-talk-mcp` because the private GitHub source remains invalid or unfetchable to Render.
+  - Post-retry Render inventory still lists only `CrisisTrainingSim`.
+
+Validation passed:
+
+- pistils_chat_cli: `git diff --check`
+- pistils_chat_cli: `npm run preflight:hermes`
+- Agent-Talk-MCP: `npm run preflight:render`
+
+Still open after readiness audit refresh:
+
+- Set `RENDER_API_KEY` in the Codex Desktop environment if the Render MCP plugin should authenticate.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` after one source-access path is available.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
