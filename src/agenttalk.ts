@@ -529,7 +529,8 @@ Usage:
   agenttalk wake ack <wake-id> [--attempt-id <id>] [--json]
   agenttalk wake fail <wake-id> --error <text> [--retry-after-ms <n>] [--json]
   agenttalk setup --agents [--dry-run] [--json]
-  agenttalk mcp [--transport stdio]
+  agenttalk mcp [serve|stdio] [--transport stdio]
+  agenttalk mcp install-codex [--name agenttalk] [--dev] [--url https://<service>/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN] [--dry-run] [--json]
   agenttalk supervisor init|add-agent|list|status|doctor|test-wake [--json]
   agenttalk repair-access
   agenttalk run --jsonl
@@ -792,6 +793,51 @@ function daemonTransportPayload<T extends Record<string, unknown>>(
     ...(daemonResponse ? { daemonStarted: daemonResponse.daemonStarted === true } : {}),
     ...payload,
   };
+}
+
+async function executableOnPath(command: string) {
+  const pathValue = process.env.PATH ?? '';
+  const exts =
+    process.platform === 'win32'
+      ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';')
+      : [''];
+  for (const dir of pathValue.split(path.delimiter)) {
+    if (!dir) {
+      continue;
+    }
+    for (const ext of exts) {
+      const candidate = path.join(
+        dir,
+        process.platform === 'win32' ? `${command}${ext.toLowerCase()}` : command
+      );
+      if (existsSync(candidate)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function runToolCommand(command: string, args: string[]) {
+  return new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: process.env,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', code => {
+      resolve({ stdout, stderr, code });
+    });
+  });
 }
 
 function blockedDirectTransportPayload<T extends Record<string, unknown>>(payload: T) {
@@ -1601,6 +1647,10 @@ function commandLineFromArgs(args: string[]) {
   return ['agenttalk', ...args].map(quoteCliArg).join(' ');
 }
 
+function shellCommandFromArgs(args: string[]) {
+  return args.map(quoteCliArg).join(' ');
+}
+
 function conversationNextActions(
   conversationId: string,
   afterSequence?: string | null
@@ -2180,6 +2230,120 @@ async function commandReply(flags: Flags, positionals: string[], state: Agenttal
   } finally {
     client.disconnect();
   }
+}
+
+function codexMcpInstallSpec(flags: Flags) {
+  const remoteUrl = getStringFlag(flags, ['url', 'remote-url', 'remoteUrl']);
+  const dev = getBooleanFlag(flags, ['dev', 'local-dev', 'localDev']);
+  if (remoteUrl && dev) {
+    throw new Error('Use either --dev or --url <remote-mcp-url>, not both.');
+  }
+
+  const mode = remoteUrl ? 'remote' : dev ? 'dev' : 'local';
+  const defaultName = mode === 'remote' ? 'agenttalk-remote' : mode === 'dev' ? 'agenttalk-dev' : 'agenttalk';
+  const name = getStringFlag(flags, ['name']) ?? defaultName;
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
+    throw new Error('--name must contain only letters, numbers, dots, underscores, or dashes');
+  }
+
+  if (mode === 'remote') {
+    const bearerTokenEnvVar =
+      getStringFlag(flags, ['bearer-token-env-var', 'bearerTokenEnvVar']) ?? 'AGENTTALK_MCP_TOKEN';
+    return {
+      mode,
+      name,
+      transport: 'streamable-http',
+      command: [
+        'codex',
+        'mcp',
+        'add',
+        name,
+        '--url',
+        remoteUrl!,
+        '--bearer-token-env-var',
+        bearerTokenEnvVar,
+      ],
+    };
+  }
+
+  const runner = mode === 'dev'
+    ? ['node', path.resolve(__dirname, 'mcp-server.js')]
+    : [process.platform === 'win32' ? 'npx.cmd' : 'npx', '-y', 'pistils-chat-cli', 'agenttalk-mcp'];
+  return {
+    mode,
+    name,
+    transport: 'stdio',
+    command: ['codex', 'mcp', 'add', name, '--', ...runner],
+  };
+}
+
+async function codexMcpNameExists(name: string) {
+  const result = await runToolCommand('codex', ['mcp', 'list', '--json']);
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout || 'codex mcp list failed');
+  }
+  const parsed = JSON.parse(result.stdout) as Array<{ name?: unknown }>;
+  return parsed.some(server => server.name === name);
+}
+
+async function commandMcp(flags: Flags, positionals: string[]) {
+  const subcommand = positionals[0] ?? 'serve';
+  if (subcommand === 'install-codex') {
+    const spec = codexMcpInstallSpec(flags);
+    const dryRun = getBooleanFlag(flags, ['dry-run', 'dryRun', 'print']);
+    const codexFound = await executableOnPath('codex');
+    const payload = {
+      ok: true,
+      dryRun,
+      installed: false,
+      name: spec.name,
+      mode: spec.mode,
+      transport: spec.transport,
+      codexFound,
+      command: shellCommandFromArgs(spec.command),
+    };
+
+    if (dryRun) {
+      if (wantsJson(flags)) {
+        writeJson(payload);
+        return;
+      }
+      writeStdout(payload.command);
+      return;
+    }
+
+    if (!codexFound) {
+      throw new Error('codex executable was not found on PATH');
+    }
+    if (await codexMcpNameExists(spec.name)) {
+      throw new Error(
+        `Codex MCP server '${spec.name}' already exists. Remove or rename it before running install-codex.`
+      );
+    }
+
+    const result = await runToolCommand(spec.command[0], spec.command.slice(1));
+    if (result.code !== 0) {
+      throw new Error(result.stderr || result.stdout || `codex mcp add exited ${result.code}`);
+    }
+
+    if (wantsJson(flags)) {
+      writeJson({ ...payload, installed: true });
+      return;
+    }
+    writeStdout(`installed Codex MCP server '${spec.name}'`);
+    return;
+  }
+
+  if (subcommand !== 'serve' && subcommand !== 'stdio') {
+    throw new Error(`Unknown MCP command: ${subcommand}`);
+  }
+
+  const transport = getStringFlag(flags, ['transport']) ?? 'stdio';
+  if (transport !== 'stdio') {
+    throw new Error(`Unsupported MCP transport '${transport}'. agenttalk mcp supports stdio.`);
+  }
+  const { runAgentTalkMcpServer } = await import('./mcp/server');
+  await runAgentTalkMcpServer();
 }
 
 async function commandGroup(flags: Flags, positionals: string[], state: AgenttalkState) {
@@ -7499,12 +7663,7 @@ async function main() {
   }
 
   if (command === 'mcp') {
-    const transport = getStringFlag(flags, ['transport']) ?? 'stdio';
-    if (transport !== 'stdio') {
-      throw new Error(`Unsupported MCP transport '${transport}'. agenttalk mcp supports stdio.`);
-    }
-    const { runAgentTalkMcpServer } = await import('./mcp/server');
-    await runAgentTalkMcpServer();
+    await commandMcp(flags, positionals);
     return;
   }
 

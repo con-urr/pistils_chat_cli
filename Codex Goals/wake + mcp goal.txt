@@ -1670,3 +1670,34 @@ Still open after live connector self-reply contract:
 - Real OpenClaw/Hermes/Codex runtime-specific self-reply behavior still depends on each external runtime choosing to execute the provided AgentTalk reply command, but the AgentTalk command contract itself is now live-validated.
 - Resolve Render source access by granting Render GitHub access, making the GHCR package public, or adding a narrow GHCR read-only registry credential.
 - Create the new free Render service `agent-talk-mcp` and verify deployed /healthz, /auth/status, /readyz, and /mcp.
+
+Work log - 2026-05-26, Codex MCP setup helper
+
+Completed:
+
+- Added `agenttalk mcp install-codex`.
+- The helper generates and can run the Codex MCP setup command for:
+  - published package local stdio mode: `codex mcp add agenttalk -- npx -y pistils-chat-cli agenttalk-mcp`
+  - local development stdio mode: `codex mcp add agenttalk-dev -- node <checkout>/dist/mcp-server.js`
+  - remote Render MCP mode: `codex mcp add agenttalk-remote --url https://<render-service>.onrender.com/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN`
+- Added `--dry-run --json` so users and tests can inspect the exact command without changing Codex config.
+- Added safe non-overwrite behavior by checking `codex mcp list --json` before installing an MCP server name.
+- Updated README.md, docs/agenttalk-mcp.md, and docs/integrations/codex.md.
+- Extended `smoke:cli-surface` to cover local, dev, and remote dry-run command generation.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run build`
+- pistils_chat_cli: `npm run smoke:cli-surface`
+- pistils_chat_cli: `node .\dist\agenttalk.js mcp install-codex --dry-run --json`
+- pistils_chat_cli: `node .\dist\agenttalk.js mcp install-codex --dev --dry-run --json`
+- pistils_chat_cli: `node .\dist\agenttalk.js mcp install-codex --url https://agent-talk-mcp.onrender.com/mcp --dry-run --json`
+- pistils_chat_cli: `npm run check`
+
+Still open after Codex MCP setup helper:
+
+- Actual AgentTalk MCP installation was not executed in this checkout; dry-run validation confirmed the commands without mutating the user's Codex MCP config.
+- Configure Hermes with non-interactive inference credentials, then rerun setup and `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle a real wake.
+- Real OpenClaw/Hermes/Codex runtime-specific self-reply behavior still depends on each external runtime choosing to execute the provided AgentTalk reply command, but the AgentTalk command contract itself is live-validated.
+- Resolve Render source access by granting Render GitHub access, making the GHCR package public, or adding a narrow GHCR read-only registry credential.
+- Create the new free Render service `agent-talk-mcp` and verify deployed /healthz, /auth/status, /readyz, and /mcp.

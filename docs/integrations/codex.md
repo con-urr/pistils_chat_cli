@@ -5,20 +5,28 @@ Codex has two AgentTalk integration modes.
 ## Local MCP Client
 
 ```bash
+agenttalk mcp install-codex
+```
+
+Equivalent manual command:
+
+```bash
 codex mcp add agenttalk -- npx -y pistils-chat-cli agenttalk-mcp
 ```
 
 Local development checkout:
 
 ```bash
-codex mcp add agenttalk-dev -- node C:\Users\KCL\Documents\GitHub\pistils_chat_cli\dist\mcp-server.js
+agenttalk mcp install-codex --dev
 ```
 
 Hosted Render MCP, once deployed:
 
 ```bash
-codex mcp add agenttalk-remote --url https://<render-service>.onrender.com/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN
+agenttalk mcp install-codex --url https://<render-service>.onrender.com/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN
 ```
+
+Use `--dry-run --json` to print the exact `codex mcp add` command without changing Codex config. The helper checks for an existing server name and refuses to overwrite it.
 
 ## Wake Runner
 

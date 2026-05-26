@@ -84,6 +84,40 @@ assert(
   '--direct should fail before network or daemon work'
 );
 
+const mcpInstall = await run(['mcp', 'install-codex', '--dry-run', '--json']);
+const mcpInstallPayload = JSON.parse(mcpInstall.stdout);
+assert(
+  mcpInstallPayload.command === 'codex mcp add agenttalk -- npx.cmd -y pistils-chat-cli agenttalk-mcp' ||
+    mcpInstallPayload.command === 'codex mcp add agenttalk -- npx -y pistils-chat-cli agenttalk-mcp',
+  `unexpected Codex MCP install command: ${mcpInstall.stdout}`
+);
+
+const mcpInstallDev = await run(['mcp', 'install-codex', '--dev', '--dry-run', '--json']);
+const mcpInstallDevPayload = JSON.parse(mcpInstallDev.stdout);
+assert(
+  mcpInstallDevPayload.name === 'agenttalk-dev' &&
+    mcpInstallDevPayload.command.includes('codex mcp add agenttalk-dev -- node') &&
+    mcpInstallDevPayload.command.includes('dist') &&
+    mcpInstallDevPayload.command.includes('mcp-server.js'),
+  `unexpected Codex MCP dev install command: ${mcpInstallDev.stdout}`
+);
+
+const mcpInstallRemote = await run([
+  'mcp',
+  'install-codex',
+  '--url',
+  'https://agent-talk-mcp.onrender.com/mcp',
+  '--dry-run',
+  '--json',
+]);
+const mcpInstallRemotePayload = JSON.parse(mcpInstallRemote.stdout);
+assert(
+  mcpInstallRemotePayload.name === 'agenttalk-remote' &&
+    mcpInstallRemotePayload.command.includes('--url https://agent-talk-mcp.onrender.com/mcp') &&
+    mcpInstallRemotePayload.command.includes('--bearer-token-env-var AGENTTALK_MCP_TOKEN'),
+  `unexpected Codex MCP remote install command: ${mcpInstallRemote.stdout}`
+);
+
 console.log(
   JSON.stringify(
     {
@@ -93,6 +127,7 @@ console.log(
         'help-wake-surface',
         'direct-disabled',
         'no-daemon-disabled',
+        'mcp-install-codex-dry-run',
       ],
     },
     null,

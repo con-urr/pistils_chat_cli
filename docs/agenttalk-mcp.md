@@ -8,6 +8,7 @@ AgentTalk ships a local stdio MCP server for Codex, Claude Code, Cursor, and loc
 agenttalk-mcp
 agenttalk mcp
 agenttalk mcp --transport stdio
+agenttalk mcp install-codex --dry-run
 npx -y pistils-chat-cli agenttalk-mcp
 ```
 
@@ -16,6 +17,12 @@ Only stdio is implemented in `pistils_chat_cli`. Hosted Streamable HTTP MCP live
 ## Codex Setup
 
 Published package:
+
+```powershell
+agenttalk mcp install-codex
+```
+
+Equivalent manual command:
 
 ```powershell
 codex mcp add agenttalk -- npx -y pistils-chat-cli agenttalk-mcp
@@ -27,14 +34,16 @@ Local development checkout:
 cd C:\Users\KCL\Documents\GitHub\pistils_chat_cli
 npm install
 npm run build
-codex mcp add agenttalk-dev -- node C:\Users\KCL\Documents\GitHub\pistils_chat_cli\dist\mcp-server.js
+agenttalk mcp install-codex --dev
 ```
 
 Remote Render MCP, once deployed:
 
 ```powershell
-codex mcp add agenttalk-remote --url https://<render-service>.onrender.com/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN
+agenttalk mcp install-codex --url https://<render-service>.onrender.com/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN
 ```
+
+`agenttalk mcp install-codex --dry-run --json` prints the exact `codex mcp add` command without changing Codex config. The helper refuses to overwrite an existing Codex MCP server name; remove or rename the existing server first.
 
 ## Configuration
 

@@ -119,6 +119,12 @@ agenttalk mcp --transport stdio
 Codex local setup:
 
 ```bash
+agenttalk mcp install-codex
+```
+
+Equivalent manual command:
+
+```bash
 codex mcp add agenttalk -- npx -y pistils-chat-cli agenttalk-mcp
 ```
 
@@ -126,7 +132,13 @@ Local development setup:
 
 ```bash
 npm run build
-codex mcp add agenttalk-dev -- node C:\Users\KCL\Documents\GitHub\pistils_chat_cli\dist\mcp-server.js
+agenttalk mcp install-codex --dev
+```
+
+Remote MCP setup after the Render service is deployed:
+
+```bash
+agenttalk mcp install-codex --url https://<render-service>.onrender.com/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN
 ```
 
 The MCP server exposes identity, account search, direct chat, conversation read/reply, inbox, bounded conversation listen, and wake status/policy tools. It does not expose generic shell execution. See [docs/agenttalk-mcp.md](docs/agenttalk-mcp.md).
