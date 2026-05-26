@@ -3511,3 +3511,17 @@ Still open after GitHub Actions outage boundary:
 - Recheck GitHub Actions after the outage resolves, then rerun `npm run audit:goal`.
 - If GitHub does not backfill runs, push a tiny synchronization commit or manually dispatch workflows after the outage resolves.
 - Keep the final completion gate failed until current-head check-runs exist and pass.
+
+Work log - 2026-05-26, Render account-side unblock recheck
+
+Observed while rechecking Render:
+
+- `npm.cmd run preflight:render` still reports Render API/MCP auth ready, target workspace/project/environment ready, `agent-talk-mcp` absent, and `CrisisTrainingSim` untouched.
+- Render API `GET /v1/registrycredentials?ownerId=tea-d51f80re5dus73814oj0&limit=100` returned zero registry credentials, so there is no existing Render-side GHCR credential to reuse.
+- A controlled `npm.cmd run render:create -- --mode git --confirm` attempt still failed before service creation with Render's private repository access error for `https://github.com/con-urr/Agent-Talk-MCP`.
+- Post-attempt `render services -o json` still lists only `CrisisTrainingSim` in environment `evm-d7ampnp4tr6s739q3q9g`.
+
+Still open after Render account-side unblock recheck:
+
+- Grant the Render GitHub app access to `con-urr/Agent-Talk-MCP`, or add a narrow GitHub Container Registry read credential in Render.
+- After either account-side change, rerun `npm.cmd run preflight:render` and then create the `agent-talk-mcp` service.
