@@ -3583,3 +3583,29 @@ Still open after Render registry credential audit coverage:
 - Commit and push the audit coverage hardening.
 - Grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or add a narrow Render GHCR registry credential, then create and smoke-test the deployed `agent-talk-mcp` service.
 - Re-run failed GitHub Actions jobs after the GitHub Actions authentication/download incident resolves.
+
+Work log - 2026-05-26, Agent-Talk-MCP CI and image publish recovery
+
+Completed in Agent-Talk-MCP:
+
+- Commit `544d40c` changed the `pistils-chat-cli` dependency from npm's GitHub shorthand to an explicit GitHub git URL and documented the CI/Render install issue.
+- Commit `181a8a7` added Git URL rewrite configuration in `.github/workflows/ci.yml` and `Dockerfile` so npm-normalized `ssh://git@github.com/...` dependency fetches are rewritten to HTTPS before `npm install`. This keeps the Git dependency's `prepare` build path while avoiding unavailable SSH keys in GitHub Actions and Render builders.
+- Commit `742412d` replaced `docker/metadata-action` in `.github/workflows/publish-image.yml` with direct branch/SHA tag generation, preserving `ghcr.io/con-urr/agent-talk-mcp:codex-render-mcp-service` and `sha-<short-sha>` tags while avoiding a GitHub metadata API failure.
+- Updated `docs/render-deploy.md` to record why the Git rewrite exists.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm.cmd install --no-package-lock`
+- Agent-Talk-MCP: `npm.cmd run check`
+- Agent-Talk-MCP: `git diff --check`
+- Fresh temp npm install with a temporary Git config rewrite proved `pistils-chat-cli/mcp` installs over HTTPS and produces `dist/mcp/server.js`.
+- Agent-Talk-MCP GitHub Actions current head `742412dfaaaae796eb10b965f52bca097353f170`: CI pull_request run `26449028993`, CI push run `26449027295`, and image publish run `26449027300` all completed successfully.
+- pistils_chat_cli current-head PR CI run `26448393788` was rerun after checkout 403 failures and completed successfully.
+- `npm.cmd run audit:goal` now reports the GitHub Actions gates as passed for pistils_chat_cli, live-chat, and Agent-Talk-MCP, with summary `pass: 28`, `warn: 3`, `fail: 5`.
+
+Still open after Agent-Talk-MCP CI and image publish recovery:
+
+- Render source/image access remains blocked because the Render workspace has zero GitHub registry credentials and anonymous GHCR manifest access still returns 401.
+- Create the `agent-talk-mcp` Render service after Render GitHub app access or a narrow GHCR registry credential is added.
+- Run deployed smoke against the new Render URL.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.

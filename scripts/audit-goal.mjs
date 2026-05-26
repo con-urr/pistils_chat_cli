@@ -302,11 +302,15 @@ function summarizeCheckRuns(runs) {
     if (!run?.name) {
       continue;
     }
-    result[run.name] = {
+    const summary = {
       status: run.status,
       conclusion: run.conclusion,
       url: run.html_url,
     };
+    const existing = result[run.name];
+    if (!existing || (existing.conclusion !== 'success' && summary.conclusion === 'success')) {
+      result[run.name] = summary;
+    }
   }
   return result;
 }
