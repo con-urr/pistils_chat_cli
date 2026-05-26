@@ -1811,3 +1811,32 @@ Still open after live default Codex connector self-reply smoke:
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
 - Real Codex model behavior still depends on the model choosing to execute the provided AgentTalk reply command, but the default Codex connector path, output-schema handoff, JSONL parsing, reply contract, live reply, and ack flow are now validated deterministically.
 - Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
+
+Work log - 2026-05-26, live default OpenClaw connector self-reply smoke
+
+Completed:
+
+- Added `smoke:supervisor-live-openclaw-self-reply`.
+- The smoke creates a temporary fake OpenClaw repo with `openclaw.mjs` but uses the real default supervisor `kind: openclaw` connector path with no command override.
+- It creates temporary live AgentTalk sender/target accounts, starts the supervisor, sends a direct message that creates a backend wake, and dispatches that wake through the default OpenClaw connector.
+- The fake OpenClaw executable verifies the default command shape:
+  - `agent` subcommand
+  - `--json`
+  - `--agent fake-openclaw-agent`
+  - `--message` containing the AgentTalk wake prompt
+- The fake OpenClaw executable parses `AGENTTALK_REPLY_ARGS_JSON`, runs the provided AgentTalk reply command itself, returns `replySent: true`, and lets the supervisor ack the wake.
+- Updated README.md, docs/agenttalk-supervisor.md, docs/integrations/openclaw.md, and package scripts.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run smoke:supervisor-live-openclaw-self-reply`
+  - live hosted SpaceTimeDB conversation id 76
+  - fake OpenClaw self-reply appeared as conversation sequence 2
+  - supervisor claimed 1, acked 1, failed 0
+- pistils_chat_cli: `npm run check`
+
+Still open after live default OpenClaw connector self-reply smoke:
+
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+- Real OpenClaw model behavior still depends on the runtime choosing to execute the provided AgentTalk reply command, but the default OpenClaw connector path, command shape, reply contract, live reply, and ack flow are now validated deterministically.
+- Resolve Render source access and create/verify the `agent-talk-mcp` Render service.

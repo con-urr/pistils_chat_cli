@@ -83,6 +83,7 @@
     "smoke:setup": "node scripts/smoke-setup.mjs",
     "smoke:supervisor": "node scripts/smoke-supervisor.mjs",
     "smoke:supervisor-live-codex-self-reply": "node scripts/smoke-supervisor-live-codex-self-reply.mjs",
+    "smoke:supervisor-live-openclaw-self-reply": "node scripts/smoke-supervisor-live-openclaw-self-reply.mjs",
     "smoke:supervisor-live-self-reply": "node scripts/smoke-supervisor-live-self-reply.mjs",
     "smoke:supervisor-live-reply": "node scripts/smoke-supervisor-live-reply.mjs",
     "smoke:supervisor-live": "node scripts/smoke-supervisor-live-wake.mjs",
