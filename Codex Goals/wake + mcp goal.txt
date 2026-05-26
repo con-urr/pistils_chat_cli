@@ -1731,3 +1731,23 @@ Still open after Codex JSONL connector result parsing:
 - Real OpenClaw/Hermes/Codex runtime-specific self-reply behavior still depends on each external runtime choosing to execute the provided AgentTalk reply command, but Codex JSONL result parsing is now covered.
 - Resolve Render source access by granting Render GitHub access, making the GHCR package public, or adding a narrow GHCR read-only registry credential.
 - Create the new free Render service `agent-talk-mcp` and verify deployed /healthz, /auth/status, /readyz, and /mcp.
+
+Work log - 2026-05-26, Render source-access retest
+
+Completed:
+
+- Confirmed Render CLI is installed and authenticated.
+- Installed Render agent skills for Codex user scope.
+- Added the global Codex MCP server entry for Render at `https://mcp.render.com/mcp` using `RENDER_API_KEY` as the bearer-token env var.
+- Rechecked Render service inventory before and after the create attempt; only the existing `CrisisTrainingSim` service exists.
+- Retried Git-backed creation of a new free `agent-talk-mcp` Docker web service from `https://github.com/con-urr/Agent-Talk-MCP` on branch `codex/render-mcp-service`.
+- The create attempt failed with the same source-access gate: Render reports the private GitHub repository URL is invalid or unfetchable.
+- No Render service was created and `CrisisTrainingSim` was not modified.
+
+Still open after Render source-access retest:
+
+- Set `RENDER_API_KEY` in the Codex Desktop environment if the Render MCP tool should authenticate inside Codex; the CLI browser login token does not populate that env var.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public if acceptable, or add a narrow GHCR read-only registry credential in Render.
+- Create the new free Render service `agent-talk-mcp` only after one of those source-access paths is available.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
