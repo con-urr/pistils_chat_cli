@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const { hermesStatusHasInferenceCredentials } = require('../dist/supervisor/hermes.js');
 const root = path.resolve(__dirname, '..');
 const supervisor = path.join(root, 'dist', 'agenttalk-supervisor.js');
 const home = path.join(os.tmpdir(), `agenttalk-real-connectors-${process.pid}-${Date.now()}`);
@@ -108,25 +111,11 @@ async function detectOpenClawAgentId(openclawRepo) {
   return selected.id;
 }
 
-function section(text, start, end) {
-  const startIndex = text.indexOf(start);
-  if (startIndex < 0) {
-    return '';
-  }
-  const endIndex = text.indexOf(end, startIndex + start.length);
-  return endIndex < 0 ? text.slice(startIndex) : text.slice(startIndex, endIndex);
-}
-
 async function detectHermesReady(hermesRepo, hermesPython) {
   try {
     const hermes = path.join(hermesRepo, 'hermes');
     const result = await runRaw(hermesPython, [hermes, 'status'], { cwd: hermesRepo });
-    const credentialStatus = [
-      section(result.stdout, '◆ API Keys', '◆ Auth Providers'),
-      section(result.stdout, '◆ Auth Providers', '◆ API-Key Providers'),
-      section(result.stdout, '◆ API-Key Providers', '◆ Terminal Backend'),
-    ].join('\n');
-    return /✓/.test(credentialStatus);
+    return hermesStatusHasInferenceCredentials(result.stdout);
   } catch {
     return false;
   }

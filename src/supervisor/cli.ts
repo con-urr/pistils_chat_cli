@@ -20,6 +20,7 @@ import {
   type SupervisorConfig,
 } from './config';
 import { executeWakeConnector } from './connectors';
+import { hermesStatusHasInferenceCredentials } from './hermes';
 import { stringifyJsonSafe } from './json';
 import { runSupervisor } from './runtime';
 
@@ -204,24 +205,6 @@ function doctorCheck(input: SupervisorDoctorCheck): SupervisorDoctorCheck {
   return input;
 }
 
-function section(text: string, start: string, end: string) {
-  const startIndex = text.indexOf(start);
-  if (startIndex < 0) {
-    return '';
-  }
-  const endIndex = text.indexOf(end, startIndex + start.length);
-  return endIndex < 0 ? text.slice(startIndex) : text.slice(startIndex, endIndex);
-}
-
-function hermesStatusHasCredentials(stdout: string) {
-  const credentialStatus = [
-    section(stdout, 'API Keys', 'Auth Providers'),
-    section(stdout, 'Auth Providers', 'API-Key Providers'),
-    section(stdout, 'API-Key Providers', 'Terminal Backend'),
-  ].join('\n');
-  return credentialStatus.includes(String.fromCharCode(0x2713));
-}
-
 async function checkRepoPath(agent: SupervisorAgentConfig, marker: string) {
   if (!agent.repoPath) {
     return doctorCheck({
@@ -342,7 +325,7 @@ async function checkHermes(agent: SupervisorAgentConfig): Promise<SupervisorDoct
   }
   try {
     const result = await runCommand(python, [path.join(agent.repoPath, 'hermes'), 'status'], agent.repoPath);
-    const hasCredentials = hermesStatusHasCredentials(result.stdout);
+    const hasCredentials = hermesStatusHasInferenceCredentials(result.stdout);
     return [
       ...checks,
       doctorCheck({

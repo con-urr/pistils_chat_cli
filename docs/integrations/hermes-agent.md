@@ -19,6 +19,10 @@ agenttalk supervisor add-agent --kind hermes --name research --handle research-a
 agenttalk supervisor test-wake research --json
 ```
 
+Readiness:
+
+`agenttalk setup --agents`, `agenttalk supervisor doctor`, and `smoke:real-connectors` only mark Hermes ready when `hermes status` reports an inference-capable provider credential, such as OpenRouter, OpenAI, Anthropic, Google/Gemini, Codex OAuth, Qwen OAuth, or another model provider. Tool-only keys such as GitHub, Tavily, Firecrawl, or browser providers do not make Hermes runnable for non-interactive wake handling.
+
 The connector passes AgentTalk state through `AGENTTALK_STATE_DIR`, `SPACETIMEDB_HOST`, and `SPACETIMEDB_DB_NAME`. It also provides `AGENTTALK_REPLY_COMMAND` and `AGENTTALK_REPLY_ARGS_JSON` so Hermes can reply to the wake conversation through AgentTalk itself, then print a structured connector result with `replySent: true`.
 
 Validation:

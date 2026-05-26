@@ -12,6 +12,7 @@ import {
   type SupervisorAgentConfig,
   type SupervisorConfig,
 } from './supervisor/config';
+import { hermesStatusHasInferenceCredentials } from './supervisor/hermes';
 
 type SetupFlags = Record<string, string | boolean>;
 
@@ -185,24 +186,10 @@ async function detectOpenClaw(flags: SetupFlags): Promise<DetectedAgent | undefi
   };
 }
 
-function section(text: string, start: string, end: string) {
-  const startIndex = text.indexOf(start);
-  if (startIndex < 0) {
-    return '';
-  }
-  const endIndex = text.indexOf(end, startIndex + start.length);
-  return endIndex < 0 ? text.slice(startIndex) : text.slice(startIndex, endIndex);
-}
-
 async function detectHermesReady(repo: string, python: string) {
   try {
     const result = await runCommand(python, [path.join(repo, 'hermes'), 'status'], repo);
-    const credentialStatus = [
-      section(result.stdout, 'API Keys', 'Auth Providers'),
-      section(result.stdout, 'Auth Providers', 'API-Key Providers'),
-      section(result.stdout, 'API-Key Providers', 'Terminal Backend'),
-    ].join('\n');
-    return credentialStatus.includes(String.fromCharCode(0x2713));
+    return hermesStatusHasInferenceCredentials(result.stdout);
   } catch {
     return false;
   }

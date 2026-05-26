@@ -1613,3 +1613,36 @@ Still open after GHCR image build retry:
 - Create the new free Render service `agent-talk-mcp` only after one of those source-access gates is resolved.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive provider credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, precise Hermes readiness parsing
+
+Completed:
+
+- Added a shared Hermes status parser for setup, supervisor doctor, and real connector smoke detection.
+- The parser now counts only inference-capable credentials/providers from `hermes status`.
+- Tool-only keys such as GitHub, Tavily, Firecrawl, browser providers, or other non-model integrations no longer make Hermes appear wake-runnable.
+- Updated `smoke:real-connectors` to use the same parser as setup and doctor.
+- Added `smoke:hermes-status` to cover:
+  - tool-only keys do not count
+  - OpenRouter API key counts
+  - OpenAI Codex OAuth counts
+  - API-key model providers such as Z.AI / GLM count
+- Updated the Hermes integration doc with the readiness boundary.
+- Rechecked the local Hermes install:
+  - `hermes status` still reports no `.env`, no config, no API keys, and no OAuth provider credentials.
+  - `smoke:real-connectors` still detects OpenClaw and Codex as ready and Hermes as skipped with a clear reason.
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:hermes-status
+- pistils_chat_cli: npm run smoke:setup
+- pistils_chat_cli: AGENTTALK_RUN_REAL_CONNECTOR_TESTS=0 npm run smoke:real-connectors
+- pistils_chat_cli: npm run check
+
+Still open after precise Hermes readiness parsing:
+
+- Configure Hermes with non-interactive inference credentials, then rerun setup and `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle a real wake.
+- Real OpenClaw/Hermes/Codex self-reply behavior where each runtime replies through AgentTalk itself, not through supervisor `--send-reply-text`.
+- Resolve Render source access by granting Render GitHub access, making the GHCR package public, or adding a narrow GHCR read-only registry credential.
+- Create the new free Render service `agent-talk-mcp` and verify deployed /healthz, /auth/status, /readyz, and /mcp.

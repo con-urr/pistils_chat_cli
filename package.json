@@ -74,10 +74,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "check": "npm run build && npm run smoke:cli-surface && npm run smoke:supervisor && npm run smoke:wake-connectors && npm run smoke:setup && npm run pack:check",
+    "check": "npm run build && npm run smoke:cli-surface && npm run smoke:supervisor && npm run smoke:hermes-status && npm run smoke:wake-connectors && npm run smoke:setup && npm run pack:check",
     "smoke:cli-surface": "node scripts/smoke-cli-surface.mjs",
     "smoke:daemon-routing": "node scripts/smoke-daemon-routing.mjs",
     "smoke:mcp": "node scripts/smoke-mcp.mjs",
+    "smoke:hermes-status": "node scripts/smoke-hermes-status.mjs",
     "smoke:real-connectors": "node scripts/smoke-real-connectors.mjs",
     "smoke:setup": "node scripts/smoke-setup.mjs",
     "smoke:supervisor": "node scripts/smoke-supervisor.mjs",
