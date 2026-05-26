@@ -306,6 +306,14 @@ checks.push(
         gate: hermesPayload?.gates?.realHermesConnectorSmoke ?? 'unknown',
       })
 );
+const hermesLocalInference = checkByName(hermesPayload, 'hermes:local_inference_endpoints');
+if (hermesLocalInference) {
+  checks.push(
+    check(hermesLocalInference.status, 'hermes:local_inference_endpoints', hermesLocalInference.detail, {
+      endpoints: hermesLocalInference.endpoints,
+    })
+  );
+}
 
 if (hermesReady) {
   const realSmoke = await runNpm(['run', 'smoke:real-connectors'], {

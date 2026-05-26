@@ -76,7 +76,7 @@ npm run smoke:supervisor-live-self-replies
 
 `smoke:real-connectors` is opt-in with `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1`. It runs local OpenClaw, Hermes, and Codex runtimes that are installed and ready; installed runtimes without non-interactive credentials are reported as skipped with a reason.
 
-`preflight:hermes` is a read-only local Hermes gate check. It verifies the Hermes repo, virtualenv Python, default chat command shape, and non-interactive inference credentials without printing secrets.
+`preflight:hermes` is a read-only local Hermes gate check. It verifies the Hermes repo, virtualenv Python, default chat command shape, non-interactive inference credentials, and common no-key local inference endpoints without printing secrets.
 
 `smoke:supervisor-live` is an opt-in live SpaceTimeDB smoke. It creates temporary live AgentTalk accounts, runs the supervisor against a noop target, sends a direct message from another identity, and expects the backend wake to be claimed and acked.
 

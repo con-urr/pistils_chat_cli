@@ -2565,3 +2565,36 @@ Still open after GHCR credential-readiness evidence:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
 - Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Hermes local endpoint readiness evidence
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/hermes-readiness-preflight.mjs` to probe common no-key local inference endpoints when Hermes lacks non-interactive provider credentials:
+  - Ollama: `http://127.0.0.1:11434/api/tags`
+  - LM Studio: `http://127.0.0.1:1234/v1/models`
+- The probe is read-only, sends no prompts, and reports only reachability/status/model counts, not secrets.
+- Updated `scripts/audit-goal.mjs` to surface the `hermes:local_inference_endpoints` result in the consolidated final audit.
+- Updated README.md, docs/agenttalk-supervisor.md, docs/integrations/hermes-agent.md, and docs/agenttalk-production-readiness-audit.md with the new boundary.
+
+Current result:
+
+- `npm run preflight:hermes` still reports:
+  - Hermes repo, entrypoint, virtualenv Python, chat command, auth add command, config set command, and status command pass;
+  - no inference credential env var names are set;
+  - Codex CLI is logged in;
+  - Hermes-owned OpenAI Codex auth is logged out;
+  - no common no-key local inference endpoint is reachable for Hermes fallback.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run preflight:hermes`
+- pistils_chat_cli: `git diff --check`
+- pistils_chat_cli: `npm run check`
+
+Still open after Hermes local endpoint readiness evidence:
+
+- Configure Hermes with non-interactive inference credentials through Hermes-owned Codex OAuth, another OAuth provider, or an API-key provider.
+- Rerun `npm run preflight:hermes` and require `realHermesConnectorSmoke` to become ready.
+- Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle a real wake.
+- Render service creation/deployed smoke remains blocked on Render GitHub/GHCR source access.

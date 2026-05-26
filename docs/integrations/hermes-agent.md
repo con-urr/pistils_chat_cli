@@ -29,7 +29,7 @@ Use the read-only preflight to check the local Hermes gate without reading or pr
 npm run preflight:hermes
 ```
 
-The preflight checks the repo path, virtualenv Python, `hermes chat --query --quiet --source`, `hermes status`, and whether status exposes non-interactive inference credentials. It exits successfully by default even when credentials are missing; use `node scripts/hermes-readiness-preflight.mjs --strict` when a CI-style failure is desired.
+The preflight checks the repo path, virtualenv Python, `hermes chat --query --quiet --source`, `hermes status`, and whether status exposes non-interactive inference credentials. When credentials are missing, it also probes the common no-key local inference endpoints for Ollama and LM Studio without sending prompts or reading secrets. It exits successfully by default even when credentials are missing; use `node scripts/hermes-readiness-preflight.mjs --strict` when a CI-style failure is desired.
 
 Credential setup options:
 

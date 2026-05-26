@@ -166,11 +166,55 @@ function redact(text) {
     .replace(/([A-Z0-9_]*API_KEY=)[^\s]+/gi, '$1[redacted]');
 }
 
+async function probeJsonEndpoint(name, url) {
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      signal: AbortSignal.timeout(3000),
+    });
+    let itemCount;
+    if (response.ok) {
+      const body = await response.json();
+      if (Array.isArray(body?.models)) {
+        itemCount = body.models.length;
+      } else if (Array.isArray(body?.data)) {
+        itemCount = body.data.length;
+      }
+    }
+    return {
+      name,
+      url,
+      statusCode: response.status,
+      reachable: response.ok,
+      itemCount,
+    };
+  } catch {
+    return {
+      name,
+      url,
+      reachable: false,
+    };
+  }
+}
+
+async function probeLocalInferenceEndpoints() {
+  const probes = await Promise.all([
+    probeJsonEndpoint('ollama', 'http://127.0.0.1:11434/api/tags'),
+    probeJsonEndpoint('lmstudio', 'http://127.0.0.1:1234/v1/models'),
+  ]);
+  return {
+    probes,
+    reachable: probes.filter(item => item.reachable),
+  };
+}
+
 const checks = [];
+let hasInferenceCredentials = false;
 const diagnostics = {
   inferenceCredentialEnvVarsSet: inferenceCredentialEnvVars.filter(name => Boolean(process.env[name])),
   codexCliLogin: 'not-checked',
   hermesOpenAiCodexAuth: 'not-checked',
+  localInferenceEndpoints: [],
   note: 'Only variable names and auth states are reported; secret values are never read or printed.',
 };
 
@@ -234,7 +278,7 @@ if (existsSync(hermes) && existsSync(python)) {
 
   const status = await run(python, [hermes, 'status']);
   if (status.ok) {
-    const hasInferenceCredentials = hermesStatusHasInferenceCredentials(status.stdout);
+    hasInferenceCredentials = hermesStatusHasInferenceCredentials(status.stdout);
     checks.push(check('pass', 'hermes:status', 'Hermes status command completed'));
     checks.push(
       hasInferenceCredentials
@@ -248,6 +292,38 @@ if (existsSync(hermes) && existsSync(python)) {
   } else {
     checks.push(check('fail', 'hermes:status', redact(status.stderr || status.stdout || 'Hermes status failed')));
   }
+}
+
+if (!hasInferenceCredentials) {
+  const localInference = await probeLocalInferenceEndpoints();
+  diagnostics.localInferenceEndpoints = localInference.probes;
+  checks.push(
+    localInference.reachable.length > 0
+      ? check(
+          'warn',
+          'hermes:local_inference_endpoints',
+          'A local no-key inference endpoint is reachable, but Hermes is not configured to use it',
+          {
+            endpoints: localInference.reachable.map(item => ({
+              name: item.name,
+              statusCode: item.statusCode,
+              itemCount: item.itemCount,
+            })),
+          }
+        )
+      : check(
+          'warn',
+          'hermes:local_inference_endpoints',
+          'No common no-key local inference endpoint is reachable for Hermes fallback',
+          {
+            endpoints: localInference.probes.map(item => ({
+              name: item.name,
+              reachable: item.reachable,
+              statusCode: item.statusCode,
+            })),
+          }
+        )
+  );
 }
 
 const failures = checks.filter(item => item.status === 'fail');
