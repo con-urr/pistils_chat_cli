@@ -85,6 +85,17 @@ if (!defaultSetup.configured.some(entry => entry.agent?.kind === 'openclaw')) {
 if (!defaultSetup.skipped.some(entry => entry.kind === 'hermes')) {
   throw new Error(`unconfigured hermes was not skipped by default: ${JSON.stringify(defaultSetup)}`);
 }
+if (
+  !defaultSetup.nextActions?.some(
+    entry =>
+      entry.label === 'Create a Hermes-owned Codex OAuth session' &&
+      entry.command.includes('<hermes-repo>') &&
+      entry.command.includes('openai-codex') &&
+      !entry.command.includes(hermesRepo)
+  )
+) {
+  throw new Error(`unconfigured hermes did not include redacted credential next action: ${JSON.stringify(defaultSetup)}`);
+}
 
 const setup = parseJson(
   await run([

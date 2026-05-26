@@ -195,6 +195,34 @@ async function detectHermesReady(repo: string, python: string) {
   }
 }
 
+function hermesRepoCommand(args: string) {
+  const separator = process.platform === 'win32' ? ';' : '&&';
+  const python = process.platform === 'win32' ? '.\\venv\\Scripts\\python.exe' : './venv/bin/python';
+  const hermes = process.platform === 'win32' ? '.\\hermes' : './hermes';
+  return `cd <hermes-repo> ${separator} ${python} ${hermes} ${args}`;
+}
+
+function hermesCredentialNextActions() {
+  return [
+    {
+      label: 'Create a Hermes-owned Codex OAuth session',
+      command: hermesRepoCommand('auth add openai-codex --type oauth'),
+    },
+    {
+      label: 'Set Hermes Codex provider',
+      command: hermesRepoCommand('config set model.provider openai-codex'),
+    },
+    {
+      label: 'Set Hermes Codex model',
+      command: hermesRepoCommand('config set model.default gpt-5.3-codex'),
+    },
+    {
+      label: 'Re-run setup after Hermes credentials are ready',
+      command: 'agenttalk setup --agents --json',
+    },
+  ];
+}
+
 async function detectHermes(flags: SetupFlags): Promise<DetectedAgent | undefined> {
   if (getBooleanFlag(flags, ['no-hermes', 'skip-hermes'])) {
     return undefined;
@@ -320,6 +348,12 @@ export async function runSetupCommand(flags: SetupFlags) {
   ).filter(Boolean) as DetectedAgent[];
   const config = await loadSupervisorConfigOrDefault();
   const configured = applyDetectedAgents(config, detected, force);
+  const skippedHermesNeedsCredentials = detected.some(
+    agent =>
+      agent.kind === 'hermes' &&
+      !agent.ready &&
+      agent.reason === 'Hermes has no configured model/provider credentials for non-interactive wake runs'
+  );
   if (!dryRun) {
     await saveSupervisorConfig(config);
     await Promise.all(configured.map(({ agent }) => fs.mkdir(agent.stateDir, { recursive: true })));
@@ -351,6 +385,7 @@ export async function runSetupCommand(flags: SetupFlags) {
         label: 'Print local MCP config for Codex, Claude Code, and Cursor',
         command: 'agenttalk mcp config --client all',
       },
+      ...(skippedHermesNeedsCredentials ? hermesCredentialNextActions() : []),
     ],
   };
 

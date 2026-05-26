@@ -138,6 +138,8 @@ Use `--no-start` to write the service file without starting it and `--dry-run --
 
 Hermes is configured by default only when `hermes status` shows a non-interactive model/provider credential. Use `--allow-unconfigured-hermes` only when you intentionally want to add the Hermes agent before credentials are available.
 
+When setup detects Hermes but skips it because credentials are missing, JSON output includes redacted repo-local next actions such as `cd <hermes-repo> ; .\venv\Scripts\python.exe .\hermes auth add openai-codex --type oauth` on Windows. The actual local repo path is not printed.
+
 `agenttalk supervisor init --wizard` is an alias for the same setup path.
 
 ## Remaining Work

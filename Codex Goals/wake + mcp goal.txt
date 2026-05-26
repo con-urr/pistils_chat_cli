@@ -2821,3 +2821,27 @@ Still open after Hermes credential next-action hardening:
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun `npm run preflight:hermes`.
 - Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle a real wake.
 - Render service creation/deployed smoke remains blocked on Render GitHub/GHCR source access.
+
+Work log - 2026-05-26, setup wizard Hermes skip next actions
+
+Completed in pistils_chat_cli:
+
+- Updated `src/setup.ts` so `agenttalk setup --agents --json` adds Hermes credential next actions when Hermes is detected but skipped for missing non-interactive model/provider credentials.
+- The setup actions use `<hermes-repo>` and the Hermes virtualenv entrypoint, for example `cd <hermes-repo> ; .\venv\Scripts\python.exe .\hermes auth add openai-codex --type oauth`.
+- The setup output still redacts the actual local Hermes repo path.
+- Updated `scripts/smoke-setup.mjs` to assert that unconfigured Hermes is skipped by default and emits a redacted credential next action.
+- Updated README.md and `docs/agenttalk-supervisor.md` with the setup JSON behavior.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run smoke:setup`
+  - unconfigured Hermes is skipped by default.
+  - setup JSON includes a redacted `<hermes-repo>` Codex OAuth next action.
+- pistils_chat_cli: `npm run check`
+- pistils_chat_cli: `git diff --check`
+
+Still open after setup wizard Hermes skip next actions:
+
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun `npm run preflight:hermes`.
+- Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle a real wake.
+- Render service creation/deployed smoke remains blocked on Render GitHub/GHCR source access.
