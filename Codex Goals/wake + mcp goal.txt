@@ -3525,3 +3525,26 @@ Still open after Render account-side unblock recheck:
 
 - Grant the Render GitHub app access to `con-urr/Agent-Talk-MCP`, or add a narrow GitHub Container Registry read credential in Render.
 - After either account-side change, rerun `npm.cmd run preflight:render` and then create the `agent-talk-mcp` service.
+
+Work log - 2026-05-26, Render registry credential inventory preflight
+
+Completed in Agent-Talk-MCP:
+
+- Updated `scripts/render-preflight.mjs` so preflight checks Render registry credential metadata directly via the Render API for Connor's workspace.
+- The new `render:registry_credentials` check reports only non-secret metadata and treats an existing GitHub registry credential as readiness evidence for the private GHCR image path.
+- Updated `docs/render-deploy.md` to document the direct registry credential metadata check and its non-secret output boundary.
+- Committed and pushed Agent-Talk-MCP commit `dcabd74` on `codex/render-mcp-service`.
+
+Validation passed:
+
+- Agent-Talk-MCP: `node --check scripts\render-preflight.mjs`
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm.cmd run check`
+- Agent-Talk-MCP: normal `npm.cmd run preflight:render`, which now reports `render:registry_credentials` with zero GitHub registry credentials in the target workspace.
+- Agent-Talk-MCP: controlled dummy `RENDER_REGISTRY_CREDENTIAL_ID` `npm.cmd run preflight:render`, which still reports `registryCredentialConfigured: true`, `imageDeploy: requires-render-create-with-registry-credential`, and `createCommands.imageBackedWithRegistryCredential.status: ready-with-configured-registry-credential`.
+
+Still open after Render registry credential inventory preflight:
+
+- Grant the Render GitHub app access to `con-urr/Agent-Talk-MCP`, or add a narrow GitHub Container Registry read credential in Render.
+- After either account-side change, rerun `npm.cmd run preflight:render` and then create the `agent-talk-mcp` service.
+- Recheck GitHub Actions after the outage resolves, then rerun `npm.cmd run audit:goal`.
