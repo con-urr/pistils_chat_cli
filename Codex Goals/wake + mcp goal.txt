@@ -3758,3 +3758,37 @@ Still open after Render service creation:
 - Configure Hermes with non-interactive inference credentials through `agenttalk hermes codex-oauth --confirm` or an API-key provider.
 - Rerun `agenttalk hermes preflight` and `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm.cmd run smoke:real-connectors`.
 - Final `npm.cmd run audit:goal -- --strict` remains blocked until `hermes:credentials` and `hermes:real_connector_smoke` pass.
+
+Work log - 2026-05-26, Hermes OAuth and final completion audit
+
+Completed:
+
+- Ran `node dist\agenttalk.js hermes codex-oauth --confirm --timeout-seconds 600`.
+- The Hermes-owned OpenAI Codex OAuth device flow completed after browser approval.
+- The helper added a Hermes OAuth credential, then set `model.provider=openai-codex` and `model.default=gpt-5.3-codex` without importing Codex CLI tokens or printing secrets.
+
+Validation passed:
+
+- `node dist\agenttalk.js hermes preflight`, which now reports:
+  - `hermes:inference_credentials` pass
+  - `hermesOpenAiCodexAuth: logged-in`
+  - `realHermesConnectorSmoke: ready`
+- `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm.cmd run smoke:real-connectors`, which returned `ok: true` with OpenClaw, Hermes, and Codex all `handled: true` and no skipped connectors.
+- `npm.cmd run audit:goal`, which returned `ok: true`, `finalCompletion: ready`, `nextActions: []`, summary `pass: 37`, `warn: 2`, `fail: 0`.
+- `npm.cmd run audit:goal -- --strict`, which also returned `ok: true`, `finalCompletion: ready`, `nextActions: []`, summary `pass: 37`, `warn: 2`, `fail: 0`.
+
+Completion audit:
+
+- Local MCP server, bounded tool surface, and multi-client setup helpers are implemented and covered by package checks and `audit:goal`.
+- Remote Render MCP service is created as `agent-talk-mcp`, live at `https://agent-talk-mcp.onrender.com`, and deployed smoke passes while `CrisisTrainingSim` remains untouched.
+- `agenttalk-supervisor` supports multiple addressable local agents and is covered by supervisor and setup smokes.
+- OpenClaw, Hermes, and Codex connector command paths are implemented, documented, and real connector smoke now verifies all three handle wakes.
+- Consumer onboarding documents and setup flows exist, including Hermes credential next actions for new machines.
+- Current repo heads, tracked worktrees, GitHub Actions, Render deploy evidence, Hermes preflight, and real connector smoke are all checked by `npm.cmd run audit:goal -- --strict`.
+- Hosted MCP remains intentionally private-beta bearer-token auth; full OAuth/account-linking and encrypted session storage remain documented follow-ups before any broad public production claim.
+
+Remaining follow-up, not blocking the scoped completion gates:
+
+- Replace the temporary Render CLI token-derived `RENDER_API_KEY` with a non-expiring Render Dashboard API key for durability.
+- Add a Render GHCR registry credential only if image-backed deploy fallback is needed while GHCR remains private.
+- Implement full hosted MCP OAuth/account-linking/encrypted session storage before claiming general public production readiness.
