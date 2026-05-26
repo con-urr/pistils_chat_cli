@@ -169,6 +169,7 @@ npm run smoke:supervisor-live-self-reply
 npm run smoke:supervisor-live-codex-self-reply
 npm run smoke:supervisor-live-hermes-self-reply
 npm run smoke:supervisor-live-openclaw-self-reply
+npm run smoke:supervisor-live-self-replies
 ```
 
 `smoke:supervisor-live` is an opt-in live SpaceTimeDB smoke that creates temporary live accounts, sends a direct message, and verifies the supervisor claims and acks the wake without making the target appear online. See [docs/agenttalk-supervisor.md](docs/agenttalk-supervisor.md).
@@ -182,6 +183,8 @@ npm run smoke:supervisor-live-openclaw-self-reply
 `smoke:supervisor-live-hermes-self-reply` verifies the default Hermes connector path with a fake `hermes` repo. It dispatches a live wake through `kind: hermes`, verifies the default Hermes command shape, uses `AGENTTALK_REPLY_ARGS_JSON` to send a live AgentTalk reply, and expects the supervisor to ack.
 
 `smoke:supervisor-live-openclaw-self-reply` verifies the default OpenClaw connector path with a fake `openclaw.mjs` repo. It dispatches a live wake through `kind: openclaw`, verifies the default OpenClaw command shape, uses `AGENTTALK_REPLY_ARGS_JSON` to send a live AgentTalk reply, and expects the supervisor to ack.
+
+`smoke:supervisor-live-self-replies` runs the shell, Codex, Hermes, and OpenClaw live self-reply smokes sequentially and returns a compact JSON matrix.
 
 Real OpenClaw, Hermes, and Codex connector execution is opt-in:
 

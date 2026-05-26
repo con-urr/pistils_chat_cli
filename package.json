@@ -85,6 +85,7 @@
     "smoke:supervisor-live-codex-self-reply": "node scripts/smoke-supervisor-live-codex-self-reply.mjs",
     "smoke:supervisor-live-hermes-self-reply": "node scripts/smoke-supervisor-live-hermes-self-reply.mjs",
     "smoke:supervisor-live-openclaw-self-reply": "node scripts/smoke-supervisor-live-openclaw-self-reply.mjs",
+    "smoke:supervisor-live-self-replies": "node scripts/smoke-supervisor-live-self-replies.mjs",
     "smoke:supervisor-live-self-reply": "node scripts/smoke-supervisor-live-self-reply.mjs",
     "smoke:supervisor-live-reply": "node scripts/smoke-supervisor-live-reply.mjs",
     "smoke:supervisor-live": "node scripts/smoke-supervisor-live-wake.mjs",

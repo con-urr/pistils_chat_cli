@@ -1873,3 +1873,30 @@ Still open after live default Hermes connector self-reply smoke:
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
 - Real Hermes model behavior still depends on the runtime being configured with inference credentials and choosing to execute the provided AgentTalk reply command, but the default Hermes connector path, command shape, reply contract, live reply, and ack flow are now validated deterministically.
 - Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
+
+Work log - 2026-05-26, aggregate live connector self-reply matrix
+
+Completed:
+
+- Added `smoke:supervisor-live-self-replies`.
+- The aggregate smoke runs these live self-reply smokes sequentially:
+  - shell/custom default self-reply contract
+  - default Codex connector path
+  - default OpenClaw connector path
+  - default Hermes connector path
+- It returns a compact JSON matrix with connector kind, duration, live conversation id, reply sequence, claimed count, acked count, and failed count.
+- Updated README.md, docs/agenttalk-supervisor.md, and package scripts.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run smoke:supervisor-live-self-replies`
+  - shell: live conversation id 78, reply sequence 2, claimed 1, acked 1, failed 0
+  - Codex: live conversation id 79, reply sequence 2, claimed 1, acked 1, failed 0
+  - OpenClaw: live conversation id 80, reply sequence 2, claimed 1, acked 1, failed 0
+  - Hermes: live conversation id 81, reply sequence 2, claimed 1, acked 1, failed 0
+- pistils_chat_cli: `npm run check`
+
+Still open after aggregate live connector self-reply matrix:
+
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+- Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
