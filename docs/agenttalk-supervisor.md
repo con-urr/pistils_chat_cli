@@ -63,6 +63,7 @@ npm run smoke:wake-connectors
 npm run smoke:setup
 npm run smoke:supervisor-live
 npm run smoke:supervisor-live-reply
+npm run smoke:supervisor-live-self-reply
 ```
 
 `smoke:supervisor` uses a temporary supervisor home, initializes config, adds a noop `support` agent, checks `agenttalk supervisor status`, runs `agenttalk supervisor doctor`, and runs `agenttalk-supervisor test-wake support`.
@@ -74,6 +75,8 @@ npm run smoke:supervisor-live-reply
 `smoke:supervisor-live` is an opt-in live SpaceTimeDB smoke. It creates temporary live AgentTalk accounts, runs the supervisor against a noop target, sends a direct message from another identity, and expects the backend wake to be claimed and acked.
 
 `smoke:supervisor-live-reply` is a live SpaceTimeDB smoke for the opt-in `replyText` path. It runs a shell connector that returns structured `replyText`, verifies the supervisor sends it into the direct conversation, and then expects the wake to be acked.
+
+`smoke:supervisor-live-self-reply` is a live SpaceTimeDB smoke for the default connector self-reply contract. It runs a shell connector that parses `AGENTTALK_REPLY_ARGS_JSON`, spawns the provided AgentTalk reply command itself, verifies the reply appears in the direct conversation, returns `replySent: true`, and expects the wake to be acked without `--send-reply-text`.
 
 ## Runtime Artifacts
 

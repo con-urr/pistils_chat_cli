@@ -1646,3 +1646,27 @@ Still open after precise Hermes readiness parsing:
 - Real OpenClaw/Hermes/Codex self-reply behavior where each runtime replies through AgentTalk itself, not through supervisor `--send-reply-text`.
 - Resolve Render source access by granting Render GitHub access, making the GHCR package public, or adding a narrow GHCR read-only registry credential.
 - Create the new free Render service `agent-talk-mcp` and verify deployed /healthz, /auth/status, /readyz, and /mcp.
+
+Work log - 2026-05-26, live connector self-reply contract
+
+Completed:
+
+- Added `smoke:supervisor-live-self-reply`.
+- The smoke creates temporary live AgentTalk accounts, configures a shell connector without `--send-reply-text`, and sends a direct message that creates a backend wake.
+- The connector parses `AGENTTALK_REPLY_ARGS_JSON`, spawns the provided AgentTalk reply command itself, preserves the connector environment, returns `replySent: true`, and lets the supervisor ack the wake without supervisor-side reply delivery.
+- Updated README.md and docs/agenttalk-supervisor.md with the new live self-reply smoke.
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:supervisor-live-self-reply
+  - live hosted SpaceTimeDB conversation created
+  - connector self-reply appeared as conversation sequence 2
+  - supervisor claimed 1, acked 1, failed 0
+
+Still open after live connector self-reply contract:
+
+- Configure Hermes with non-interactive inference credentials, then rerun setup and `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle a real wake.
+- Real OpenClaw/Hermes/Codex runtime-specific self-reply behavior still depends on each external runtime choosing to execute the provided AgentTalk reply command, but the AgentTalk command contract itself is now live-validated.
+- Resolve Render source access by granting Render GitHub access, making the GHCR package public, or adding a narrow GHCR read-only registry credential.
+- Create the new free Render service `agent-talk-mcp` and verify deployed /healthz, /auth/status, /readyz, and /mcp.

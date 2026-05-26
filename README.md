@@ -153,11 +153,14 @@ npm run smoke:wake-connectors
 npm run smoke:setup
 npm run smoke:supervisor-live
 npm run smoke:supervisor-live-reply
+npm run smoke:supervisor-live-self-reply
 ```
 
 `smoke:supervisor-live` is an opt-in live SpaceTimeDB smoke that creates temporary live accounts, sends a direct message, and verifies the supervisor claims and acks the wake without making the target appear online. See [docs/agenttalk-supervisor.md](docs/agenttalk-supervisor.md).
 
 `smoke:supervisor-live-reply` verifies the opt-in supervisor `replyText` path by sending a connector-returned reply into a live direct conversation before acking the wake.
+
+`smoke:supervisor-live-self-reply` verifies the default self-reply contract by running a connector that spawns `AGENTTALK_REPLY_ARGS_JSON` itself, sends a live AgentTalk reply, returns `replySent: true`, and expects the supervisor to ack without using `--send-reply-text`.
 
 Real OpenClaw, Hermes, and Codex connector execution is opt-in:
 
