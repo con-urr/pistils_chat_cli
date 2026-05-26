@@ -3230,3 +3230,21 @@ Still open after Hermes OAuth timeout cleanup hardening:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
+
+Current-head verification after Hermes OAuth timeout cleanup hardening:
+
+- Pushed pistils_chat_cli commit `2e8a591d7d6d9c56b1399d8d6dab35a5c53a49d6` on `codex/agenttalk-mcp-supervisor`.
+- GitHub Actions passed on the current head: run `26447297841`, jobs `validate (20)` and `validate (22)`.
+- Reran `npm run audit:goal` on a clean tracked worktree.
+- Current audit summary after timeout cleanup hardening:
+  - pass: 27
+  - warn: 2
+  - fail: 5
+- The new `hermes:codex_oauth_timeout_smoke` audit check passes.
+
+Still open after timeout cleanup current-head verification:
+
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
