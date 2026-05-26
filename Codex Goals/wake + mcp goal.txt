@@ -3563,3 +3563,23 @@ Still open after GitHub Actions recovered to failing infrastructure runs:
 
 - Re-run failed GitHub Actions jobs after the GitHub Actions authentication/download incident resolves.
 - Keep the final audit failed until current-head checks pass on pistils_chat_cli and Agent-Talk-MCP.
+
+Work log - 2026-05-26, Render registry credential audit coverage
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/audit-goal.mjs` so `npm.cmd run audit:goal` promotes the Agent-Talk-MCP `render:registry_credentials` preflight result into its own top-level audit check.
+- The audit now passes through sanitized inventory metadata (`count`, `githubCredentialCount`, `registryCredentialConfiguredFromEnv`, and non-secret credential metadata), warns for the current zero-GitHub-credential state, and fails if Agent-Talk-MCP preflight stops reporting registry credential inventory.
+- Updated `docs/agenttalk-production-readiness-audit.md` so the conservative Render source-access audit explicitly names `render:registry_credentials` alongside source visibility, Render GitHub App access, and GHCR metadata.
+
+Validation passed:
+
+- `node --check scripts\audit-goal.mjs`
+- `git diff --check`
+- `npm.cmd run audit:goal`, which now reports `render:registry_credentials` as a top-level warning with `count: 0`, `githubCredentialCount: 0`, and `registryCredentialConfiguredFromEnv: false`; the final audit remains blocked by the known external gates.
+
+Still open after Render registry credential audit coverage:
+
+- Commit and push the audit coverage hardening.
+- Grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or add a narrow Render GHCR registry credential, then create and smoke-test the deployed `agent-talk-mcp` service.
+- Re-run failed GitHub Actions jobs after the GitHub Actions authentication/download incident resolves.

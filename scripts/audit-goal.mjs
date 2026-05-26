@@ -645,6 +645,7 @@ const renderMcpWorkspaceSession = checkByName(renderPayload, 'render:mcp_workspa
 const renderMcpCreateScope = checkByName(renderPayload, 'render:mcp_create_scope');
 const githubSourceVisibility = checkByName(renderPayload, 'github:source_repo_visibility');
 const githubRenderAppAccess = checkByName(renderPayload, 'github:render_app_installation_access');
+const renderRegistryCredentials = checkByName(renderPayload, 'render:registry_credentials');
 checks.push(
   renderMcpToolCatalog?.status === 'pass' &&
     renderMcpWorkspaceSession?.status === 'pass'
@@ -674,6 +675,25 @@ checks.push(
         renderAppAccessStatusCode: githubRenderAppAccess.statusCode,
       })
     : check('fail', 'render:github_source_access_probe', 'Render preflight did not report GitHub source visibility and app installation diagnostics')
+);
+checks.push(
+  renderRegistryCredentials
+    ? check(
+        renderRegistryCredentials.status === 'pass'
+          ? 'pass'
+          : renderRegistryCredentials.status === 'fail'
+            ? 'fail'
+            : 'warn',
+        'render:registry_credentials',
+        renderRegistryCredentials.detail,
+        {
+          count: renderRegistryCredentials.count,
+          githubCredentialCount: renderRegistryCredentials.githubCredentialCount,
+          registryCredentialConfiguredFromEnv: renderRegistryCredentials.registryCredentialConfiguredFromEnv,
+          credentials: renderRegistryCredentials.credentials,
+        }
+      )
+    : check('fail', 'render:registry_credentials', 'Render preflight did not report registry credential inventory')
 );
 const targetService = renderPayload?.targetService;
 const serviceCreated =
