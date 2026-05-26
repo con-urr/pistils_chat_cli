@@ -2879,3 +2879,44 @@ Still open after setup guidance push and Render source-access recheck:
 - Create the free `agent-talk-mcp` Render service in Connor's workspace / My project / Cervaris after source access is available.
 - Run deployed MCP smoke after creation.
 - Complete Hermes credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render MCP and REST deploy boundary
+
+Completed in Agent-Talk-MCP:
+
+- Updated `scripts/render-preflight.mjs` to probe Render MCP beyond basic auth:
+  - lists the MCP tool catalog;
+  - verifies `list_workspaces`, `get_selected_workspace`, and `list_services` are available;
+  - calls `list_workspaces` and confirms the sole workspace `Connor's workspace` can be selected in-session;
+  - calls `list_services` in the same MCP session and confirms `CrisisTrainingSim` is visible;
+  - reports that the current Render MCP `create_web_service` tool does not expose `environmentId` or image/registry inputs, so it is not suitable for creating `agent-talk-mcp` in the required project environment.
+- Updated `README.md` and `docs/render-deploy.md` so the runbook explains the Render MCP read-only path and why service creation still uses CLI/REST with explicit `environmentId`.
+- Tried a direct Render REST `POST /v1/services` create with:
+  - owner `tea-d51f80re5dus73814oj0`;
+  - environment `evm-d7ampnp4tr6s739q3q9g`;
+  - repo `https://github.com/con-urr/Agent-Talk-MCP`;
+  - branch `codex/render-mcp-service`;
+  - Docker runtime and the same env vars as the CLI command.
+- The direct REST create failed before service creation with the same source-access error as the CLI: `passed in repository URL is invalid or unfetchable`.
+- Rechecked the target Render environment afterward and confirmed only `CrisisTrainingSim` exists; no partial `agent-talk-mcp` service was created.
+- Pushed Agent-Talk-MCP commit `2e94fe3` on `codex/render-mcp-service`.
+
+Validation passed:
+
+- Agent-Talk-MCP: `node --check scripts\render-preflight.mjs`
+- Agent-Talk-MCP: `npm run preflight:render`
+  - Render CLI/API/MCP auth pass.
+  - Render MCP read-only workspace/service listing passes in-session.
+  - Render MCP create scope is warned as unsuitable for this environment-targeted deploy.
+  - GHCR anonymous manifest remains HTTP 401.
+  - Git-backed deploy remains blocked on Render GitHub integration access.
+- Agent-Talk-MCP: `npm run check`
+- Agent-Talk-MCP: `git diff --check`
+
+Still open after Render MCP and REST deploy boundary:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Create the free `agent-talk-mcp` Render service in Connor's workspace / My project / Cervaris after source access is available.
+- Run deployed MCP smoke after creation.
+- Wait for the Agent-Talk-MCP GitHub CI/image workflows on commit `2e94fe3`, then rerun the top-level goal audit.
+- Complete Hermes credentials and rerun the real Hermes connector smoke.
