@@ -57,5 +57,6 @@ Validation:
 codex --version
 codex exec --help
 npm run smoke:wake-connectors
+npm run smoke:supervisor-live-codex-self-reply
 AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors
 ```

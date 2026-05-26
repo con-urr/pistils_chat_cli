@@ -1785,3 +1785,29 @@ Still open after default Codex connector output schema:
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
 - Runtime-specific OpenClaw/Hermes/Codex self-reply still depends on each external runtime choosing to execute the provided AgentTalk reply command; Codex now has schema-constrained structured result output by default.
 - Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
+
+Work log - 2026-05-26, live default Codex connector self-reply smoke
+
+Completed:
+
+- Added `smoke:supervisor-live-codex-self-reply`.
+- The smoke shadows `codex` with a fake executable but uses the real default supervisor `kind: codex` connector path with no command override.
+- It creates temporary live AgentTalk sender/target accounts, starts the supervisor, sends a direct message that creates a backend wake, and dispatches that wake through the default Codex connector.
+- The fake Codex executable verifies that `--output-schema` is passed and the schema file exists.
+- The fake Codex executable parses `AGENTTALK_REPLY_ARGS_JSON`, runs the provided AgentTalk reply command itself, emits Codex-shaped JSONL with `replySent: true`, and lets the supervisor ack the wake.
+- Updated README.md, docs/agenttalk-supervisor.md, docs/integrations/codex.md, and package scripts.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run build`
+- pistils_chat_cli: `npm run smoke:supervisor-live-codex-self-reply`
+  - live hosted SpaceTimeDB conversation id 74
+  - fake Codex self-reply appeared as conversation sequence 2
+  - supervisor claimed 1, acked 1, failed 0
+- pistils_chat_cli: `npm run check`
+
+Still open after live default Codex connector self-reply smoke:
+
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+- Real Codex model behavior still depends on the model choosing to execute the provided AgentTalk reply command, but the default Codex connector path, output-schema handoff, JSONL parsing, reply contract, live reply, and ack flow are now validated deterministically.
+- Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
