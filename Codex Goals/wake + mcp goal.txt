@@ -2534,3 +2534,34 @@ Still open after target-location hardening for final audit:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
 - Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, GHCR credential-readiness evidence
+
+Completed across Agent-Talk-MCP and pistils_chat_cli:
+
+- Added a read-only `github:ghcr_package_metadata` check to Agent-Talk-MCP `scripts/render-preflight.mjs`.
+- The check uses the local GitHub credential helper only to call GitHub Packages metadata endpoints and never prints the credential value.
+- Current result:
+  - personal package endpoint for `con-urr/agent-talk-mcp`: HTTP 403;
+  - org package endpoint for `con-urr/agent-talk-mcp`: HTTP 404.
+- The preflight now warns that the local GitHub credential cannot read the GHCR package metadata and should not be used as a Render registry credential.
+- Updated Agent-Talk-MCP README.md and docs/render-deploy.md to document the new signal and the package visibility tradeoff.
+- Updated pistils_chat_cli `npm run audit:goal` to surface the GHCR package metadata credential signal directly.
+- Pushed Agent-Talk-MCP commit `a6325c014ad9c3114bd8f3739f84f0e8781dfd86`.
+
+Validation passed:
+
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm run check`
+- Agent-Talk-MCP: `npm run preflight:render` with the Windows user `RENDER_API_KEY` injected
+  - Render API/MCP auth and target project/environment still pass;
+  - `agent-talk-mcp` remains absent;
+  - anonymous GHCR pull remains HTTP 401;
+  - local GitHub package metadata credential check reports HTTP 403/404 without printing secrets.
+
+Still open after GHCR credential-readiness evidence:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a separate narrow GHCR read credential to Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.

@@ -247,6 +247,14 @@ checks.push(
     ? check('pass', 'render:crisistrainingsim_untouched', 'CrisisTrainingSim remains present in inventory')
     : check('fail', 'render:crisistrainingsim_untouched', 'CrisisTrainingSim inventory check did not pass')
 );
+const githubPackageMetadata = checkByName(renderPayload, 'github:ghcr_package_metadata');
+checks.push(
+  githubPackageMetadata?.status === 'pass'
+    ? check('pass', 'render:ghcr_package_metadata', githubPackageMetadata.detail)
+    : check('warn', 'render:ghcr_package_metadata', githubPackageMetadata?.detail ?? 'Render preflight did not report GHCR package metadata credential readiness', {
+        results: githubPackageMetadata?.results,
+      })
+);
 checks.push(
   renderPayload?.gates?.renderMcpAuth === 'ready' &&
     renderPayload?.gates?.targetProjectEnvironment === 'ready'
