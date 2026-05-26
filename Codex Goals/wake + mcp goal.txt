@@ -3058,3 +3058,38 @@ Still open after setup audit current-head verification:
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
 - Complete Hermes credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render GitHub source-access diagnostics
+
+Completed in Agent-Talk-MCP:
+
+- Updated `scripts/render-preflight.mjs` to probe GitHub source access without printing credentials:
+  - reads `con-urr/Agent-Talk-MCP` repo metadata;
+  - reports that the repo is private;
+  - tries to enumerate visible GitHub App installations from the local GitHub credential;
+  - reports that this credential currently receives HTTP 403 for installation enumeration, so Render GitHub App access must be checked manually in GitHub/Render.
+- Updated `README.md` and `docs/render-deploy.md` with the source visibility and GitHub App access diagnostic.
+- Pushed Agent-Talk-MCP commit `0e1566b` on `codex/render-mcp-service`.
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/audit-goal.mjs` to require the new Render preflight GitHub source-access diagnostics.
+- Updated `docs/agenttalk-production-readiness-audit.md` so the audit description includes `github:source_repo_visibility` and `github:render_app_installation_access`.
+
+Validation passed so far:
+
+- Agent-Talk-MCP: `node --check scripts\render-preflight.mjs`
+- Agent-Talk-MCP: `npm run preflight:render`
+  - source repo visibility is reported as private;
+  - Render GitHub App installation enumeration returns HTTP 403 for the local GitHub credential;
+  - Render source access remains blocked.
+- Agent-Talk-MCP: `npm run check`
+- Agent-Talk-MCP: `git diff --check`
+
+Still open after Render GitHub source-access diagnostics:
+
+- Commit and push the pistils audit/log/doc update, wait for GitHub checks, and rerun `npm run audit:goal` on the clean current heads.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
+- Complete Hermes credentials and rerun the real Hermes connector smoke.

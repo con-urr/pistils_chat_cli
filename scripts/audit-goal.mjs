@@ -602,6 +602,8 @@ const targetServiceCheck = checkByName(renderPayload, 'render:target_service_abs
 const renderMcpToolCatalog = checkByName(renderPayload, 'render:mcp_tool_catalog');
 const renderMcpWorkspaceSession = checkByName(renderPayload, 'render:mcp_workspace_session');
 const renderMcpCreateScope = checkByName(renderPayload, 'render:mcp_create_scope');
+const githubSourceVisibility = checkByName(renderPayload, 'github:source_repo_visibility');
+const githubRenderAppAccess = checkByName(renderPayload, 'github:render_app_installation_access');
 checks.push(
   renderMcpToolCatalog?.status === 'pass' &&
     renderMcpWorkspaceSession?.status === 'pass'
@@ -621,6 +623,16 @@ checks.push(
         hasCreateWebService: renderMcpCreateScope?.hasCreateWebService,
         supportsEnvironmentId: renderMcpCreateScope?.supportsEnvironmentId,
       })
+);
+checks.push(
+  githubSourceVisibility && githubRenderAppAccess
+    ? check('pass', 'render:github_source_access_probe', 'Render preflight reports GitHub source visibility and Render app installation access diagnostics', {
+        sourceRepoStatus: githubSourceVisibility.status,
+        sourceRepoVisibility: githubSourceVisibility.visibility,
+        renderAppAccessStatus: githubRenderAppAccess.status,
+        renderAppAccessStatusCode: githubRenderAppAccess.statusCode,
+      })
+    : check('fail', 'render:github_source_access_probe', 'Render preflight did not report GitHub source visibility and app installation diagnostics')
 );
 const targetService = renderPayload?.targetService;
 const serviceCreated =
