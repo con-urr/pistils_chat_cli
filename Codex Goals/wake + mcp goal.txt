@@ -3088,8 +3088,18 @@ Validation passed so far:
 
 Still open after Render GitHub source-access diagnostics:
 
-- Commit and push the pistils audit/log/doc update, wait for GitHub checks, and rerun `npm run audit:goal` on the clean current heads.
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
 - Complete Hermes credentials and rerun the real Hermes connector smoke.
+
+Current-head verification after this work:
+
+- Agent-Talk-MCP head `0e1566b8b97cd76c70efe59ff6125fdbb9f3bae7`.
+- pistils_chat_cli head `a9f07293636afce18c9aead11f9ec1be48f804d1`.
+- GitHub checks passed on both heads.
+- `npm run audit:goal` summary:
+  - pass: 24
+  - warn: 2
+  - fail: 5
+- The new `render:github_source_access_probe` check passes, reporting the repo as private and local GitHub App installation enumeration as HTTP 403.
