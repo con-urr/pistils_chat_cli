@@ -2097,3 +2097,40 @@ Still open after Render MCP env auth:
 - Create the new free Render service `agent-talk-mcp` after one source-access path is available.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render preflight API/MCP auth verification
+
+Completed in Agent-Talk-MCP:
+
+- Updated `scripts/render-preflight.mjs` so `RENDER_API_KEY` is not treated as ready by presence alone.
+- The preflight now performs two bounded auth probes without printing the token:
+  - Render API service-list probe
+  - Render MCP JSON-RPC initialize probe
+- Added explicit checks:
+  - `render:api_key_auth`
+  - `render:mcp_api_key_auth`
+- Updated README.md and docs/render-deploy.md to describe the stronger preflight.
+- Pushed Agent-Talk-MCP commit `966e85d62d70e40d1aec70526a6ded0b6b36a5cf`.
+- Updated Agent-Talk-MCP PR #1 with the new auth-verification evidence.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run check`
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm run preflight:render` with the Windows user `RENDER_API_KEY` injected
+  - `render:api_key_auth` passed with HTTP 200
+  - `render:mcp_api_key_auth` passed with HTTP 200
+  - `renderMcpAuth` is `ready`
+  - `agent-talk-mcp` remains absent
+  - `CrisisTrainingSim` remains present and untouched
+  - GHCR anonymous manifest remains HTTP 401
+  - git-backed deploy still requires Render GitHub integration access
+
+Still open after Render preflight API/MCP auth verification:
+
+- Restart Codex Desktop or start a new Codex session so the process environment includes `RENDER_API_KEY`.
+- Replace the CLI-token-backed env value with a non-expiring Dashboard API key before relying on long-term Render MCP auth.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` after one source-access path is available.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.

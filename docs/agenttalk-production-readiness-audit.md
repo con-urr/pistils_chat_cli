@@ -20,7 +20,7 @@ The local MCP, non-presence wake supervisor, setup flow, connector framework, Co
 | --- | --- | --- |
 | `pistils_chat_cli` | `codex/agenttalk-mcp-supervisor` | PR `con-urr/pistils_chat_cli#1`; this committed audit is on the pushed branch; only an unrelated untracked image remains locally. |
 | `live-chat` | `codex/agenttalk-wake-presence` | Head `7e0a759935f2856d618f76983c4a4cce0d7adb80`; PR `con-urr/live-chat#1`. |
-| `Agent-Talk-MCP` | `codex/render-mcp-service` | Head `76a375883f7695f52a88005e3be2530e1214678d`; PR `con-urr/Agent-Talk-MCP#1`. |
+| `Agent-Talk-MCP` | `codex/render-mcp-service` | Head `966e85d62d70e40d1aec70526a6ded0b6b36a5cf`; PR `con-urr/Agent-Talk-MCP#1`. |
 
 ## Checklist
 
@@ -39,7 +39,7 @@ The local MCP, non-presence wake supervisor, setup flow, connector framework, Co
 | Consumer setup flow | Complete | `agenttalk setup --agents`; `agenttalk supervisor init --wizard`; setup smoke covers OpenClaw auto-detection, Hermes skip-by-default without credentials, and `--allow-unconfigured-hermes`; README and supervisor docs show minimal setup path. | Real Hermes readiness still depends on credentials. |
 | Service installation | Complete within platform scope | `agenttalk supervisor install-service` supports LaunchAgent, systemd user service, and Windows start script; `smoke:supervisor` validates dry-run service install on Windows. | Actual service start/install was not performed in this workspace. |
 | Hosted MCP service code | Complete for private beta | `Agent-Talk-MCP` exposes `/healthz`, `/readyz`, `/auth/status`, `POST /mcp`, `GET /mcp`; `npm run check` passes with private-beta bearer auth and 22 MCP tools. | Full OAuth/account-linking/encrypted session storage remains follow-up before general production claim. |
-| Render deploy artifacts | Complete, deploy blocked externally | `Agent-Talk-MCP/Dockerfile`, `render.yaml`, `.github/workflows/publish-image.yml`, `docs/render-deploy.md`, and `npm run preflight:render`; preflight validates Blueprint and confirms `agent-talk-mcp` is absent while `CrisisTrainingSim` remains untouched. Direct Render CLI create retries failed before creation because the private GitHub source is invalid or unfetchable to Render. Render MCP auth env is now set and redacted API/MCP probes return HTTP 200. | Grant Render GitHub integration access, make GHCR public, or add a narrow GHCR read credential; then create free `agent-talk-mcp` and verify deployed endpoints. |
+| Render deploy artifacts | Complete, deploy blocked externally | `Agent-Talk-MCP/Dockerfile`, `render.yaml`, `.github/workflows/publish-image.yml`, `docs/render-deploy.md`, and `npm run preflight:render`; preflight validates Blueprint, confirms `agent-talk-mcp` is absent while `CrisisTrainingSim` remains untouched, and now verifies `RENDER_API_KEY` against both Render API and Render MCP. Direct Render CLI create retries failed before creation because the private GitHub source is invalid or unfetchable to Render. | Grant Render GitHub integration access, make GHCR public, or add a narrow GHCR read credential; then create free `agent-talk-mcp` and verify deployed endpoints. |
 | Validation matrix | Strong but not final | `npm run check`; `npm run preflight:hermes`; `npm run smoke:mcp`; `npm run smoke:wake-connectors`; `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors`; `npm run smoke:supervisor-live-self-replies`; `Agent-Talk-MCP npm run check`; `Agent-Talk-MCP npm run preflight:render`; Render CLI service inventory after create retries. | Add deployed Render endpoint validation after service creation. |
 
 ## Latest Validation Snapshot
@@ -56,7 +56,7 @@ The goal log records these validated checkpoints:
 - Real connector smoke passed for OpenClaw and Codex; Hermes skipped with the explicit reason that non-interactive credentials are not configured.
 - Hosted MCP smoke passed with private-beta bearer auth and 22 MCP tools.
 - Render MCP auth was configured by copying the existing Render CLI token into the Windows user `RENDER_API_KEY` env var without printing it; redacted probes returned HTTP 200 from both Render API and Render MCP. The token expires on 2026-06-01 and should be replaced by a non-expiring Dashboard API key for durable use.
-- Render preflight passed local/Render CLI checks and, when run with the user env value injected into the current shell, reports `renderMcpAuth: ready`; it still reports:
+- Agent-Talk-MCP `npm run preflight:render` now verifies `RENDER_API_KEY` against Render API and Render MCP directly. When run with the user env value injected into the current shell, it reports `render:api_key_auth` and `render:mcp_api_key_auth` as pass and `renderMcpAuth: ready`; it still reports:
   - GHCR branch image anonymous manifest returns HTTP 401
   - Git-backed creation still needs Render GitHub access to the private repo
 - Render CLI direct Git-backed creation was retried with both accepted URL shapes and failed before creating a service because the private repository remains invalid or unfetchable to Render.
