@@ -776,22 +776,43 @@ if (hermesLocalInference) {
   );
 }
 
+const realSmoke = await runNpm(['run', 'smoke:real-connectors'], {
+  cwd: root,
+  env: {
+    ...process.env,
+    AGENTTALK_RUN_REAL_CONNECTOR_TESTS: '1',
+  },
+});
+const realSmokePayload = parseJsonFromOutput(realSmoke.stdout);
+const realSmokeResults = Array.isArray(realSmokePayload?.results) ? realSmokePayload.results : [];
+const realSmokeSkipped = Array.isArray(realSmokePayload?.skipped) ? realSmokePayload.skipped : [];
+const realConnectorHandled = kind =>
+  realSmokeResults.some(item => item.kind === kind && item.handled === true);
+const missingRequiredRealConnectors = ['openclaw', 'codex'].filter(
+  kind => !realConnectorHandled(kind)
+);
+checks.push(
+  realSmoke.ok && missingRequiredRealConnectors.length === 0
+    ? check('pass', 'connectors:real_openclaw_codex_smoke', 'real OpenClaw and Codex connector smokes handled wakes', {
+        results: realSmokeResults,
+        skipped: realSmokeSkipped,
+      })
+    : check('fail', 'connectors:real_openclaw_codex_smoke', redact(realSmoke.stderr || realSmoke.stdout || 'real OpenClaw/Codex connector smoke did not handle'), {
+        missing: missingRequiredRealConnectors,
+        results: realSmokeResults,
+        skipped: realSmokeSkipped,
+      })
+);
+
 if (hermesReady) {
-  const realSmoke = await runNpm(['run', 'smoke:real-connectors'], {
-    cwd: root,
-    env: {
-      ...process.env,
-      AGENTTALK_RUN_REAL_CONNECTOR_TESTS: '1',
-    },
-  });
-  const realSmokePayload = parseJsonFromOutput(realSmoke.stdout);
-  const hermesHandled = realSmokePayload?.results?.some(
-    item => item.kind === 'hermes' && item.handled === true
-  );
+  const hermesHandled = realConnectorHandled('hermes');
   checks.push(
     realSmoke.ok && hermesHandled
       ? check('pass', 'hermes:real_connector_smoke', 'real Hermes connector smoke handled a wake')
-      : check('fail', 'hermes:real_connector_smoke', redact(realSmoke.stderr || realSmoke.stdout || 'real Hermes connector smoke did not handle'))
+      : check('fail', 'hermes:real_connector_smoke', redact(realSmoke.stderr || realSmoke.stdout || 'real Hermes connector smoke did not handle'), {
+          results: realSmokeResults,
+          skipped: realSmokeSkipped,
+        })
   );
 } else {
   checks.push(

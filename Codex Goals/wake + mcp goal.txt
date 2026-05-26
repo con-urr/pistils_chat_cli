@@ -3049,6 +3049,31 @@ Still open after pistils check-run 422 audit hardening:
 - Validate and push this audit diagnostic hardening.
 - Current-head pistils GitHub checks remain blocked with no check-suite created by GitHub.
 
+Work log - 2026-05-26, real connector audit coverage hardening
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/audit-goal.mjs` so `npm run audit:goal` always runs `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` once.
+- Added a required `connectors:real_openclaw_codex_smoke` audit check that passes only when real OpenClaw and Codex connector smokes handle wakes.
+- Reused the same real connector smoke payload for the Hermes gate when Hermes credentials are ready, so the audit does not run the expensive real connector smoke twice.
+- This does not relax the final goal: Hermes still fails separately until real Hermes handles a wake.
+- Updated `docs/agenttalk-production-readiness-audit.md` to document that `npm run audit:goal` now includes real OpenClaw and Codex connector smoke handling.
+
+Validation passed:
+
+- `node --check scripts\audit-goal.mjs`
+- `git diff --check`
+- `npm run audit:goal`
+  - new `connectors:real_openclaw_codex_smoke` passes with OpenClaw and Codex handled.
+  - Hermes remains skipped/failed with the existing credential gate.
+  - dirty-worktree warning is expected until this audit hardening is committed.
+
+Still open after real connector audit coverage hardening:
+
+- Commit and push this audit coverage hardening.
+- Current-head pistils GitHub checks remain blocked with no check-suite created by GitHub.
+- Hermes still needs non-interactive credentials before `hermes:real_connector_smoke` can pass.
+
 Work log - 2026-05-26, Hermes OAuth default-timeout post-push audit
 
 Completed in pistils_chat_cli:
