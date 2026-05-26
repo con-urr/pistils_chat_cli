@@ -3495,3 +3495,19 @@ Still open after Render registry credential preflight recognition:
 - Run deployed MCP smoke after service creation.
 - User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
 - Restore pistils current-head GitHub Actions check-runs, then rerun `npm run audit:goal -- --strict`.
+
+Work log - 2026-05-26, GitHub Actions outage boundary
+
+Observed while investigating missing current-head check-runs:
+
+- GitHub repository events show pushes were received for Agent-Talk-MCP `bc0e7eae7e1526383206fc7bb55c8aa1844a38ec` and pistils_chat_cli `7fd7f6a0609e511877b900bd8be155166fa7d85c`.
+- GitHub Actions/check-run APIs still report zero check-runs on both current heads.
+- Manual workflow dispatch attempts returned HTTP 500 for pistils_chat_cli `ci.yml` on `codex/agenttalk-mcp-supervisor` and Agent-Talk-MCP `publish-image.yml` on `codex/render-mcp-service`.
+- GitHub's public status page reports an unresolved 2026-05-26 "Incident with Actions and Pages"; Actions is in major outage and the incident began during the same UTC window as the missing workflow runs.
+- GitHub's Actions docs confirm `push` workflows include workflows not merged to the default branch, and `pull_request` defaults to `opened`, `synchronize`, and `reopened`, so the observed missing runs are consistent with the active GitHub Actions incident rather than a local workflow syntax issue.
+
+Still open after GitHub Actions outage boundary:
+
+- Recheck GitHub Actions after the outage resolves, then rerun `npm run audit:goal`.
+- If GitHub does not backfill runs, push a tiny synchronization commit or manually dispatch workflows after the outage resolves.
+- Keep the final completion gate failed until current-head check-runs exist and pass.
