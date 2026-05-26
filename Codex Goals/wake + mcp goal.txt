@@ -2256,6 +2256,11 @@ Completed in pistils_chat_cli:
   - `render.cmd login` reported `Success: CLI is already authenticated.`
 - Verified the local Render CLI can list services; inventory still shows only `CrisisTrainingSim`.
 - Verified the Windows user `RENDER_API_KEY` remains present and a redacted Render MCP initialize probe returns HTTP 200.
+- Verified `codex mcp list` and `codex mcp get render` can see the Render MCP registration for new Codex processes:
+  - URL: `https://mcp.render.com/mcp`
+  - transport: `streamable_http`
+  - bearer token env var: `RENDER_API_KEY`
+  - status: enabled
 - Confirmed the current Codex Desktop session still does not expose Render MCP tools via tool discovery, so a restart/new session is still required for direct `@render` MCP tool use.
 - Updated the `con-urr/pistils_chat_cli#1` PR body with the latest target workspace/project/environment evidence and current Render gate wording.
 - Confirmed `con-urr/Agent-Talk-MCP#1` already includes the matching Render target-location and source-access gate evidence.
