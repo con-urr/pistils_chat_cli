@@ -3103,3 +3103,49 @@ Current-head verification after this work:
   - warn: 2
   - fail: 5
 - The new `render:github_source_access_probe` check passes, reporting the repo as private and local GitHub App installation enumeration as HTTP 403.
+
+Work log - 2026-05-26, Hermes Codex OAuth helper
+
+Completed in pistils_chat_cli:
+
+- Added `scripts/hermes-codex-oauth.mjs`.
+- Added npm script `hermes:codex-oauth`.
+- Added `scripts/smoke-hermes-codex-oauth-guard.mjs`.
+- Added npm script `smoke:hermes-codex-oauth-guard`.
+- Included `scripts/hermes-codex-oauth.mjs` in the package files list.
+- The helper:
+  - refuses to start without `--confirm`;
+  - uses the repo-local Hermes virtualenv Python entrypoint;
+  - starts `hermes auth add openai-codex --type oauth`;
+  - sets `model.provider=openai-codex`;
+  - sets `model.default=gpt-5.3-codex`;
+  - keeps its own repo path output redacted and does not import Codex CLI tokens.
+- Updated `scripts/hermes-readiness-preflight.mjs` so missing-credential next actions include `npm run hermes:codex-oauth -- --confirm`.
+- Updated `scripts/audit-goal.mjs` so the final audit verifies the helper artifact, package inclusion, and no-confirm guard smoke.
+- Updated README.md, `docs/integrations/hermes-agent.md`, and `docs/agenttalk-production-readiness-audit.md`.
+
+Validation passed:
+
+- pistils_chat_cli: `node --check scripts\hermes-codex-oauth.mjs`
+- pistils_chat_cli: `node --check scripts\smoke-hermes-codex-oauth-guard.mjs`
+- pistils_chat_cli: `node --check scripts\hermes-readiness-preflight.mjs`
+- pistils_chat_cli: `node --check scripts\audit-goal.mjs`
+- pistils_chat_cli: `npm run smoke:hermes-codex-oauth-guard`
+- pistils_chat_cli: `npm run preflight:hermes`
+  - helper appears first in missing-credential next actions;
+  - Hermes-owned Codex auth still reports logged out;
+  - no inference credentials are configured yet.
+- pistils_chat_cli: `npm run check`
+- pistils_chat_cli: `npm run audit:goal`
+  - new Hermes helper artifact and guard checks pass;
+  - final completion remains blocked by Render source/service/deployed-smoke and Hermes credential/real-smoke gates.
+- pistils_chat_cli: `git diff --check`
+
+Still open after Hermes Codex OAuth helper:
+
+- Commit and push this helper/log/doc/audit update, wait for GitHub checks, and rerun `npm run audit:goal` on the clean current head.
+- User must run `npm run hermes:codex-oauth -- --confirm` and approve the Hermes-owned OAuth browser flow, or configure an API-key provider.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
+- Rerun real Hermes connector smoke after credentials are configured.

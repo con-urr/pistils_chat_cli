@@ -196,6 +196,12 @@ AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors
 
 `preflight:hermes` reports only credential presence, auth state, and no-key local endpoint reachability, never secret values. If Hermes is unconfigured, the preflight returns exact next actions for a Hermes-owned Codex OAuth session, an API-key provider, or Nous OAuth. Hermes keeps Codex OAuth separate from the Codex CLI; avoid importing Codex CLI tokens into Hermes unless you accept refresh-token conflict risk.
 
+To start the Hermes-owned Codex OAuth flow from this repo:
+
+```bash
+npm run hermes:codex-oauth -- --confirm
+```
+
 `agenttalk setup --agents --json` also includes repo-local Hermes credential next actions when it detects Hermes but skips it for missing model/provider credentials. Those actions use `<hermes-repo>` placeholders and the Hermes virtualenv entrypoint instead of printing local paths.
 
 3. Start a group conversation:

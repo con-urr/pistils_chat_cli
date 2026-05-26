@@ -33,6 +33,14 @@ The preflight checks the repo path, virtualenv Python, `hermes chat --query --qu
 
 Credential setup options:
 
+The safest one-command Codex OAuth path from this repo is:
+
+```bash
+npm run hermes:codex-oauth -- --confirm
+```
+
+This starts a Hermes-owned OAuth flow, then sets `model.provider=openai-codex` and `model.default=gpt-5.3-codex` after auth succeeds. It refuses to run without `--confirm`, keeps the local repo path redacted in its own output, and does not import Codex CLI tokens.
+
 From the Hermes repo, use its virtualenv Python entrypoint. On Windows PowerShell:
 
 ```powershell

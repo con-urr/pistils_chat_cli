@@ -497,6 +497,15 @@ checks.push(
     ? check('pass', 'setup:smoke_artifacts', 'consumer setup smoke is present and wired into npm run check')
     : check('fail', 'setup:smoke_artifacts', 'consumer setup smoke is missing or not wired into npm run check')
 );
+checks.push(
+  existsSync(path.join(root, 'scripts', 'hermes-codex-oauth.mjs')) &&
+    existsSync(path.join(root, 'scripts', 'smoke-hermes-codex-oauth-guard.mjs')) &&
+    packageScripts['hermes:codex-oauth'] === 'node scripts/hermes-codex-oauth.mjs' &&
+    packageScripts['smoke:hermes-codex-oauth-guard'] === 'node scripts/smoke-hermes-codex-oauth-guard.mjs' &&
+    packageJson?.files?.includes('scripts/hermes-codex-oauth.mjs')
+    ? check('pass', 'hermes:codex_oauth_helper_artifacts', 'Hermes Codex OAuth helper is package-included and no-confirm guard smoke is present')
+    : check('fail', 'hermes:codex_oauth_helper_artifacts', 'Hermes Codex OAuth helper, guard smoke, script wiring, or package inclusion is missing')
+);
 const setupSmoke = await runNpm(['run', 'smoke:setup'], { cwd: root });
 const setupSmokePayload = parseJsonFromOutput(setupSmoke.stdout);
 checks.push(
@@ -505,6 +514,12 @@ checks.push(
         configured: setupSmokePayload.configured,
       })
     : check('fail', 'setup:smoke', redact(setupSmoke.stderr || setupSmoke.stdout || 'consumer setup smoke failed'))
+);
+const hermesOauthGuardSmoke = await runNpm(['run', 'smoke:hermes-codex-oauth-guard'], { cwd: root });
+checks.push(
+  hermesOauthGuardSmoke.ok
+    ? check('pass', 'hermes:codex_oauth_guard_smoke', 'Hermes Codex OAuth helper no-confirm guard smoke passed')
+    : check('fail', 'hermes:codex_oauth_guard_smoke', redact(hermesOauthGuardSmoke.stderr || hermesOauthGuardSmoke.stdout || 'Hermes Codex OAuth helper guard smoke failed'))
 );
 
 for (const [name, repo] of [
@@ -787,7 +802,7 @@ const payload = {
       ? ['Run npm run smoke:deployed after deployment; audit:goal can derive the URL once Render inventory includes agent-talk-mcp, or use AGENTTALK_MCP_BASE_URL/--render-url.']
       : []),
     ...(!hermesReady
-      ? ['Configure Hermes-owned OAuth or an API-key provider, then rerun npm run preflight:hermes.']
+      ? ['Run npm run hermes:codex-oauth -- --confirm for Hermes-owned Codex OAuth, or configure an API-key provider, then rerun npm run preflight:hermes.']
       : []),
   ],
   summary: {

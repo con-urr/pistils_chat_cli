@@ -353,6 +353,11 @@ const payload = {
       ]
     : [
         {
+          label: 'Hermes-owned Codex OAuth helper',
+          command: 'npm run hermes:codex-oauth -- --confirm',
+          note: 'Starts the repo-local Hermes OAuth flow and configures model.provider/model.default after approval.',
+        },
+        {
           label: 'Hermes-owned Codex OAuth login',
           command: hermesRepoCommand('auth add openai-codex --type oauth'),
           note: 'Creates a Hermes-owned OAuth session. Avoid importing Codex CLI tokens unless you accept refresh-token conflict risk.',
