@@ -3001,6 +3001,26 @@ Still open after pistils CI manual-dispatch probe:
 - Keep `workflow_dispatch` in the branch so CI can be manually run once GitHub accepts dispatches for this workflow/ref or once the workflow definition is available on `main`.
 - Do not fabricate check-runs; the audit should continue to fail `github:pistils_chat_cli_checks` until real `validate (20)` and `validate (22)` runs exist on the current head.
 
+Work log - 2026-05-26, fresh real connector smoke and audit-doc refresh
+
+Completed in pistils_chat_cli:
+
+- Reran the opt-in real connector smoke on the current branch:
+  - command: `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors`
+  - result: OpenClaw handled a real local connector wake.
+  - result: Codex handled a real local connector wake.
+  - Hermes skipped with the explicit credential reason: no configured model/provider credentials in this non-interactive environment.
+- Updated `docs/agenttalk-production-readiness-audit.md` so its repo-head table, validation matrix, latest real connector smoke evidence, and current pistils CI blocker match the actual current state.
+
+Still open after fresh real connector smoke and audit-doc refresh:
+
+- Commit and push this source-of-truth refresh.
+- Current-head pistils GitHub checks remain blocked with no check-suite created by GitHub.
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke with Hermes required to handle.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
+
 Work log - 2026-05-26, Hermes OAuth default-timeout post-push audit
 
 Completed in pistils_chat_cli:
