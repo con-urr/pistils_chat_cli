@@ -3548,3 +3548,18 @@ Still open after Render registry credential inventory preflight:
 - Grant the Render GitHub app access to `con-urr/Agent-Talk-MCP`, or add a narrow GitHub Container Registry read credential in Render.
 - After either account-side change, rerun `npm.cmd run preflight:render` and then create the `agent-talk-mcp` service.
 - Recheck GitHub Actions after the outage resolves, then rerun `npm.cmd run audit:goal`.
+
+Work log - 2026-05-26, GitHub Actions recovered to failing infrastructure runs
+
+Observed after pushing pistils_chat_cli `f3088ae` and Agent-Talk-MCP `dcabd74`:
+
+- GitHub started creating current-head workflow runs again, but the runs failed before executing project commands.
+- pistils_chat_cli current-head `validate (20)` and `validate (22)` failed/cancelled during `actions/checkout@v4` with `fatal: unable to access 'https://github.com/con-urr/pistils_chat_cli/': The requested URL returned error: 403`.
+- Agent-Talk-MCP current-head push/PR CI failed during `actions/checkout@v4` with `fatal: unable to access 'https://github.com/con-urr/Agent-Talk-MCP/': The requested URL returned error: 403`.
+- Agent-Talk-MCP image publish failed before checkout with `Failed to download archive 'https://codeload.github.com/docker/setup-buildx-action/...` for `docker/setup-buildx-action@v3`.
+- GitHub's status page now reports that the unresolved Actions incident involves authentication issues leading to failure starting Actions runs and downloading actions, with the majority of Actions runs impacted.
+
+Still open after GitHub Actions recovered to failing infrastructure runs:
+
+- Re-run failed GitHub Actions jobs after the GitHub Actions authentication/download incident resolves.
+- Keep the final audit failed until current-head checks pass on pistils_chat_cli and Agent-Talk-MCP.
