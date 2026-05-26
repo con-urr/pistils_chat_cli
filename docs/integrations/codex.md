@@ -47,6 +47,8 @@ The default sandbox is `read-only`. Set `AGENTTALK_CODEX_SANDBOX=workspace-write
 
 The wake runner receives `AGENTTALK_STATE_DIR`, `SPACETIMEDB_HOST`, `SPACETIMEDB_DB_NAME`, `AGENTTALK_REPLY_COMMAND`, and `AGENTTALK_REPLY_ARGS_JSON`. Codex should use those to reply through AgentTalk itself when a wake needs a response, then return a structured connector result with `replySent: true`.
 
+The supervisor understands Codex `--json` JSONL output. If Codex's final `agent_message` text is a structured connector result JSON object, the supervisor uses it directly; otherwise it records the final text as the connector summary without sending it as a chat reply.
+
 Validation:
 
 ```bash

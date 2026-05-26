@@ -249,7 +249,10 @@ function parseJsonObject(text: string) {
   if (!trimmed) {
     return undefined;
   }
-  const candidates = [trimmed, ...trimmed.split(/\r?\n/).reverse()];
+  const fencedJson = Array.from(trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi))
+    .map(match => match[1]?.trim())
+    .filter(Boolean) as string[];
+  const candidates = [trimmed, ...fencedJson, ...trimmed.split(/\r?\n/).reverse()];
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate);
@@ -261,6 +264,77 @@ function parseJsonObject(text: string) {
     }
   }
   return undefined;
+}
+
+function resultFromParsedObject(
+  agent: SupervisorAgentConfig,
+  parsed: Record<string, unknown>
+): WakeConnectorResult | undefined {
+  if (typeof parsed.ok !== 'boolean' || typeof parsed.handled !== 'boolean') {
+    return undefined;
+  }
+  return {
+    ok: parsed.ok,
+    handled: parsed.handled,
+    replySent: typeof parsed.replySent === 'boolean' ? parsed.replySent : undefined,
+    replyText: typeof parsed.replyText === 'string' ? parsed.replyText : undefined,
+    message: typeof parsed.message === 'string' ? parsed.message : undefined,
+    error: typeof parsed.error === 'string' ? parsed.error : undefined,
+    artifacts: Array.isArray(parsed.artifacts)
+      ? parsed.artifacts as Array<{ path?: string; url?: string; mimeType?: string }>
+      : undefined,
+    metadata: parsed.metadata ?? { connector: agent.kind },
+  };
+}
+
+function codexResultFromJsonl(agent: SupervisorAgentConfig, stdout: string): WakeConnectorResult | undefined {
+  let eventCount = 0;
+  let lastAgentText: string | undefined;
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('{')) {
+      continue;
+    }
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    eventCount += 1;
+    const item = event.item;
+    if (
+      event.type === 'item.completed' &&
+      item &&
+      typeof item === 'object' &&
+      (item as Record<string, unknown>).type === 'agent_message' &&
+      typeof (item as Record<string, unknown>).text === 'string'
+    ) {
+      lastAgentText = (item as Record<string, string>).text;
+      const parsed = parseJsonObject(lastAgentText);
+      if (parsed) {
+        const result = resultFromParsedObject(agent, parsed);
+        if (result) {
+          return {
+            ...result,
+            metadata: result.metadata ?? { connector: agent.kind, parsed: 'codex-jsonl', eventCount },
+          };
+        }
+      }
+    }
+  }
+
+  if (!lastAgentText) {
+    return undefined;
+  }
+
+  return {
+    ok: true,
+    handled: true,
+    replySent: false,
+    message: truncateText(lastAgentText.trim() || 'Codex completed without a final text message'),
+    metadata: { connector: agent.kind, parsed: 'codex-jsonl', eventCount },
+  };
 }
 
 function normalizeConnectorResult(
@@ -299,20 +373,19 @@ function normalizeConnectorResult(
     };
   }
 
+  if (agent.kind === 'codex') {
+    const codexResult = codexResultFromJsonl(agent, processResult.stdout);
+    if (codexResult) {
+      return codexResult;
+    }
+  }
+
   const parsed = parseJsonObject(processResult.stdout);
-  if (parsed && typeof parsed.ok === 'boolean' && typeof parsed.handled === 'boolean') {
-    return {
-      ok: parsed.ok,
-      handled: parsed.handled,
-      replySent: typeof parsed.replySent === 'boolean' ? parsed.replySent : undefined,
-      replyText: typeof parsed.replyText === 'string' ? parsed.replyText : undefined,
-      message: typeof parsed.message === 'string' ? parsed.message : undefined,
-      error: typeof parsed.error === 'string' ? parsed.error : undefined,
-      artifacts: Array.isArray(parsed.artifacts)
-        ? parsed.artifacts as Array<{ path?: string; url?: string; mimeType?: string }>
-        : undefined,
-      metadata: parsed.metadata ?? { connector: agent.kind },
-    };
+  if (parsed) {
+    const result = resultFromParsedObject(agent, parsed);
+    if (result) {
+      return result;
+    }
   }
 
   return {

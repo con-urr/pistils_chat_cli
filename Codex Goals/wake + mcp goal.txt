@@ -1701,3 +1701,33 @@ Still open after Codex MCP setup helper:
 - Real OpenClaw/Hermes/Codex runtime-specific self-reply behavior still depends on each external runtime choosing to execute the provided AgentTalk reply command, but the AgentTalk command contract itself is live-validated.
 - Resolve Render source access by granting Render GitHub access, making the GHCR package public, or adding a narrow GHCR read-only registry credential.
 - Create the new free Render service `agent-talk-mcp` and verify deployed /healthz, /auth/status, /readyz, and /mcp.
+
+Work log - 2026-05-26, Codex JSONL connector result parsing
+
+Completed:
+
+- Verified local `codex exec --json` output shape with a small read-only prompt:
+  - JSONL events include `item.completed` where `item.type` is `agent_message`
+  - the final assistant text can contain the structured connector result JSON
+- Updated the supervisor connector normalizer to parse Codex JSONL agent messages.
+- If the Codex final message contains a structured connector result, supervisor uses that result directly.
+- If the Codex final message is plain text, supervisor records it as the connector summary and does not send it as a chat reply.
+- Added fenced JSON parsing for connector result text.
+- Extended `smoke:wake-connectors` with a mocked Codex JSONL event stream that returns `replySent: true`.
+- Updated docs/integrations/codex.md with the JSONL parsing behavior.
+
+Validation passed:
+
+- pistils_chat_cli: `codex --version`
+- pistils_chat_cli: `codex exec --help`
+- pistils_chat_cli: read-only `codex exec --json` probe with structured final message
+- pistils_chat_cli: `npm run build`
+- pistils_chat_cli: `npm run smoke:wake-connectors`
+- pistils_chat_cli: `npm run check`
+
+Still open after Codex JSONL connector result parsing:
+
+- Configure Hermes with non-interactive inference credentials, then rerun setup and `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle a real wake.
+- Real OpenClaw/Hermes/Codex runtime-specific self-reply behavior still depends on each external runtime choosing to execute the provided AgentTalk reply command, but Codex JSONL result parsing is now covered.
+- Resolve Render source access by granting Render GitHub access, making the GHCR package public, or adding a narrow GHCR read-only registry credential.
+- Create the new free Render service `agent-talk-mcp` and verify deployed /healthz, /auth/status, /readyz, and /mcp.
