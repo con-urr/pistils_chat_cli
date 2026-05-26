@@ -3012,3 +3012,29 @@ Still open after top-level audit covers Render create guard:
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
 - Complete Hermes credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, top-level audit covers consumer setup smoke
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/audit-goal.mjs` so `npm run audit:goal` explicitly verifies the consumer setup/onboarding smoke.
+- Added audit checks for:
+  - `setup:smoke_artifacts`, verifying `scripts/smoke-setup.mjs`, `smoke:setup`, and `npm run check` wiring;
+  - `setup:smoke`, running `npm run smoke:setup`.
+- Updated `docs/agenttalk-production-readiness-audit.md` so the final audit description includes consumer setup smoke and guarded Render create artifacts.
+
+Validation passed:
+
+- pistils_chat_cli: `node --check scripts\audit-goal.mjs`
+- pistils_chat_cli: `npm run audit:goal`
+  - `setup:smoke_artifacts` passed;
+  - `setup:smoke` passed with `configured: 2`;
+  - final completion remains blocked by the same external Render source/service/deployed-smoke and Hermes credential/real-smoke gates.
+
+Still open after top-level audit covers consumer setup smoke:
+
+- Commit and push the audit/log/doc update, wait for GitHub checks, and rerun `npm run audit:goal` on the clean current head.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
+- Complete Hermes credentials and rerun the real Hermes connector smoke.

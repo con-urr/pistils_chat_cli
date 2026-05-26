@@ -456,6 +456,7 @@ const repoStates = {};
 const goalPath = path.join(root, 'Codex Goals', 'wake + mcp goal.txt');
 const auditPath = path.join(root, 'docs', 'agenttalk-production-readiness-audit.md');
 const buildPlanPath = path.join(root, 'docs', 'agenttalk-mcp-wake-supervisor-build-plan.md');
+const packagePath = path.join(root, 'package.json');
 checks.push(
   existsSync(goalPath)
     ? check('pass', 'goal:source_of_truth', 'goal log exists')
@@ -481,6 +482,30 @@ if (existsSync(auditPath)) {
       : check('fail', 'audit:required_gates', 'audit does not list the required completion gates')
   );
 }
+
+let packageJson;
+try {
+  packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+} catch {
+  packageJson = undefined;
+}
+const packageScripts = packageJson?.scripts ?? {};
+checks.push(
+  existsSync(path.join(root, 'scripts', 'smoke-setup.mjs')) &&
+    packageScripts['smoke:setup'] === 'node scripts/smoke-setup.mjs' &&
+    packageScripts.check?.includes('smoke:setup')
+    ? check('pass', 'setup:smoke_artifacts', 'consumer setup smoke is present and wired into npm run check')
+    : check('fail', 'setup:smoke_artifacts', 'consumer setup smoke is missing or not wired into npm run check')
+);
+const setupSmoke = await runNpm(['run', 'smoke:setup'], { cwd: root });
+const setupSmokePayload = parseJsonFromOutput(setupSmoke.stdout);
+checks.push(
+  setupSmoke.ok && setupSmokePayload?.ok === true
+    ? check('pass', 'setup:smoke', 'consumer setup smoke passed', {
+        configured: setupSmokePayload.configured,
+      })
+    : check('fail', 'setup:smoke', redact(setupSmoke.stderr || setupSmoke.stdout || 'consumer setup smoke failed'))
+);
 
 for (const [name, repo] of [
   ['pistils_chat_cli', root],
