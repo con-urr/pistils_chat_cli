@@ -2371,3 +2371,37 @@ Still open after multi-client MCP config helper:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris after one source-access path is available.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render preflight create commands
+
+Completed in Agent-Talk-MCP:
+
+- Updated `scripts/render-preflight.mjs` so read-only preflight now returns inert create commands even while access gates remain blocked:
+  - `createCommands.gitBacked`
+  - `createCommands.imageBacked`
+  - `createCommands.imageBackedWithRegistryCredential`
+- Each create command is marked `ready` or `blocked` with a `blockedBy` reason; current runs still mark all create paths blocked by the known source/image-access gates.
+- The commands include the target environment `evm-d7ampnp4tr6s739q3q9g`, free plan, Oregon region, `/healthz`, and required non-secret env vars.
+- Wildcard origin is quoted as `AGENTTALK_ALLOWED_ORIGINS=*` in the shell command output to avoid shell globbing.
+- Updated Agent-Talk-MCP README.md and docs/render-deploy.md to describe `createCommands`.
+- Pushed Agent-Talk-MCP commit `249099dbd0ec847d40851f8c6617622802a40612`.
+- Updated `con-urr/Agent-Talk-MCP#1` with the create-command preflight evidence.
+- Updated `docs/agenttalk-production-readiness-audit.md` in pistils_chat_cli with the latest Agent-Talk-MCP head and create-command evidence.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run preflight:render` with the Windows user `RENDER_API_KEY` injected
+  - `renderMcpAuth: ready`
+  - `targetProjectEnvironment: ready`
+  - `createCommands.gitBacked` present and blocked by `requires-render-github-integration-access`
+  - `createCommands.imageBacked` present and blocked by `requires-public-ghcr-package-or-render-registry-credential`
+  - `createCommands.imageBackedWithRegistryCredential` present and blocked by `requires-render-registry-credential`
+- Agent-Talk-MCP: `npm run check`
+- Agent-Talk-MCP: `git diff --check`
+
+Still open after Render preflight create commands:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `AGENTTALK_MCP_BASE_URL=https://<service>.onrender.com npm run smoke:deployed` after deployment.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
