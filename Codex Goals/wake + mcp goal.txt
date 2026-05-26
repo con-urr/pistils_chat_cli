@@ -2300,3 +2300,40 @@ Still open after Hermes OAuth approval gate retest:
 - Rerun `npm run preflight:hermes` and require `realHermesConnectorSmoke` to be `ready`.
 - Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle instead of skip.
 - Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
+
+Work log - 2026-05-26, deployed Render smoke verifier
+
+Completed in Agent-Talk-MCP:
+
+- Added `scripts/smoke-deployed.mjs` and package script `npm run smoke:deployed`.
+- The deployed smoke accepts `AGENTTALK_MCP_BASE_URL` or `--url`.
+- Without `AGENTTALK_MCP_TOKEN`, it verifies:
+  - `GET /healthz`
+  - `GET /auth/status`
+  - `GET /readyz`
+  - `OPTIONS /mcp`
+  - unauthenticated `POST /mcp` returns 401 when bearer auth is required.
+- With `AGENTTALK_MCP_TOKEN`, it lists MCP tools and verifies `agenttalk_whoami` is present.
+- Updated Agent-Talk-MCP README.md and docs/render-deploy.md with the post-deploy smoke command.
+- Pushed Agent-Talk-MCP commit `5eed43fe5b679946fa342f29aeb73cb5ba3a16e5`.
+- Updated `con-urr/Agent-Talk-MCP#1` with the deployed smoke verifier evidence.
+- Updated `docs/agenttalk-production-readiness-audit.md` in pistils_chat_cli with the new Agent-Talk-MCP head and deployed-smoke gate.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run build`
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: local deployed-smoke harness against `dist/index.js` without token:
+  - `mcpMode: auth-boundary`
+  - unauthenticated `/mcp` returned 401
+- Agent-Talk-MCP: local deployed-smoke harness against `dist/index.js` with a fake bearer token:
+  - `mcpMode: tool-list`
+  - `toolCount: 22`
+- Agent-Talk-MCP: `npm run check`
+
+Still open after deployed Render smoke verifier:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris after one source-access path is available.
+- Run `AGENTTALK_MCP_BASE_URL=https://<service>.onrender.com npm run smoke:deployed` after deployment.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.

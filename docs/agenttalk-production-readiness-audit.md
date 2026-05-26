@@ -20,7 +20,7 @@ The local MCP, non-presence wake supervisor, setup flow, connector framework, Co
 | --- | --- | --- |
 | `pistils_chat_cli` | `codex/agenttalk-mcp-supervisor` | PR `con-urr/pistils_chat_cli#1`; this committed audit is on the pushed branch; only an unrelated untracked image remains locally. |
 | `live-chat` | `codex/agenttalk-wake-presence` | Head `7e0a759935f2856d618f76983c4a4cce0d7adb80`; PR `con-urr/live-chat#1`. |
-| `Agent-Talk-MCP` | `codex/render-mcp-service` | Head `41224466490bea1789f2fd70d099f36703ed339e`; PR `con-urr/Agent-Talk-MCP#1`. |
+| `Agent-Talk-MCP` | `codex/render-mcp-service` | Head `5eed43fe5b679946fa342f29aeb73cb5ba3a16e5`; PR `con-urr/Agent-Talk-MCP#1`. |
 
 ## Checklist
 
@@ -39,8 +39,8 @@ The local MCP, non-presence wake supervisor, setup flow, connector framework, Co
 | Consumer setup flow | Complete | `agenttalk setup --agents`; `agenttalk supervisor init --wizard`; setup smoke covers OpenClaw auto-detection, Hermes skip-by-default without credentials, and `--allow-unconfigured-hermes`; README and supervisor docs show minimal setup path. | Real Hermes readiness still depends on credentials. |
 | Service installation | Complete within platform scope | `agenttalk supervisor install-service` supports LaunchAgent, systemd user service, and Windows start script; `smoke:supervisor` validates dry-run service install on Windows. | Actual service start/install was not performed in this workspace. |
 | Hosted MCP service code | Complete for private beta | `Agent-Talk-MCP` exposes `/healthz`, `/readyz`, `/auth/status`, `POST /mcp`, `GET /mcp`; `npm run check` passes with private-beta bearer auth and 22 MCP tools. | Full OAuth/account-linking/encrypted session storage remains follow-up before general production claim. |
-| Render deploy artifacts | Complete, deploy blocked externally | `Agent-Talk-MCP/Dockerfile`, `render.yaml`, `.github/workflows/publish-image.yml`, `docs/render-deploy.md`, and `npm run preflight:render`; preflight validates Blueprint, confirms `agent-talk-mcp` is absent while `CrisisTrainingSim` remains untouched, verifies the target workspace/project/environment, verifies `RENDER_API_KEY` against both Render API and Render MCP, and returns `nextActions` with the exact account-side unblock links. Direct Render CLI create retries failed before creation because the private GitHub source is invalid or unfetchable to Render. | Grant Render GitHub integration access, make GHCR public, or add a narrow GHCR read credential; then create free `agent-talk-mcp` and verify deployed endpoints. |
-| Validation matrix | Strong but not final | `npm run check`; `npm run preflight:hermes`; `npm run smoke:mcp`; `npm run smoke:wake-connectors`; `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors`; `npm run smoke:supervisor-live-self-replies`; `Agent-Talk-MCP npm run check`; `Agent-Talk-MCP npm run preflight:render`; Render CLI service inventory after create retries. | Add deployed Render endpoint validation after service creation. |
+| Render deploy artifacts | Complete, deploy blocked externally | `Agent-Talk-MCP/Dockerfile`, `render.yaml`, `.github/workflows/publish-image.yml`, `docs/render-deploy.md`, `npm run preflight:render`, and `npm run smoke:deployed`; preflight validates Blueprint, confirms `agent-talk-mcp` is absent while `CrisisTrainingSim` remains untouched, verifies the target workspace/project/environment, verifies `RENDER_API_KEY` against both Render API and Render MCP, and returns `nextActions` with the exact account-side unblock links. Direct Render CLI create retries failed before creation because the private GitHub source is invalid or unfetchable to Render. | Grant Render GitHub integration access, make GHCR public, or add a narrow GHCR read credential; then create free `agent-talk-mcp` and run `npm run smoke:deployed` against the deployed URL. |
+| Validation matrix | Strong but not final | `npm run check`; `npm run preflight:hermes`; `npm run smoke:mcp`; `npm run smoke:wake-connectors`; `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors`; `npm run smoke:supervisor-live-self-replies`; `Agent-Talk-MCP npm run check`; `Agent-Talk-MCP npm run preflight:render`; Agent-Talk-MCP local `npm run smoke:deployed` harness in auth-boundary and token tool-list modes; Render CLI service inventory after create retries. | Run deployed Render endpoint validation after service creation. |
 
 ## Latest Validation Snapshot
 
@@ -61,6 +61,7 @@ The goal log records these validated checkpoints:
 - Agent-Talk-MCP `npm run preflight:render` now verifies `RENDER_API_KEY` against Render API and Render MCP directly, and verifies the target Render workspace/project/environment before any create attempt. When run with the user env value injected into the current shell, it reports `render:api_key_auth` and `render:mcp_api_key_auth` as pass, `renderMcpAuth: ready`, and `targetProjectEnvironment: ready`; it also returns `nextActions` for the current account-side unblock steps, and still reports:
   - GHCR branch image anonymous manifest returns HTTP 401
   - Git-backed creation still needs Render GitHub access to the private repo
+- Agent-Talk-MCP adds `npm run smoke:deployed` for the post-Render completion gate. Local validation against `dist/index.js` passed both without a token, verifying unauthenticated `/mcp` returns 401, and with a fake bearer token, verifying MCP tool listing returns 22 tools including `agenttalk_whoami`.
 - Render CLI direct Git-backed creation was retried with both accepted URL shapes and failed before creating a service because the private repository remains invalid or unfetchable to Render.
 - Post-retry Render inventory still lists only `CrisisTrainingSim`; `agent-talk-mcp` is absent and the existing service remains untouched.
 
@@ -71,6 +72,6 @@ Do not mark the overall goal complete until all of these are true:
 1. Render source access is resolved.
 2. A new free Render service named `agent-talk-mcp` is created in Connor's workspace under My project.
 3. `CrisisTrainingSim` remains untouched after service creation.
-4. Deployed checks pass for `/healthz`, `/auth/status`, `/readyz`, and `/mcp`.
+4. Deployed checks pass for `/healthz`, `/auth/status`, `/readyz`, and `/mcp` using `Agent-Talk-MCP npm run smoke:deployed`.
 5. Hermes has non-interactive inference credentials and the real Hermes connector smoke handles a wake.
 6. A final audit reruns the objective checklist against current repo state and deployed service evidence.
