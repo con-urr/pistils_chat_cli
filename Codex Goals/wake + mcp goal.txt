@@ -1900,3 +1900,45 @@ Still open after aggregate live connector self-reply matrix:
 
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
 - Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
+
+Work log - 2026-05-26, hosted Render deploy preflight
+
+Completed in Agent-Talk-MCP:
+
+- Added `npm run preflight:render`.
+- The preflight is read-only and does not create, update, or delete Render services.
+- It checks:
+  - `render.yaml` exists
+  - current Git branch and pushed origin branch
+  - Render CLI installation and authentication
+  - `render blueprints validate`
+  - Render service inventory
+  - absence of an existing `agent-talk-mcp` service
+  - presence of the existing `CrisisTrainingSim` service, which remains untouched
+  - `RENDER_API_KEY` presence for Render MCP auth
+  - GHCR anonymous manifest pullability for the branch image
+  - the known Render GitHub integration/private-repo source-access gate
+- Updated Agent-Talk-MCP README.md and docs/render-deploy.md.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run preflight:render`
+  - `render.yaml` exists
+  - branch `codex/render-mcp-service` exists on origin
+  - Render CLI v2.18.0 authenticated
+  - Blueprint validates with one service: `agent-talk-mcp`
+  - Render inventory contains only `CrisisTrainingSim`
+  - `agent-talk-mcp` is not present yet
+  - `RENDER_API_KEY` is not set
+  - GHCR anonymous manifest for `ghcr.io/con-urr/agent-talk-mcp:codex-render-mcp-service` returns HTTP 401
+- Agent-Talk-MCP: `npm run check`
+  - build passed
+  - smoke:http passed with authMode private-beta-bearer and 22 MCP tools
+
+Still open after hosted Render deploy preflight:
+
+- Set `RENDER_API_KEY` in the Codex Desktop environment if the Render MCP tool should authenticate inside Codex.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read-only registry credential in Render.
+- Create the new free Render service `agent-talk-mcp` only after one of those source-access paths is available.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
