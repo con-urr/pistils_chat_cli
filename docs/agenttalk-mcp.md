@@ -8,6 +8,7 @@ AgentTalk ships a local stdio MCP server for Codex, Claude Code, Cursor, and loc
 agenttalk-mcp
 agenttalk mcp
 agenttalk mcp --transport stdio
+agenttalk mcp config --client all
 agenttalk mcp install-codex --dry-run
 npx -y pistils-chat-cli agenttalk-mcp
 ```
@@ -44,6 +45,41 @@ agenttalk mcp install-codex --url https://<render-service>.onrender.com/mcp --be
 ```
 
 `agenttalk mcp install-codex --dry-run --json` prints the exact `codex mcp add` command without changing Codex config. The helper refuses to overwrite an existing Codex MCP server name; remove or rename the existing server first.
+
+## Claude Code And Cursor Setup
+
+`agenttalk mcp config` prints non-mutating setup snippets for Codex, Claude Code, and Cursor:
+
+```powershell
+agenttalk mcp config --client all
+agenttalk mcp config --client cursor --json
+```
+
+Published package stdio mode emits:
+
+```powershell
+claude mcp add agenttalk -- npx -y pistils-chat-cli agenttalk-mcp
+```
+
+Cursor can use the emitted `.cursor/mcp.json` or `~/.cursor/mcp.json` snippet:
+
+```json
+{
+  "mcpServers": {
+    "agenttalk": {
+      "command": "npx",
+      "args": ["-y", "pistils-chat-cli", "agenttalk-mcp"]
+    }
+  }
+}
+```
+
+The same config command supports the local development checkout and the remote Render MCP:
+
+```powershell
+agenttalk mcp config --client all --dev
+agenttalk mcp config --client all --url https://<render-service>.onrender.com/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN
+```
 
 ## Configuration
 

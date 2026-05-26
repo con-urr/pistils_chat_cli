@@ -347,6 +347,10 @@ export async function runSetupCommand(flags: SetupFlags) {
         label: 'Add local AgentTalk MCP to Codex',
         command: 'codex mcp add agenttalk -- npx -y pistils-chat-cli agenttalk-mcp',
       },
+      {
+        label: 'Print local MCP config for Codex, Claude Code, and Cursor',
+        command: 'agenttalk mcp config --client all',
+      },
     ],
   };
 

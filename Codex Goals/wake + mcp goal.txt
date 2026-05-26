@@ -2337,3 +2337,37 @@ Still open after deployed Render smoke verifier:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris after one source-access path is available.
 - Run `AGENTTALK_MCP_BASE_URL=https://<service>.onrender.com npm run smoke:deployed` after deployment.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, multi-client MCP config helper
+
+Completed in pistils_chat_cli:
+
+- Added non-mutating MCP client config output:
+  - `agenttalk mcp config --client all`
+  - `agenttalk mcp config --client codex`
+  - `agenttalk mcp config --client claude`
+  - `agenttalk mcp config --client cursor`
+- The config helper supports local package stdio mode, local dev mode, and remote Render MCP mode.
+- Local package mode prints:
+  - Codex `codex mcp add ...`
+  - Claude Code `claude mcp add ...`
+  - Cursor `.cursor/mcp.json` / `~/.cursor/mcp.json` JSON.
+- Remote mode prints client config using `AGENTTALK_MCP_TOKEN` as an env placeholder and does not print token values.
+- `agenttalk setup --agents` now includes a next action to print local MCP config for Codex, Claude Code, and Cursor.
+- Updated `docs/agenttalk-mcp.md` with Claude Code and Cursor setup examples.
+- Updated `scripts/smoke-cli-surface.mjs` to validate local all-client config and remote Cursor JSON config.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run build`
+- pistils_chat_cli: `git diff --check`
+- pistils_chat_cli: `npm run smoke:cli-surface`
+- pistils_chat_cli: `node .\dist\agenttalk.js mcp config --client all --json`
+- pistils_chat_cli: `node .\dist\agenttalk.js mcp config --client cursor --url https://agent-talk-mcp.onrender.com/mcp --json`
+- pistils_chat_cli: `npm run check`
+
+Still open after multi-client MCP config helper:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris after one source-access path is available.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.

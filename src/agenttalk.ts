@@ -530,6 +530,7 @@ Usage:
   agenttalk wake fail <wake-id> --error <text> [--retry-after-ms <n>] [--json]
   agenttalk setup --agents [--dry-run] [--json]
   agenttalk mcp [serve|stdio] [--transport stdio]
+  agenttalk mcp config [--client codex|claude|cursor|all] [--dev] [--url https://<service>/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN] [--json]
   agenttalk mcp install-codex [--name agenttalk] [--dev] [--url https://<service>/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN] [--dry-run] [--json]
   agenttalk supervisor init|add-agent|list|status|doctor|test-wake [--json]
   agenttalk repair-access
@@ -2232,14 +2233,30 @@ async function commandReply(flags: Flags, positionals: string[], state: Agenttal
   }
 }
 
-function codexMcpInstallSpec(flags: Flags) {
+type McpConnectionSpec =
+  | {
+      mode: 'remote';
+      name: string;
+      transport: 'streamable-http';
+      url: string;
+      bearerTokenEnvVar: string;
+    }
+  | {
+      mode: 'local' | 'dev';
+      name: string;
+      transport: 'stdio';
+      command: string;
+      args: string[];
+    };
+
+function mcpConnectionSpec(flags: Flags): McpConnectionSpec {
   const remoteUrl = getStringFlag(flags, ['url', 'remote-url', 'remoteUrl']);
   const dev = getBooleanFlag(flags, ['dev', 'local-dev', 'localDev']);
   if (remoteUrl && dev) {
     throw new Error('Use either --dev or --url <remote-mcp-url>, not both.');
   }
 
-  const mode = remoteUrl ? 'remote' : dev ? 'dev' : 'local';
+  const mode: McpConnectionSpec['mode'] = remoteUrl ? 'remote' : dev ? 'dev' : 'local';
   const defaultName = mode === 'remote' ? 'agenttalk-remote' : mode === 'dev' ? 'agenttalk-dev' : 'agenttalk';
   const name = getStringFlag(flags, ['name']) ?? defaultName;
   if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
@@ -2253,16 +2270,8 @@ function codexMcpInstallSpec(flags: Flags) {
       mode,
       name,
       transport: 'streamable-http',
-      command: [
-        'codex',
-        'mcp',
-        'add',
-        name,
-        '--url',
-        remoteUrl!,
-        '--bearer-token-env-var',
-        bearerTokenEnvVar,
-      ],
+      url: remoteUrl!,
+      bearerTokenEnvVar,
     };
   }
 
@@ -2273,8 +2282,124 @@ function codexMcpInstallSpec(flags: Flags) {
     mode,
     name,
     transport: 'stdio',
-    command: ['codex', 'mcp', 'add', name, '--', ...runner],
+    command: runner[0]!,
+    args: runner.slice(1),
   };
+}
+
+function codexMcpInstallSpec(flags: Flags) {
+  const spec = mcpConnectionSpec(flags);
+  if (spec.mode === 'remote') {
+    return {
+      mode: spec.mode,
+      name: spec.name,
+      transport: spec.transport,
+      command: [
+        'codex',
+        'mcp',
+        'add',
+        spec.name,
+        '--url',
+        spec.url,
+        '--bearer-token-env-var',
+        spec.bearerTokenEnvVar,
+      ],
+    };
+  }
+
+  return {
+    mode: spec.mode,
+    name: spec.name,
+    transport: spec.transport,
+    command: ['codex', 'mcp', 'add', spec.name, '--', spec.command, ...spec.args],
+  };
+}
+
+function mcpClientConfigPayload(flags: Flags) {
+  const client = getStringFlag(flags, ['client']) ?? 'all';
+  const allowedClients = ['all', 'codex', 'claude', 'cursor'];
+  if (!allowedClients.includes(client)) {
+    throw new Error('--client must be one of: codex, claude, cursor, all');
+  }
+
+  const spec = mcpConnectionSpec(flags);
+  const codex = codexMcpInstallSpec(flags);
+  const clients: Record<string, unknown> = {};
+
+  if (client === 'all' || client === 'codex') {
+    clients.codex = {
+      command: shellCommandFromArgs(codex.command),
+    };
+  }
+
+  if (client === 'all' || client === 'claude') {
+    clients.claude = spec.mode === 'remote'
+      ? {
+          command: shellCommandFromArgs([
+            'claude',
+            'mcp',
+            'add',
+            '--transport',
+            'http',
+            spec.name,
+            spec.url,
+            '--header',
+            `Authorization: Bearer \${${spec.bearerTokenEnvVar}}`,
+          ]),
+        }
+      : {
+          command: shellCommandFromArgs(['claude', 'mcp', 'add', spec.name, '--', spec.command, ...spec.args]),
+        };
+  }
+
+  if (client === 'all' || client === 'cursor') {
+    clients.cursor = {
+      file: '.cursor/mcp.json or ~/.cursor/mcp.json',
+      json: {
+        mcpServers: {
+          [spec.name]: spec.mode === 'remote'
+            ? {
+                url: spec.url,
+                headers: {
+                  Authorization: `Bearer \${${spec.bearerTokenEnvVar}}`,
+                },
+              }
+            : {
+                command: spec.command,
+                args: spec.args,
+              },
+        },
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    name: spec.name,
+    mode: spec.mode,
+    transport: spec.transport,
+    clients,
+  };
+}
+
+function writeMcpClientConfigText(payload: ReturnType<typeof mcpClientConfigPayload>) {
+  writeStdout(`AgentTalk MCP config (${payload.mode}, ${payload.transport})`);
+  const clients = payload.clients as Record<string, { command?: string; file?: string; json?: unknown }>;
+  if (clients.codex?.command) {
+    writeStdout('');
+    writeStdout('Codex:');
+    writeStdout(clients.codex.command);
+  }
+  if (clients.claude?.command) {
+    writeStdout('');
+    writeStdout('Claude Code:');
+    writeStdout(clients.claude.command);
+  }
+  if (clients.cursor?.json) {
+    writeStdout('');
+    writeStdout(`Cursor (${clients.cursor.file}):`);
+    writeStdout(JSON.stringify(clients.cursor.json, null, 2));
+  }
 }
 
 async function codexMcpNameExists(name: string) {
@@ -2288,6 +2413,16 @@ async function codexMcpNameExists(name: string) {
 
 async function commandMcp(flags: Flags, positionals: string[]) {
   const subcommand = positionals[0] ?? 'serve';
+  if (subcommand === 'config' || subcommand === 'print-config') {
+    const payload = mcpClientConfigPayload(flags);
+    if (wantsJson(flags)) {
+      writeJson(payload);
+      return;
+    }
+    writeMcpClientConfigText(payload);
+    return;
+  }
+
   if (subcommand === 'install-codex') {
     const spec = codexMcpInstallSpec(flags);
     const dryRun = getBooleanFlag(flags, ['dry-run', 'dryRun', 'print']);

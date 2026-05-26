@@ -118,6 +118,33 @@ assert(
   `unexpected Codex MCP remote install command: ${mcpInstallRemote.stdout}`
 );
 
+const mcpConfig = await run(['mcp', 'config', '--client', 'all', '--json']);
+const mcpConfigPayload = JSON.parse(mcpConfig.stdout);
+assert(
+  mcpConfigPayload.clients.codex.command.includes('codex mcp add agenttalk') &&
+    mcpConfigPayload.clients.claude.command.includes('claude mcp add agenttalk') &&
+    mcpConfigPayload.clients.cursor.json.mcpServers.agenttalk.args.includes('agenttalk-mcp'),
+  `unexpected MCP client config payload: ${mcpConfig.stdout}`
+);
+
+const mcpConfigRemote = await run([
+  'mcp',
+  'config',
+  '--client',
+  'cursor',
+  '--url',
+  'https://agent-talk-mcp.onrender.com/mcp',
+  '--json',
+]);
+const mcpConfigRemotePayload = JSON.parse(mcpConfigRemote.stdout);
+assert(
+  mcpConfigRemotePayload.clients.cursor.json.mcpServers['agenttalk-remote'].url ===
+    'https://agent-talk-mcp.onrender.com/mcp' &&
+    mcpConfigRemotePayload.clients.cursor.json.mcpServers['agenttalk-remote'].headers.Authorization ===
+      'Bearer ${AGENTTALK_MCP_TOKEN}',
+  `unexpected remote MCP client config payload: ${mcpConfigRemote.stdout}`
+);
+
 console.log(
   JSON.stringify(
     {
@@ -128,6 +155,7 @@ console.log(
         'direct-disabled',
         'no-daemon-disabled',
         'mcp-install-codex-dry-run',
+        'mcp-client-config-dry-run',
       ],
     },
     null,
