@@ -3037,6 +3037,18 @@ Still open after pistils CI ready-for-review trigger probe:
 - The known non-destructive trigger repairs have now failed: push/synchronize, close/reopen, ready-for-review, and manual workflow dispatch.
 - Do not fabricate check-runs; keep `github:pistils_chat_cli_checks` failed until GitHub creates real `validate (20)` and `validate (22)` check-runs on the current head.
 
+Work log - 2026-05-26, pistils check-run 422 audit hardening
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/audit-goal.mjs` so `github:pistils_chat_cli_checks` reports GitHub check-run HTTP 422 as a pushed/visible-SHA boundary instead of a generic API failure.
+- This only improves diagnostics; it does not relax the pass criteria. The audit still requires real current-head `validate (20)` and `validate (22)` check-runs with successful conclusions.
+
+Still open after pistils check-run 422 audit hardening:
+
+- Validate and push this audit diagnostic hardening.
+- Current-head pistils GitHub checks remain blocked with no check-suite created by GitHub.
+
 Work log - 2026-05-26, Hermes OAuth default-timeout post-push audit
 
 Completed in pistils_chat_cli:

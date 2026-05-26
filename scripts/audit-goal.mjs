@@ -330,10 +330,26 @@ async function pistilsChatCliCheckRuns(head) {
     );
   }
   if (!response.ok) {
+    const apiMessage = response.json?.message ? `: ${response.json.message}` : '';
+    if (response.status === 422) {
+      return check(
+        'fail',
+        'github:pistils_chat_cli_checks',
+        `GitHub check-run API failed with HTTP 422 for ${head}${apiMessage}; the commit may not be pushed or visible to GitHub yet`,
+        {
+          head,
+          status: response.status,
+        }
+      );
+    }
     return check(
       'fail',
       'github:pistils_chat_cli_checks',
-      `GitHub check-run API failed with HTTP ${response.status}`
+      `GitHub check-run API failed with HTTP ${response.status}${apiMessage}`,
+      {
+        head,
+        status: response.status,
+      }
     );
   }
   const runs = Array.isArray(response.json?.check_runs) ? response.json.check_runs : [];
