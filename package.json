@@ -84,6 +84,7 @@
     "smoke:supervisor-live-reply": "node scripts/smoke-supervisor-live-reply.mjs",
     "smoke:supervisor-live": "node scripts/smoke-supervisor-live-wake.mjs",
     "smoke:wake-connectors": "node scripts/smoke-wake-connectors.mjs",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run clean && npm run check",
     "pack:check": "npm pack --dry-run"
   },
