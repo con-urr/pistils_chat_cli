@@ -33,7 +33,7 @@ const timeoutSecondsValue =
   timeoutFlagIndex >= 0 && args[timeoutFlagIndex + 1]
     ? args[timeoutFlagIndex + 1]
     : process.env.AGENTTALK_HERMES_OAUTH_TIMEOUT_SECONDS;
-const timeoutSeconds = timeoutSecondsValue === undefined ? 0 : Number(timeoutSecondsValue);
+const timeoutSeconds = timeoutSecondsValue === undefined ? 600 : Number(timeoutSecondsValue);
 const timeoutMs = timeoutSeconds > 0 ? Math.ceil(timeoutSeconds * 1000) : 0;
 let activeChild;
 

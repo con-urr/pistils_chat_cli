@@ -355,7 +355,7 @@ const payload = {
         {
           label: 'Hermes-owned Codex OAuth helper',
           command: 'npm run hermes:codex-oauth -- --confirm',
-          note: 'Starts the repo-local Hermes OAuth flow and configures model.provider/model.default after approval.',
+          note: 'Starts the repo-local Hermes OAuth flow, configures model.provider/model.default after approval, and cleans up the auth process tree after the default 10 minute timeout.',
         },
         {
           label: 'Hermes-owned Codex OAuth login',

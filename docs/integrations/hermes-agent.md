@@ -39,7 +39,7 @@ The safest one-command Codex OAuth path from this repo is:
 npm run hermes:codex-oauth -- --confirm
 ```
 
-This starts a Hermes-owned OAuth flow, then sets `model.provider=openai-codex` and `model.default=gpt-5.3-codex` after auth succeeds. It refuses to run without `--confirm`, keeps the local repo path redacted in its own output, and does not import Codex CLI tokens. For a bounded attempt that cleans up the auth child if approval is not completed, add `--timeout-seconds 600`.
+This starts a Hermes-owned OAuth flow, then sets `model.provider=openai-codex` and `model.default=gpt-5.3-codex` after auth succeeds. It refuses to run without `--confirm`, keeps the local repo path redacted in its own output, and does not import Codex CLI tokens. It uses a 10 minute internal timeout by default and cleans up the auth process tree if approval is not completed; override it with `--timeout-seconds <seconds>` or pass `0` only when you intentionally want no helper timeout.
 
 From the Hermes repo, use its virtualenv Python entrypoint. On Windows PowerShell:
 

@@ -3314,3 +3314,26 @@ Still open after pistils CI push-trigger hardening:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
+
+Work log - 2026-05-26, Hermes OAuth default-timeout hardening
+
+Completed in pistils_chat_cli:
+
+- Changed `scripts/hermes-codex-oauth.mjs` so the helper defaults to a 10 minute internal timeout.
+- `--timeout-seconds <seconds>` and `AGENTTALK_HERMES_OAUTH_TIMEOUT_SECONDS` still override the default; `--timeout-seconds 0` intentionally disables the helper timeout.
+- Updated README.md, `docs/integrations/hermes-agent.md`, and `scripts/hermes-readiness-preflight.mjs` so the primary OAuth helper path documents the default timeout/process-tree cleanup behavior.
+
+Validation passed:
+
+- `npm run check`
+- `npm run audit:goal`
+  - expected blocked final audit state: Render source/service/deployed-smoke gates, Hermes credential/real-smoke gates, missing pistils current-head check-runs, and dirty-worktree warning before commit.
+- `git diff --check`
+
+Still open after Hermes OAuth default-timeout hardening:
+
+- Commit and push it, then rerun `npm run audit:goal`.
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
