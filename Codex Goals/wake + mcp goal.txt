@@ -2720,3 +2720,39 @@ Still open after live-chat CI and audit hardening:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
 - Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render preflight Windows user API-key fallback
+
+Completed in Agent-Talk-MCP:
+
+- Updated `scripts/render-preflight.mjs` so `npm run preflight:render` reads `RENDER_API_KEY` from the Windows user environment when the current shell has not inherited it.
+- The fallback is cached in memory, used only for Render API/MCP probes, and never prints the key.
+- Updated README.md and docs/render-deploy.md with the Windows user-env behavior.
+- Pushed Agent-Talk-MCP commit `63607fb219393c23858aed90e21cd455cee8b5dc`.
+- GitHub Actions completed successfully:
+  - CI pull_request run `26441716849`;
+  - CI push run `26441714964`;
+  - Publish AgentTalk MCP image run `26441714966`.
+
+Current result:
+
+- Agent-Talk-MCP: `npm run preflight:render`
+  - `render:mcp_api_key_env` passes from the Windows user environment;
+  - `render:api_key_auth` passes HTTP 200;
+  - `render:mcp_api_key_auth` passes HTTP 200;
+  - `renderMcpAuth` is `ready`;
+  - Render GitHub source access and GHCR anonymous image pull remain blocked.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run check`
+- Agent-Talk-MCP: `npm run preflight:render`
+- Agent-Talk-MCP: `node --check scripts/render-preflight.mjs`
+- Agent-Talk-MCP: `git diff --check`
+
+Still open after Render preflight Windows user API-key fallback:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a separate narrow GHCR read credential to Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
