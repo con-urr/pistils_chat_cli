@@ -2625,3 +2625,29 @@ Still open after hosted MCP PR CI:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
 - Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, hosted MCP GitHub Actions audit gate
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/audit-goal.mjs` with a `github:agent_talk_mcp_actions` check.
+- The check uses the local GitHub credential helper only in-process, never prints the credential, and then calls the GitHub Actions API for `con-urr/Agent-Talk-MCP`.
+- The final audit now requires the current Agent-Talk-MCP head to have successful:
+  - CI `pull_request`;
+  - CI `push`;
+  - `Publish AgentTalk MCP image` `push`.
+- Updated `docs/agenttalk-production-readiness-audit.md` so the validation matrix and strict completion gate include GitHub Actions evidence instead of relying only on a manually recorded note.
+
+Current result:
+
+- `npm run audit:goal` reports `github:agent_talk_mcp_actions` as pass for head `a03aa8c8bed7213ee3d90f29a7d321ef327f47c7` with runs:
+  - `26440517950` CI pull_request;
+  - `26440516426` CI push;
+  - `26440516420` Publish AgentTalk MCP image.
+
+Still open after hosted MCP GitHub Actions audit gate:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a separate narrow GHCR read credential to Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.

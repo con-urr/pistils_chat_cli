@@ -83,6 +83,43 @@ function run(command, args, options = {}) {
   });
 }
 
+function runWithInput(command, args, input, options = {}) {
+  return new Promise(resolve => {
+    let child;
+    try {
+      child = spawn(command, args, {
+        cwd: options.cwd ?? root,
+        env: cleanEnv(options.env ?? process.env),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+    } catch (error) {
+      resolve({
+        ok: false,
+        code: -1,
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', error => {
+      resolve({ ok: false, code: -1, stdout, stderr: error.message });
+    });
+    child.on('close', code => {
+      resolve({ ok: code === 0, code: code ?? 0, stdout, stderr });
+    });
+    child.stdin.end(input);
+  });
+}
+
 function runNpm(args, options = {}) {
   if (process.platform === 'win32') {
     return run(
@@ -134,7 +171,125 @@ async function gitHead(repo) {
   };
 }
 
+let cachedGitHubToken;
+
+async function githubTokenFromCredentialHelper() {
+  if (cachedGitHubToken !== undefined) {
+    return cachedGitHubToken;
+  }
+  cachedGitHubToken = '';
+  const result = await runWithInput(
+    'git',
+    ['credential', 'fill'],
+    'protocol=https\nhost=github.com\n\n'
+  );
+  if (!result.ok) {
+    return cachedGitHubToken;
+  }
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.startsWith('password=')) {
+      cachedGitHubToken = line.slice('password='.length).trim();
+      break;
+    }
+  }
+  return cachedGitHubToken;
+}
+
+async function fetchGitHubJson(apiPath) {
+  const token = await githubTokenFromCredentialHelper();
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'agenttalk-goal-audit',
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const response = await fetch(`https://api.github.com${apiPath}`, { headers });
+  const text = await response.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = undefined;
+  }
+  return {
+    ok: response.ok,
+    status: response.status,
+    json,
+    body: text,
+  };
+}
+
+async function agentTalkMcpActionChecks(branch, head) {
+  if (!branch || !head) {
+    return check(
+      'fail',
+      'github:agent_talk_mcp_actions',
+      'Agent-Talk-MCP branch/head is unavailable for GitHub Actions verification'
+    );
+  }
+  let response;
+  try {
+    response = await fetchGitHubJson(
+      `/repos/con-urr/Agent-Talk-MCP/actions/runs?branch=${encodeURIComponent(branch)}&per_page=30`
+    );
+  } catch (error) {
+    return check(
+      'fail',
+      'github:agent_talk_mcp_actions',
+      `GitHub Actions API check failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!response.ok) {
+    return check(
+      'fail',
+      'github:agent_talk_mcp_actions',
+      `GitHub Actions API check failed with HTTP ${response.status}`
+    );
+  }
+  const runs = Array.isArray(response.json?.workflow_runs) ? response.json.workflow_runs : [];
+  const requiredRuns = [
+    { key: 'ci_pull_request', name: 'CI', event: 'pull_request' },
+    { key: 'ci_push', name: 'CI', event: 'push' },
+    { key: 'publish_image', name: 'Publish AgentTalk MCP image', event: 'push' },
+  ];
+  const evidence = {};
+  const missing = [];
+  for (const required of requiredRuns) {
+    const run = runs.find(
+      item =>
+        item?.head_sha === head &&
+        item?.name === required.name &&
+        item?.event === required.event &&
+        item?.status === 'completed' &&
+        item?.conclusion === 'success'
+    );
+    if (run) {
+      evidence[required.key] = {
+        id: run.id,
+        event: run.event,
+        status: run.status,
+        conclusion: run.conclusion,
+        url: run.html_url,
+      };
+    } else {
+      missing.push(required.key);
+    }
+  }
+  return missing.length === 0
+    ? check('pass', 'github:agent_talk_mcp_actions', 'Agent-Talk-MCP CI and image workflows passed on the current head', {
+        head,
+        runs: evidence,
+      })
+    : check('fail', 'github:agent_talk_mcp_actions', 'Agent-Talk-MCP GitHub Actions are not all green on the current head', {
+        head,
+        missing,
+        runs: evidence,
+      });
+}
+
 const checks = [];
+const repoStates = {};
 
 const goalPath = path.join(root, 'Codex Goals', 'wake + mcp goal.txt');
 const auditPath = path.join(root, 'docs', 'agenttalk-production-readiness-audit.md');
@@ -175,6 +330,7 @@ for (const [name, repo] of [
     continue;
   }
   const state = await gitHead(repo);
+  repoStates[name] = state;
   checks.push(
     state.ok
       ? check('pass', `repo:${name}`, `${name} git state captured`, {
@@ -187,6 +343,15 @@ for (const [name, repo] of [
     state.trackedDirty
       ? check('warn', `repo:${name}:tracked_worktree`, `${name} has tracked worktree changes`)
       : check('pass', `repo:${name}:tracked_worktree`, `${name} has no tracked worktree changes`)
+  );
+}
+
+if (existsSync(agentTalkMcpRepo)) {
+  checks.push(
+    await agentTalkMcpActionChecks(
+      repoStates['Agent-Talk-MCP']?.branch,
+      repoStates['Agent-Talk-MCP']?.head
+    )
   );
 }
 
