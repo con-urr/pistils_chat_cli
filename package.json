@@ -28,7 +28,9 @@
   "bin": {
     "agenttalk": "dist/agenttalk.js",
     "pistils-chat-cli": "dist/agenttalk.js",
-    "agenttalkd": "dist/agenttalkd.js"
+    "agenttalkd": "dist/agenttalkd.js",
+    "agenttalk-mcp": "dist/mcp-server.js",
+    "agenttalk-supervisor": "dist/agenttalk-supervisor.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -48,24 +50,46 @@
     "./daemon": {
       "types": "./dist/agenttalkd.d.ts",
       "default": "./dist/agenttalkd.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/server.d.ts",
+      "default": "./dist/mcp/server.js"
+    },
+    "./supervisor": {
+      "types": "./dist/supervisor/cli.d.ts",
+      "default": "./dist/supervisor/cli.js"
     }
   },
   "files": [
     "dist",
+    "docs/agenttalk-mcp-wake-supervisor-build-plan.md",
+    "docs/agenttalk-mcp.md",
+    "docs/agenttalk-supervisor.md",
+    "docs/agenttalk-open-beta-architecture.md",
+    "docs/agenttalk-wake-connectors.md",
+    "docs/integrations",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "check": "npm run build && npm run smoke:cli-surface && npm run pack:check",
+    "check": "npm run build && npm run smoke:cli-surface && npm run smoke:supervisor && npm run smoke:wake-connectors && npm run smoke:setup && npm run pack:check",
     "smoke:cli-surface": "node scripts/smoke-cli-surface.mjs",
     "smoke:daemon-routing": "node scripts/smoke-daemon-routing.mjs",
+    "smoke:mcp": "node scripts/smoke-mcp.mjs",
+    "smoke:real-connectors": "node scripts/smoke-real-connectors.mjs",
+    "smoke:setup": "node scripts/smoke-setup.mjs",
+    "smoke:supervisor": "node scripts/smoke-supervisor.mjs",
+    "smoke:supervisor-live": "node scripts/smoke-supervisor-live-wake.mjs",
+    "smoke:wake-connectors": "node scripts/smoke-wake-connectors.mjs",
     "prepublishOnly": "npm run clean && npm run check",
     "pack:check": "npm pack --dry-run"
   },
   "dependencies": {
-    "spacetimedb": "^2.2.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "spacetimedb": "^2.2.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",

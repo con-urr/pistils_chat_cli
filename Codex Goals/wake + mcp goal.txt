@@ -1,0 +1,1270 @@
+inspect:
+
+~/github/live-chat/docs/agenttalk-mcp-architecture.md
+~/github/live-chat/docs/agenttalk-wake-protocol.md
+~/github/live-chat/docs/agenttalk-open-beta-architecture.md
+~/github/live-chat/docs/agenttalk-open-beta-readiness.md
+~/github/pistils_chat_cli/README.md
+~/github/pistils_chat_cli/src/agenttalk.ts
+~/github/pistils_chat_cli/src/agenttalkd.ts
+~/github/pistils_chat_cli/src/agent-client.ts
+~/github/pistils_chat_cli/src/wake.ts
+~/github/pistils_chat_cli/package.json
+OpenClaw README/package/scripts/CLI entry points
+Hermes Agent README/package/scripts/CLI entry points
+Codex local docs/config via codex --help, codex exec --help, codex mcp --help, and official docs if network is available.
+
+Create or update:
+
+docs/agenttalk-mcp-wake-supervisor-build-plan.md
+
+Include:
+
+exact repos found
+detected OpenClaw invocation command(s)
+detected Hermes invocation command(s)
+detected Codex invocation command(s)
+required env vars for each connector
+risks and unknowns
+final implementation plan
+
+If OpenClaw/Hermes have repo-specific conventions, follow them. Do not assume command names if the repo reveals different ones.
+
+Phase 1 — Local MCP server in pistils_chat_cli
+
+Implement a local stdio MCP server shipped by pistils-chat-cli.
+
+Package/user commands:
+
+agenttalk mcp
+agenttalk mcp --transport stdio
+agenttalk-mcp
+npx -y pistils-chat-cli agenttalk-mcp
+
+Package changes:
+
+Add official MCP TypeScript SDK dependency.
+Add schema validation, preferably zod.
+Add bin entry:
+agenttalk-mcp: dist/mcp-server.js
+Add agenttalk mcp alias in the main CLI.
+
+Suggested structure:
+
+src/mcp/
+  server.ts
+  context.ts
+  auth.ts
+  result.ts
+  schemas.ts
+  resources.ts
+  tools/
+    identity.ts
+    accounts.ts
+    conversations.ts
+    inbox.ts
+    wake.ts
+    supervisor.ts
+src/mcp-server.ts
+
+Use AgentRealtimeClient directly or route through agenttalkd where appropriate. Do not shell out to agenttalk except as a temporary compatibility bridge, and remove that bridge before marking complete.
+
+Required MCP result envelope:
+
+type AgentTalkMcpResult<T> =
+  | { ok: true; data: T; next?: Array<{ label: string; tool?: string; args?: unknown }> }
+  | { ok: false; error: string; reason?: string; message: string; details?: unknown };
+
+Initial tools:
+
+agenttalk_whoami
+agenttalk_doctor
+agenttalk_init_account
+agenttalk_search_accounts
+
+agenttalk_chat_start
+agenttalk_conversation_reply
+agenttalk_conversation_list
+agenttalk_conversation_messages
+agenttalk_inbox
+agenttalk_listen_conversation
+agenttalk_mark_read
+
+agenttalk_wake_status
+agenttalk_wake_enable
+agenttalk_wake_disable
+agenttalk_wake_policy_get
+agenttalk_wake_policy_set
+agenttalk_wake_requests
+agenttalk_wake_ack
+agenttalk_wake_fail
+
+agenttalk_supervisor_status
+agenttalk_supervisor_config_get
+agenttalk_supervisor_config_set
+
+Constraints:
+
+Bounded listen only. Never implement an MCP tool that runs forever.
+Default listen timeout <= 30 seconds; hard max <= 120 seconds.
+No generic run_shell / exec MCP tool.
+All writes accept optional clientRequestId.
+Use request-scoped inbox/history reducers.
+Return stable stringified IDs and sequences.
+Redact token, endpointRef, secrets, local auth files, and env values.
+
+Resources, if easy:
+
+agenttalk://me
+agenttalk://accounts/{handle}
+agenttalk://conversations/{conversationId}/messages
+agenttalk://wake/status
+agenttalk://supervisor/status
+
+Validation:
+
+MCP server starts over stdio.
+Tool list is available.
+agenttalk_whoami works.
+agenttalk_search_accounts works.
+agenttalk_chat_start can send a message.
+agenttalk_inbox can read it.
+agenttalk_wake_status returns a structured safe result.
+
+Add smoke:
+
+npm run smoke:mcp
+
+Use an MCP inspector or a small local JSON-RPC stdio test harness.
+
+Phase 2 — Remote MCP server for Render in Agent-Talk-MCP
+
+Implement hosted remote MCP as a separate service repo, but share as much tool handler code as possible with pistils_chat_cli.
+
+Target repo:
+
+~/github/Agent-Talk-MCP
+
+If the repo is empty, initialize it as a Node/TypeScript service.
+
+Required server:
+
+GET  /healthz
+GET  /readyz
+POST /mcp
+GET  /mcp       if required by Streamable HTTP MCP transport
+
+Transport:
+
+Implement Streamable HTTP MCP.
+Preserve the same tool names and result schemas as local MCP.
+Use shared tool handler package/module where possible.
+
+Render deployment:
+
+Add Dockerfile.
+Add render.yaml.
+Bind HTTP server to process.env.PORT and 0.0.0.0.
+Add health check path /healthz.
+Add clear env var documentation.
+
+Suggested env:
+
+NODE_ENV=production
+PORT=10000
+SPACETIMEDB_HOST=https://maincloud.spacetimedb.com
+SPACETIMEDB_DB_NAME=crimsonconfidentialgibbon
+AGENTTALK_MCP_BASE_URL=https://<service>.onrender.com
+AGENTTALK_REMOTE_MCP_ENCRYPTION_KEY=<32-byte-base64>
+AGENTTALK_REMOTE_MCP_SIGNING_SECRET=<secret>
+AGENTTALK_ALLOWED_ORIGINS=<comma-separated>
+AGENTTALK_SESSION_STORE=memory|postgres
+DATABASE_URL=<Render Postgres if using postgres>
+LOG_LEVEL=info
+
+Auth:
+
+Implement production-shaped authentication.
+Do not use one shared superuser token for all users.
+Add a session/identity mapping layer:
+authenticated user/workspace -> AgentTalk identity/token
+encrypted token storage
+revocation
+token rotation path
+If full OAuth 2.1 cannot be finished in one pass, implement:
+secure bearer-token auth for private beta
+clear OAuth TODO with interfaces and tests
+no “prod ready” claim until OAuth/account linking is complete
+Prefer full OAuth/account-linking if feasible with current MCP SDK and ChatGPT Apps requirements.
+
+Security:
+
+Validate origin where applicable.
+Do not log Authorization headers, AgentTalk tokens, endpoint refs, or wake secrets.
+Rate limit unauthenticated and authenticated requests.
+Add CORS policy.
+Add request ID logging.
+Add structured error envelopes.
+Add /readyz that verifies SpaceTimeDB reachability without leaking details.
+
+Remote MCP tools:
+
+Same tool catalog as local, excluding local-only supervisor/exec actions unless authenticated as a local agent owner.
+For hosted MCP, wake should expose queued state and configuration, but should not pretend to run local OpenClaw/Hermes unless a local supervisor is connected.
+
+Validation:
+
+Unit tests for auth/session mapping.
+Tool tests against mocked AgentRealtimeClient.
+Live smoke against staging SpaceTimeDB if configured.
+Render deploy dry-run docs.
+curl /healthz and curl /readyz docs.
+Phase 3 — agenttalk-supervisor for multiple local agents
+
+Implement a production-friendly local supervisor that manages multiple individually addressable agents on one machine.
+
+Package commands:
+
+agenttalk supervisor init
+agenttalk supervisor add-agent
+agenttalk supervisor remove-agent
+agenttalk supervisor list
+agenttalk supervisor start
+agenttalk supervisor run
+agenttalk supervisor status
+agenttalk supervisor doctor
+agenttalk supervisor test-wake
+agenttalk supervisor install-service
+agenttalk supervisor uninstall-service
+agenttalk supervisor logs
+
+Alias/bin if useful:
+
+agenttalk-supervisor
+
+Config file:
+
+~/.agenttalk/supervisor/config.json
+
+or YAML if already used elsewhere. Choose one and document it.
+
+Suggested config:
+
+{
+  "version": 1,
+  "host": "https://maincloud.spacetimedb.com",
+  "databaseName": "crimsonconfidentialgibbon",
+  "logDir": "~/.agenttalk/supervisor/logs",
+  "defaultWakePolicy": {
+    "wakeOnDirectMessage": true,
+    "wakeOnMention": true,
+    "wakeOnGroupMessage": false,
+    "acceptsNewConversations": true,
+    "coalesceWindowMs": 15000,
+    "minWakeIntervalMs": 5000,
+    "maxWakesPerMinute": 30
+  },
+  "agents": [
+    {
+      "name": "support",
+      "handle": "support-agent",
+      "stateDir": "~/.agenttalk/agents/support",
+      "kind": "openclaw",
+      "repoPath": "~/github/openclaw",
+      "command": "./connectors/run-openclaw-agent.sh",
+      "enabled": true,
+      "autoInit": true,
+      "wake": {
+        "latencyMs": 1000,
+        "statusText": "support agent available",
+        "reasons": ["direct_message", "mention"]
+      }
+    },
+    {
+      "name": "research",
+      "handle": "research-agent",
+      "stateDir": "~/.agenttalk/agents/research",
+      "kind": "hermes",
+      "repoPath": "~/github/hermes-agent",
+      "command": "./connectors/run-hermes-agent.sh",
+      "enabled": true,
+      "autoInit": true,
+      "wake": {
+        "latencyMs": 5000,
+        "statusText": "research agent available",
+        "reasons": ["direct_message", "mention"]
+      }
+    },
+    {
+      "name": "coder",
+      "handle": "codex-agent",
+      "stateDir": "~/.agenttalk/agents/codex",
+      "kind": "codex",
+      "repoPath": "~/github/pistils_chat_cli",
+      "command": "./connectors/run-codex-agent.sh",
+      "enabled": true,
+      "autoInit": true,
+      "wake": {
+        "latencyMs": 10000,
+        "statusText": "codex agent available",
+        "reasons": ["direct_message", "mention"]
+      }
+    }
+  ]
+}
+
+The supervisor must:
+
+Support multiple agents, each with a distinct AGENTTALK_STATE_DIR, token, handle, and wake policy.
+Initialize missing AgentTalk accounts if autoInit is true.
+Configure wake policy and registration automatically.
+Keep each agent individually addressable by handle.
+Keep per-agent logs.
+Claim wake requests and dispatch to the correct connector.
+Coalesce duplicate local executions per wakeId.
+Enforce per-agent concurrency:
+default maxConcurrentWakeJobs = 1
+configurable
+Enforce timeouts:
+default connector timeout 5 minutes
+configurable per agent
+Auto-ack on connector success only when the connector returns a valid handled result.
+Auto-fail on nonzero exit or timeout.
+Keep failure count and exponential backoff.
+Expose health/status as JSON.
+Work on macOS and Linux; Windows best effort.
+
+Important architecture requirement:
+
+Do not let the supervisor suppress wake creation by making target identities appear online.
+Implement a non-presence dispatcher mode, separate dispatcher identity, or backend adjustment as needed.
+If backend changes are required in live-chat/spacetimedb/src/index.ts, implement them and regenerate/sync bindings into:
+live-chat/packages/agenttalk/src/module_bindings
+pistils_chat_cli/src/module_bindings
+
+Service installation:
+
+macOS: generate LaunchAgent plist.
+Linux: generate systemd user service.
+Do not require sudo for normal user-level install.
+Provide uninstall.
+
+Validation:
+
+agenttalk supervisor init --yes
+agenttalk supervisor add-agent --kind noop --name support --handle support-agent
+agenttalk supervisor start
+agenttalk supervisor status --json
+agenttalk supervisor test-wake support --json
+Phase 4 — Connector framework
+
+Create connector abstraction:
+
+type AgentConnectorKind = "noop" | "openclaw" | "hermes" | "codex" | "shell";
+
+type WakeConnectorInput = {
+  agentName: string;
+  handle: string;
+  agentId: string;
+  stateDir: string;
+  repoPath?: string;
+  wake: WakeRequestView;
+  attemptId: string;
+  contextMessages: ConversationMessage[];
+  payload: WakeDispatchPayload;
+};
+
+type WakeConnectorResult = {
+  ok: boolean;
+  handled: boolean;
+  replySent?: boolean;
+  message?: string;
+  error?: string;
+  artifacts?: Array<{ path?: string; url?: string; mimeType?: string }>;
+  metadata?: unknown;
+};
+
+Connector rules:
+
+Connectors receive context via env vars and a temp JSON input file.
+Connectors must not receive raw AgentTalk token unless required; prefer state dir.
+Connectors must not auto-send child stdout to other agents.
+Connector should explicitly reply using AgentTalk CLI/SDK or return a structured response that supervisor can send if configured.
+Default behavior: connector is responsible for reply; supervisor can send returned replyText only if explicitly enabled.
+
+Temp files:
+
+~/.agenttalk/supervisor/runs/<wakeId>/<attemptId>/input.json
+~/.agenttalk/supervisor/runs/<wakeId>/<attemptId>/stdout.log
+~/.agenttalk/supervisor/runs/<wakeId>/<attemptId>/stderr.log
+~/.agenttalk/supervisor/runs/<wakeId>/<attemptId>/result.json
+
+Env vars:
+
+AGENTTALK_WAKE_ID
+AGENTTALK_WAKE_ATTEMPT_ID
+AGENTTALK_AGENT_NAME
+AGENTTALK_AGENT_HANDLE
+AGENTTALK_AGENT_ID
+AGENTTALK_CONVERSATION_ID
+AGENTTALK_MIN_SEQUENCE
+AGENTTALK_MAX_SEQUENCE
+AGENTTALK_REASON
+AGENTTALK_STATE_DIR
+AGENTTALK_HOST
+AGENTTALK_DB
+AGENTTALK_WAKE_INPUT_JSON
+AGENTTALK_WAKE_CONTEXT_JSON
+AGENTTALK_WAKE_PAYLOAD_JSON
+Phase 5 — OpenClaw connector
+
+After inspecting the local OpenClaw repo:
+
+Determine actual CLI command or Node/Python entry point.
+Determine how to pass prompt/context.
+Determine how it stores memory/state.
+Determine how to configure per-agent profile/persona.
+Determine how to ask it to produce a structured result or send reply.
+
+Implement:
+
+src/connectors/openclaw.ts
+connectors/run-openclaw-agent.sh
+docs/integrations/openclaw.md
+
+Desired zero/low-config UX:
+
+agenttalk supervisor add-agent --kind openclaw --name support --handle support-agent --repo ~/github/openclaw
+
+The command should:
+
+detect OpenClaw repo
+detect install state
+suggest/install dependencies only with user consent
+generate a connector config
+generate a runner script
+configure wake automatically
+run a local dry-run
+
+OpenClaw wake prompt template:
+
+You are {agentName} / @{handle}, woken by AgentTalk.
+Reason: {reason}
+Conversation: {conversationId}
+Messages in wake range:
+{messages}
+
+Instructions:
+- Decide whether you need to reply.
+- If replying, use AgentTalk via the provided state dir.
+- Do not reveal secrets or local paths.
+- Keep reply concise unless asked for detail.
+- Return a structured connector result JSON.
+
+Validation:
+
+noop OpenClaw mock test if the real repo dependencies are not installed.
+real OpenClaw integration test when repo is present.
+wake -> connector -> reply -> ack flow.
+Phase 6 — Hermes Agent connector
+
+After inspecting the local Hermes Agent repo:
+
+Determine actual CLI command or entry point.
+Determine prompt/context input method.
+Determine state/profile handling.
+Determine structured output possibility.
+
+Implement:
+
+src/connectors/hermes.ts
+connectors/run-hermes-agent.sh
+docs/integrations/hermes-agent.md
+
+Desired UX:
+
+agenttalk supervisor add-agent --kind hermes --name research --handle research-agent --repo ~/github/hermes-agent
+
+Same requirements as OpenClaw:
+
+auto-detect
+low-config
+dry-run
+safe env handling
+structured result
+tests
+docs
+
+Validation:
+
+mock Hermes test
+real Hermes test when repo is present
+wake -> connector -> reply -> ack flow.
+Phase 7 — Codex connector
+
+Codex has two separate integration modes:
+
+MCP client mode: Codex can connect to AgentTalk MCP so a human/Codex session can send/read AgentTalk messages.
+Wake runner mode: AgentTalk supervisor invokes codex exec non-interactively when a wake arrives.
+
+Implement both where useful.
+
+7A — Codex MCP setup helper
+
+Add command:
+
+agenttalk mcp install-codex
+
+It should:
+
+detect codex
+
+run or print the equivalent of:
+
+codex mcp add agenttalk -- npx -y pistils-chat-cli agenttalk-mcp
+
+support local dev path:
+
+codex mcp add agenttalk-dev -- node ~/github/pistils_chat_cli/dist/mcp-server.js
+
+support remote Render MCP:
+
+[mcp_servers.agenttalk]
+url = "https://<render-service>.onrender.com/mcp"
+bearer_token_env_var = "AGENTTALK_MCP_TOKEN"
+never overwrite existing config without backup.
+7B — Codex wake runner
+
+Implement:
+
+src/connectors/codex.ts
+connectors/run-codex-agent.sh
+docs/integrations/codex.md
+
+Use codex exec for non-interactive wake execution.
+
+Default command pattern:
+
+cd "$AGENTTALK_CODEX_WORKDIR"
+cat "$AGENTTALK_WAKE_INPUT_JSON" | codex exec - --json --sandbox workspace-write
+
+Safer default:
+
+read-only unless the user explicitly sets sandbox: workspace-write
+support --output-schema for connector result JSON if Codex supports it locally
+capture JSONL events
+parse final agent message
+optionally require the Codex runner to reply through AgentTalk MCP/CLI
+
+Codex connector config:
+
+{
+  "kind": "codex",
+  "workdir": "~/github/some-repo",
+  "sandbox": "read-only",
+  "approvalMode": "never|prompt|on-failure",
+  "mcpServer": "agenttalk",
+  "useJson": true,
+  "outputSchema": true,
+  "timeoutMs": 600000
+}
+
+Codex wake prompt:
+
+You are the local Codex coding agent connected to AgentTalk.
+
+You were woken by an inbound AgentTalk message.
+Read the wake context below. Decide whether to respond, inspect the repository if needed, and reply through AgentTalk using the configured AgentTalk MCP server or CLI.
+
+Rules:
+- Do not make unrelated code changes.
+- Do not run destructive commands.
+- If no action is needed, say so briefly.
+- If you make changes, summarize files changed and tests run.
+- Always produce a final structured result with handled/replySent/summary/error.
+
+Also evaluate Codex hooks:
+
+Hooks are useful for logging, memory, policy, and “notify AgentTalk when Codex stops,” not for creating the initial wake.
+Add optional Codex hook templates only after the codex exec runner works.
+Hook templates may:
+send session summaries to AgentTalk
+emit heartbeat/status events
+log tool usage locally
+Do not rely on hooks as the primary wake mechanism.
+
+Validation:
+
+codex --version
+codex exec --help
+mock Codex command for CI
+real Codex connector test when Codex is installed and authenticated
+JSONL parsing test
+timeout/failure test
+wake -> codex exec -> reply or summary -> ack/fail test.
+Phase 8 — Wake UX: make it “just work”
+
+Add a consumer-friendly setup wizard:
+
+agenttalk setup
+agenttalk setup --agents
+agenttalk supervisor init --wizard
+
+Wizard should:
+
+Detect local repos:
+OpenClaw
+Hermes Agent
+Codex
+Ask which agents to expose.
+Suggest handles.
+Create per-agent state dirs.
+Run agenttalk init for each missing account.
+Configure wake:
+direct message: on
+mention: on
+group: off by default
+accepts new conversations: on
+conservative rate limits
+Generate supervisor config.
+Start a test supervisor run.
+Send a self-test wake.
+Show exact next command to install as service.
+
+Minimal user path:
+
+npm install -g pistils-chat-cli
+agenttalk setup --agents
+agenttalk supervisor install-service
+
+The setup command should produce a friendly summary:
+
+Configured 3 wakeable agents:
+
+@sales-agent      OpenClaw   ready
+@research-agent   Hermes     ready
+@codex-agent      Codex      ready
+
+Supervisor service: installed/running
+Wake test: passed
+MCP: local server available with `agenttalk-mcp`
+Remote MCP: not configured / configured at https://...
+
+JSON output required:
+
+agenttalk setup --agents --json
+Phase 9 — Backend fixes if needed
+
+If the current backend prevents reliable wake creation because listener presence suppresses wake:
+
+Implement one of these cleanly:
+clientKind = wake_dispatcher / presenceMode = non_presence on heartbeat/connection and availability calculation.
+Dispatcher/service identity that claims wakes without being the recipient.
+Dedicated wake dispatcher profile and views that do not mark target agent online.
+
+Preferred:
+
+Add explicit presenceMode / clientKind semantics if SpaceTimeDB APIs make this practical.
+Availability should distinguish:
+online interactive agent
+wake dispatcher connected
+wakeable offline
+unavailable
+wake listen and supervisor should not suppress wake creation.
+
+Update:
+
+backend tables/helpers if required
+generated bindings
+package copies
+docs
+smoke tests
+
+Acceptance:
+
+Agent can be wakeable.
+Supervisor/listener can be running.
+Sender sends direct message.
+Backend still creates/coalesces wake request.
+Supervisor claims and dispatches it.
+Agent replies.
+Wake is acked.
+
+This is mandatory for production readiness.
+
+Phase 10 — Observability and logs
+
+Add supervisor observability:
+
+agenttalk supervisor status --json
+agenttalk supervisor logs --agent support --tail 100
+agenttalk supervisor events --json
+
+Status fields:
+
+{
+  "ok": true,
+  "running": true,
+  "agents": [
+    {
+      "name": "support",
+      "handle": "support-agent",
+      "agentId": "...",
+      "kind": "openclaw",
+      "enabled": true,
+      "wakeable": true,
+      "availability": "wakeable",
+      "pendingWakes": 0,
+      "runningJobs": 0,
+      "lastWakeAt": "...",
+      "lastSuccessAt": "...",
+      "lastFailureAt": null,
+      "failureCount": "0"
+    }
+  ]
+}
+
+Add metrics in logs:
+
+wake_claim_latency_ms
+wake_context_fetch_latency_ms
+connector_runtime_ms
+ack_latency_ms
+wake_failures
+suppressed_wakes
+duplicate_wake_skips
+active_jobs
+
+Remote MCP logs:
+
+request ID
+tool name
+authenticated principal
+latency
+error code
+never log secrets or message text unless debug explicitly enabled.
+Phase 11 — Tests and validation
+
+Add tests at multiple layers.
+
+Unit tests
+MCP result envelope
+schema validation
+auth/session mapping
+wake payload redaction
+connector config parsing
+connector command building
+JSONL parsing for Codex
+supervisor config load/save/migration
+per-agent concurrency lock
+timeout/failure handling
+Integration tests
+local MCP stdio tool list
+local MCP whoami
+local MCP send/inbox
+wake policy set/get
+supervisor noop agent wake flow
+supervisor multi-agent routing:
+message support -> support connector runs
+message research -> research connector runs
+no cross-agent leakage
+OpenClaw mock connector
+Hermes mock connector
+Codex mock connector
+real connector tests only when repos/tools detected
+Backend smoke if backend changed
+non-presence wake listener does not suppress wake creation
+wakeable offline direct message creates wake
+listener/supervisor running still creates wake
+coalescing still works
+suppression still works
+ack/fail/retry still works
+Commands
+
+Add or update:
+
+npm run build
+npm run check
+npm run smoke:mcp
+npm run smoke:supervisor
+npm run smoke:wake-connectors
+npm run smoke:remote-mcp
+
+In live-chat if backend changes:
+
+npm run agenttalk:sync:check
+npm run agenttalk:smoke-wake -- --json
+npm run agenttalk:smoke-wake-load -- --json --pairs 3
+
+Acceptance:
+
+All package builds pass.
+Existing CLI smoke still passes.
+Existing wake smoke still passes.
+New MCP smoke passes.
+New supervisor noop smoke passes.
+Connector mocks pass.
+Real connector tests run when local repos/tools exist and skip with clear message otherwise.
+Phase 12 — Docs
+
+Create/update:
+
+pistils_chat_cli/README.md
+pistils_chat_cli/docs/agenttalk-mcp.md
+pistils_chat_cli/docs/agenttalk-supervisor.md
+pistils_chat_cli/docs/agenttalk-wake-connectors.md
+pistils_chat_cli/docs/integrations/openclaw.md
+pistils_chat_cli/docs/integrations/hermes-agent.md
+pistils_chat_cli/docs/integrations/codex.md
+Agent-Talk-MCP/README.md
+Agent-Talk-MCP/docs/render-deploy.md
+live-chat/docs/agenttalk-mcp-architecture.md
+live-chat/docs/agenttalk-wake-protocol.md
+
+Docs must include:
+
+one-agent quickstart
+multi-agent quickstart
+OpenClaw setup
+Hermes setup
+Codex setup
+local MCP setup for Codex/Claude/Cursor
+remote MCP setup for Render
+troubleshooting
+security model
+state dirs and tokens
+service install/uninstall
+how to rotate tokens
+how to disable wake
+how to inspect failed wakes
+limitations
+
+Consumer quickstart should be genuinely simple:
+
+npm install -g pistils-chat-cli
+agenttalk setup --agents
+agenttalk supervisor install-service
+agenttalk-mcp
+
+Remote MCP Render quickstart:
+
+cd ~/github/Agent-Talk-MCP
+cp .env.example .env
+npm install
+npm run build
+npm run start
+curl http://localhost:10000/healthz
+
+Then Render:
+
+git push
+# create Render Blueprint from render.yaml
+Phase 13 — Production-readiness checklist
+
+Do not mark complete until these are true:
+
+Local MCP
+ agenttalk-mcp starts over stdio.
+ Codex can add it with codex mcp add.
+ MCP tools are schema validated.
+ No unbounded tools.
+ No shell executor.
+ Existing CLI package build/check passes.
+Remote MCP
+ /healthz passes.
+ /readyz verifies backend connectivity.
+ /mcp works with Streamable HTTP.
+ Auth is implemented and documented.
+ Render Dockerfile and render.yaml exist.
+ Env vars documented.
+ No shared superuser token.
+ Logs redact secrets.
+Supervisor
+ Multiple agents can be configured.
+ Each agent has distinct state dir/token/handle.
+ Supervisor routes wakes to correct connector.
+ Supervisor does not suppress wake creation.
+ Service install works on macOS and Linux.
+ Logs/status are useful.
+Wake connectors
+ OpenClaw detected and runnable, or skipped with clear message.
+ Hermes detected and runnable, or skipped with clear message.
+ Codex detected and runnable via codex exec, or skipped with clear message.
+ Mock connectors pass in CI.
+ Real connectors pass locally when repos/tools exist.
+Docs / UX
+ agenttalk setup --agents is usable by a non-expert.
+ Error messages explain next steps.
+ JSON outputs are machine-friendly.
+ Troubleshooting covers auth, wake suppression, failed connectors, missing repos, Codex auth, Render env.
+Implementation details and preferences
+
+Language:
+
+TypeScript/Node for CLI, MCP, supervisor.
+Shell wrappers only where useful for external runtimes.
+Keep code portable.
+
+State:
+
+Existing per-agent state dirs remain valid.
+Supervisor config should reference state dirs, not copy tokens.
+Sensitive files must be chmod 0600 where supported.
+Directories chmod 0700 where supported.
+
+Security:
+
+Never print raw AgentTalk token unless an explicit existing --show-token behavior requires it.
+Never log Codex auth.
+Never log OpenAI API keys.
+Never log webhook secrets.
+Redact endpoint refs by default.
+Avoid auto-installing dependencies without confirmation outside CI.
+Avoid destructive commands.
+
+Failure behavior:
+
+Message delivery should never fail just because wake dispatch fails.
+Wake failures must be visible in agenttalk wake requests and supervisor logs.
+Connector timeout must fail wake attempt with reason.
+Repeated failures should back off.
+
+Compatibility:
+
+Preserve existing commands.
+Preserve existing docs unless replacing with more accurate docs.
+Keep live-chat package copy and pistils package copy synchronized.
+Regenerate bindings only when backend schema/reducers change.
+Suggested first implementation slice
+
+Start with a small vertical slice:
+
+Local MCP:
+agenttalk-mcp
+agenttalk_whoami
+agenttalk_chat_start
+agenttalk_inbox
+smoke test
+Supervisor noop:
+config
+one noop agent
+wake listen/claim/ack
+status/logs
+smoke test
+Non-presence wake fix if needed:
+prove listener/supervisor does not suppress wake creation
+
+Then expand to:
+4. OpenClaw connector
+5. Hermes connector
+6. Codex connector
+7. Remote Render MCP
+8. Setup wizard
+
+Final deliverable
+
+When done, produce a summary with:
+
+files changed
+commands run
+tests passed/failed
+exact quickstart for local multi-agent wake
+exact quickstart for Codex MCP
+exact quickstart for Render remote MCP
+known limitations
+follow-up issues, if any
+
+The desired end state is that a user can run:
+
+npm install -g pistils-chat-cli
+agenttalk setup --agents
+agenttalk supervisor install-service
+
+and end up with multiple individually addressable, wakeable local agents such as:
+
+@support-agent   OpenClaw
+@research-agent  Hermes
+@codex-agent     Codex
+
+Then another AgentTalk user can message @support-agent, the backend creates a wake request, the local supervisor claims it without suppressing wake creation, the correct connector runs, the agent fetches context, replies through AgentTalk, and the wake is acked.
+
+::contentReference[oaicite:7]{index=7}
+
+---
+
+Work log - 2026-05-26
+
+Completed:
+
+- Phase 0 integration inspection for the active repos under C:\Users\KCL\Documents\GitHub.
+- Created docs/agenttalk-mcp-wake-supervisor-build-plan.md in pistils_chat_cli.
+- Verified local runtime surfaces:
+  - OpenClaw: node C:\Users\KCL\Documents\GitHub\openclaw\openclaw.mjs agent --message <text> --json.
+  - Hermes: C:\Users\KCL\Documents\GitHub\hermes-agent\venv\Scripts\python.exe C:\Users\KCL\Documents\GitHub\hermes-agent\hermes --oneshot <prompt> --quiet.
+  - Codex: codex exec --json and codex mcp add.
+  - Render CLI: C:\Users\KCL\.codex\tools\render-cli\2.18.0\render.exe authenticated to Connor's workspace.
+
+Still open:
+
+- Phase 1 local MCP implementation.
+- Supervisor noop slice.
+- Non-presence wake creation proof/fix.
+- OpenClaw/Hermes/Codex connectors.
+- Remote MCP service in Agent-Talk-MCP and a new Render free service.
+
+Work log - 2026-05-26, local MCP slice
+
+Completed:
+
+- Added local stdio MCP server entry points:
+  - agenttalk-mcp
+  - agenttalk mcp --transport stdio
+- Added MCP package dependencies:
+  - @modelcontextprotocol/sdk
+  - zod
+- Implemented schema-validated MCP tools:
+  - agenttalk_whoami
+  - agenttalk_doctor
+  - agenttalk_init_account
+  - agenttalk_search_accounts
+  - agenttalk_chat_start
+  - agenttalk_conversation_reply
+  - agenttalk_conversation_list
+  - agenttalk_conversation_messages
+  - agenttalk_inbox
+  - agenttalk_listen_conversation
+  - agenttalk_mark_read
+  - agenttalk_wake_status
+  - agenttalk_wake_enable
+  - agenttalk_wake_disable
+  - agenttalk_wake_policy_get
+  - agenttalk_wake_policy_set
+  - agenttalk_wake_requests
+  - agenttalk_wake_ack
+  - agenttalk_wake_fail
+  - agenttalk_supervisor_status
+  - agenttalk_supervisor_config_get
+  - agenttalk_supervisor_config_set
+- Supervisor MCP tools currently return explicit not_implemented results and do not expose shell execution.
+- Added agenttalk://me, agenttalk://wake/status, and agenttalk://supervisor/status resources.
+- Added npm run smoke:mcp with a JSON-RPC stdio harness.
+- Redirected MCP runtime console logging to stderr so stdout remains JSON-RPC only.
+- Added docs/agenttalk-mcp.md and README local MCP quickstart.
+- Extended createAccount client input with optional clientRequestId in pistils_chat_cli and live-chat package copy.
+
+Validation passed:
+
+- npm run build
+- npm run smoke:cli-surface
+- npm run pack:check
+- npm run check
+- npm run smoke:mcp
+- node scripts\smoke-mcp.mjs --agenttalk
+
+Still open after local MCP slice:
+
+- Live chat/start/inbox MCP smoke between two real accounts.
+- Supervisor noop slice.
+- Non-presence wake creation proof/fix.
+- OpenClaw/Hermes/Codex connectors.
+- Remote MCP service in Agent-Talk-MCP and new Render free service.
+
+Work log - 2026-05-26, supervisor noop slice
+
+Completed:
+
+- Added agenttalk-supervisor bin.
+- Added agenttalk supervisor command alias.
+- Added supervisor config helpers with default config at ~/.agenttalk/supervisor/config.json.
+- Added redacted config/status output so local state dirs, repo paths, and commands are not printed raw by default.
+- Implemented commands:
+  - agenttalk supervisor init
+  - agenttalk supervisor add-agent
+  - agenttalk supervisor remove-agent
+  - agenttalk supervisor list
+  - agenttalk supervisor status
+  - agenttalk supervisor doctor
+  - agenttalk supervisor test-wake
+  - agenttalk supervisor run/start as explicit not-yet-running placeholders
+  - install-service, uninstall-service, and logs as explicit not_implemented placeholders
+- Added noop wake-test scaffold that writes input.json, stdout.log, stderr.log, and result.json under the supervisor run directory.
+- Added docs/agenttalk-supervisor.md and README supervisor quickstart.
+- Added npm run smoke:supervisor and included it in npm run check.
+
+Validation passed:
+
+- npm run build
+- npm run smoke:supervisor
+- npm run smoke:mcp
+- npm run check
+
+Still open after supervisor noop slice:
+
+- Live backend wake claim/dispatch/ack/fail loop.
+- Non-presence dispatcher/listener model so the supervisor does not suppress wake creation.
+- Real OpenClaw/Hermes/Codex connectors.
+- Service install/uninstall.
+- Supervisor logs/events tailing.
+- Remote MCP service in Agent-Talk-MCP and new Render free service.
+
+Work log - 2026-05-26, supervisor runtime and non-presence wake proof
+
+Completed:
+
+- Installed and authenticated the SpaceTimeDB 2.2.0 CLI locally.
+- Implemented supervisor live run loop:
+  - connect configured agents using per-agent state dirs
+  - auto-initialize missing accounts when autoInit is enabled
+  - configure wake registration and wake policy
+  - claim pending wake requests for the correct recipient agent
+  - dispatch wakes through the connector abstraction
+  - ack handled connector results and fail nonzero/error/timeout results
+  - keep per-agent runtime status, failure count, logs, and run artifacts
+- Implemented connector execution for noop, shell, OpenClaw, Hermes, and Codex command patterns.
+- Added explicit Windows-safe run-directory path segment sanitization for wake ids and attempt ids.
+- Added npm run smoke:wake-connectors.
+- Added npm run smoke:supervisor-live as an opt-in live SpaceTimeDB wake proof.
+- Implemented backend non-presence semantics in live-chat:
+  - active_connection now has client_kind with default spacetimedb-client
+  - heartbeat accepts clientKind
+  - agenttalk-supervisor / wake dispatcher clients do not count as presence-bearing active connections
+  - online/availability and operator active connection counts use presence-bearing connections
+- Regenerated SpaceTimeDB bindings and synced them into live-chat packages and pistils_chat_cli.
+- Published the live SpaceTimeDB backend migration to crimsonconfidentialgibbon with --delete-data=never.
+- Verified live acceptance:
+  - npm run smoke:supervisor-live created temporary live accounts
+  - direct message created a backend wake while the supervisor was connected
+  - supervisor claimed 1 wake, acked 1 wake, and failed 0 wakes
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:supervisor
+- pistils_chat_cli: npm run smoke:wake-connectors
+- pistils_chat_cli: npm run smoke:supervisor-live
+- pistils_chat_cli: npm run check
+- live-chat: npx.cmd tsc -p spacetimedb/tsconfig.json
+- live-chat: npm run spacetime:generate
+- live-chat: npm run agenttalk:sync:check
+- live-chat: npm run agenttalk:pkg:check
+- live-chat: npm run spacetime:publish:production-approved
+
+Still open after supervisor runtime slice:
+
+- Real OpenClaw/Hermes/Codex end-to-end connector tests, including reply behavior.
+- Setup wizard.
+- Remote MCP service in Agent-Talk-MCP and new Render free service.
+
+Work log - 2026-05-26, supervisor service and logs slice
+
+Completed:
+
+- Implemented agenttalk supervisor install-service:
+  - macOS LaunchAgent plist generation and launchctl bootstrap
+  - Linux systemd user service generation and systemctl --user enable/start
+  - Windows best-effort PowerShell start script generation
+  - --dry-run and --no-start support
+- Implemented agenttalk supervisor uninstall-service:
+  - macOS launchctl bootout and plist removal
+  - Linux systemd user disable/stop and unit removal
+  - Windows start script removal
+- Implemented agenttalk supervisor logs and events:
+  - reads supervisor.jsonl or per-agent logs
+  - supports --agent, --tail, and --json
+- Extended npm run smoke:supervisor to cover logs, events, and install-service --dry-run.
+- Updated README and docs/agenttalk-supervisor.md.
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:supervisor
+
+Still open after supervisor service/logs slice:
+
+- Real OpenClaw/Hermes/Codex end-to-end connector tests, including reply behavior.
+- Remote MCP service in Agent-Talk-MCP and new Render free service.
+
+Work log - 2026-05-26, setup command slice
+
+Completed:
+
+- Implemented agenttalk setup --agents.
+- Implemented agenttalk supervisor init --wizard as an alias to the same setup path.
+- Setup detects:
+  - OpenClaw repo by openclaw.mjs
+  - Hermes repo plus venv python
+  - Codex executable on PATH
+- Setup writes ready agents into the supervisor config with distinct state dirs, connector kinds, repo paths, wake status, and conservative timeouts.
+- Setup supports --dry-run, --force, --json, and skip flags for each runtime.
+- Setup output redacts local paths and never prints tokens.
+- Added npm run smoke:setup and included it in npm run check.
+- Updated README and docs/agenttalk-supervisor.md.
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:setup
+- Local dry run detected the real OpenClaw, Hermes, and Codex surfaces on this Windows machine.
+
+Still open after setup command slice:
+
+- Real OpenClaw/Hermes/Codex end-to-end connector tests, including reply behavior.
+- Remote MCP service in Agent-Talk-MCP and new Render free service.
+
+Work log - 2026-05-26, remote MCP scaffold and Render Blueprint slice
+
+Completed:
+
+- Added request-scoped MCP connection overrides in pistils_chat_cli so hosted MCP requests can pass a per-user AgentTalk token without mutating process.env or writing shared state.
+- Exported runWithMcpRequestOverrides from pistils-chat-cli/mcp.
+- Scaffolded C:\Users\KCL\Documents\GitHub\Agent-Talk-MCP as a Node/TypeScript Streamable HTTP MCP service.
+- Implemented endpoints:
+  - GET /healthz
+  - GET /readyz
+  - POST /mcp
+  - GET /mcp
+- Implemented private-beta hosted auth:
+  - /mcp requires Authorization: Bearer <AgentTalk token>
+  - the bearer token maps directly to the caller's AgentTalk identity
+  - no shared superuser AgentTalk token is used
+  - OAuth/account-linking remains a documented follow-up before general production readiness
+- Added CORS, request IDs, in-memory rate limiting, and structured logs that do not include Authorization headers or raw tokens.
+- Added Dockerfile, render.yaml, .env.example, README.md, docs/render-deploy.md, and scripts/smoke-http.mjs.
+- render.yaml defines one new free Docker web service named agent-talk-mcp and does not touch the existing CrisisTrainingSim Render service.
+
+Validation passed:
+
+- Agent-Talk-MCP: npm run build
+- Agent-Talk-MCP: npm run smoke:http
+- Agent-Talk-MCP: live local GET /readyz returned backend reachable for crimsonconfidentialgibbon
+- Agent-Talk-MCP: MCP Streamable HTTP client listed 22 tools including agenttalk_whoami
+- Agent-Talk-MCP: render blueprints validate returned valid=true for service agent-talk-mcp
+
+Still open after remote MCP scaffold:
+
+- Push/publish pistils_chat_cli MCP-export changes before Render builds Agent-Talk-MCP from GitHub.
+- Create/apply the new Render Blueprint service and verify the deployed /healthz, /readyz, and /mcp endpoints.
+- Real OpenClaw/Hermes/Codex end-to-end connector tests, including reply behavior.
+
+Work log - 2026-05-26, connector docs and opt-in real smoke slice
+
+Completed:
+
+- Added docs/agenttalk-wake-connectors.md.
+- Added docs/integrations/openclaw.md.
+- Added docs/integrations/hermes-agent.md.
+- Added docs/integrations/codex.md.
+- Added npm run smoke:real-connectors as an opt-in real local runtime test.
+- The real connector smoke skips by default and reports detected local runtimes; set AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 to execute OpenClaw, Hermes, and Codex.
+- Package files now include docs so integration runbooks ship in npm packages.
+
+Validation passed:
+
+- pistils_chat_cli: npm run smoke:real-connectors without opt-in reported OpenClaw, Hermes, and Codex detected and skipped intentionally.
+- pistils_chat_cli: npm run check
+
+Still open after connector docs/opt-in smoke:
+
+- Run AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors when intentional model/runtime execution is acceptable.
+- Push/publish pistils_chat_cli MCP-export changes before Render builds Agent-Talk-MCP from GitHub.
+- Create/apply the new Render Blueprint service and verify the deployed /healthz, /readyz, and /mcp endpoints.

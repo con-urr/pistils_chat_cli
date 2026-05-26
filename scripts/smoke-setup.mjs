@@ -1,0 +1,86 @@
+import { spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(__dirname, '..');
+const agenttalk = path.join(root, 'dist', 'agenttalk.js');
+const home = path.join(os.tmpdir(), `agenttalk-setup-smoke-${process.pid}-${Date.now()}`);
+const openclawRepo = path.join(home, 'repos', 'openclaw');
+const hermesRepo = path.join(home, 'repos', 'hermes-agent');
+const hermesPython = process.platform === 'win32'
+  ? path.join(hermesRepo, 'venv', 'Scripts', 'python.exe')
+  : path.join(hermesRepo, 'venv', 'bin', 'python');
+
+function run(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [agenttalk, ...args], {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        AGENTTALK_SUPERVISOR_HOME: home,
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code !== 0) {
+        reject(new Error(`agenttalk ${args.join(' ')} exited ${code}; ${stderr}`));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+function parseJson(result) {
+  return JSON.parse(result.stdout);
+}
+
+await fs.mkdir(openclawRepo, { recursive: true });
+await fs.writeFile(path.join(openclawRepo, 'openclaw.mjs'), 'console.log("openclaw stub");\n', 'utf8');
+await fs.mkdir(path.dirname(hermesPython), { recursive: true });
+await fs.writeFile(path.join(hermesRepo, 'hermes'), '# hermes stub\n', 'utf8');
+await fs.writeFile(hermesPython, '', 'utf8');
+
+const setup = parseJson(
+  await run([
+    'setup',
+    '--agents',
+    '--json',
+    '--openclaw-repo',
+    openclawRepo,
+    '--hermes-repo',
+    hermesRepo,
+    '--no-codex',
+  ])
+);
+
+if (setup.ok !== true || setup.configured?.length !== 2) {
+  throw new Error(`unexpected setup result: ${JSON.stringify(setup)}`);
+}
+if (!setup.configured.some(entry => entry.agent?.kind === 'openclaw')) {
+  throw new Error(`openclaw was not configured: ${JSON.stringify(setup)}`);
+}
+if (!setup.configured.some(entry => entry.agent?.kind === 'hermes')) {
+  throw new Error(`hermes was not configured: ${JSON.stringify(setup)}`);
+}
+
+const status = parseJson(await run(['supervisor', 'status', '--json']));
+if (status.ok !== true || status.agents?.length !== 2) {
+  throw new Error(`unexpected supervisor status: ${JSON.stringify(status)}`);
+}
+
+await fs.rm(home, { recursive: true, force: true });
+
+console.log(JSON.stringify({ ok: true, configured: setup.configured.length }));

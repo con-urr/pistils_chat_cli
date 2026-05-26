@@ -36,6 +36,7 @@ export type CreateAccountInput = {
   displayName?: string;
   role?: AgentRole;
   bio?: string;
+  clientRequestId?: string;
 };
 
 export type AccountType = 'free' | 'group' | 'pro' | 'operator';
@@ -538,13 +539,14 @@ export class AgentRealtimeClient {
     displayName,
     role = 'agent',
     bio = '',
+    clientRequestId,
   }: CreateAccountInput) {
     await this.conn.reducers.createAccount({
       handle,
       displayName: displayName ?? handle,
       role,
       bio,
-      clientRequestId: makeClientRequestId('account:create'),
+      clientRequestId: clientRequestId ?? makeClientRequestId('account:create'),
     });
   }
 

@@ -79,6 +79,7 @@ export const ActiveConnection = __t.object("ActiveConnection", {
   agentId: __t.option(__t.string()),
   connectedAt: __t.timestamp(),
   lastSeen: __t.timestamp(),
+  clientKind: __t.string(),
 });
 export type ActiveConnection = __Infer<typeof ActiveConnection>;
 

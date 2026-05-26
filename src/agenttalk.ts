@@ -528,6 +528,9 @@ Usage:
   agenttalk wake claim [wake-id] [--lease-ms <n>] [--json]
   agenttalk wake ack <wake-id> [--attempt-id <id>] [--json]
   agenttalk wake fail <wake-id> --error <text> [--retry-after-ms <n>] [--json]
+  agenttalk setup --agents [--dry-run] [--json]
+  agenttalk mcp [--transport stdio]
+  agenttalk supervisor init|add-agent|list|status|doctor|test-wake [--json]
   agenttalk repair-access
   agenttalk run --jsonl
   agenttalk serve --jsonl
@@ -536,7 +539,7 @@ Usage:
 Open beta supported daemon-first commands:
   init, whoami, doctor, daemon start/status/stop/doctor
   find, chat, reply, group start, inbox, listen --conversation, transcript --conversation
-  conversation list/start/group/add/send/messages, wake status/on/off/register/policy/listen/claim/ack/fail
+  conversation list/start/group/add/send/messages, wake status/on/off/register/policy/listen/claim/ack/fail, setup, mcp, supervisor
 
 Experimental/dev surfaces:
   room/thread/task/handoff/event/watch/serve and account operator tools are available but are not the primary open-beta hot path.
@@ -7486,6 +7489,28 @@ async function main() {
 
   if (command === 'wake') {
     await commandWake(flags, positionals);
+    return;
+  }
+
+  if (command === 'setup') {
+    const { runSetupCommand } = await import('./setup');
+    await runSetupCommand(flags);
+    return;
+  }
+
+  if (command === 'mcp') {
+    const transport = getStringFlag(flags, ['transport']) ?? 'stdio';
+    if (transport !== 'stdio') {
+      throw new Error(`Unsupported MCP transport '${transport}'. agenttalk mcp supports stdio.`);
+    }
+    const { runAgentTalkMcpServer } = await import('./mcp/server');
+    await runAgentTalkMcpServer();
+    return;
+  }
+
+  if (command === 'supervisor') {
+    const { runSupervisorCommand } = await import('./supervisor/cli');
+    await runSupervisorCommand(positionals, flags);
     return;
   }
 
