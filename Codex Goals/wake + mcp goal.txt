@@ -2246,3 +2246,26 @@ Still open after Render target project/environment hardening:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris after one source-access path is available.
 - Verify deployed `/healthz`, `/auth/status`, `/readyz`, and `/mcp`.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render plugin install/auth retest and PR sync
+
+Completed in pistils_chat_cli:
+
+- Re-ran Render CLI setup for Codex after the user asked to install it:
+  - `render.cmd skills install --tool codex --scope user --confirm -o text` returned `Installed 21 skill(s) to 1 tool(s)`.
+  - `render.cmd login` reported `Success: CLI is already authenticated.`
+- Verified the local Render CLI can list services; inventory still shows only `CrisisTrainingSim`.
+- Verified the Windows user `RENDER_API_KEY` remains present and a redacted Render MCP initialize probe returns HTTP 200.
+- Confirmed the current Codex Desktop session still does not expose Render MCP tools via tool discovery, so a restart/new session is still required for direct `@render` MCP tool use.
+- Updated the `con-urr/pistils_chat_cli#1` PR body with the latest target workspace/project/environment evidence and current Render gate wording.
+- Confirmed `con-urr/Agent-Talk-MCP#1` already includes the matching Render target-location and source-access gate evidence.
+- Updated `docs/agenttalk-production-readiness-audit.md` to reference the current Agent-Talk-MCP head commit and the Render install/auth retest.
+
+Still open after Render plugin install/auth retest:
+
+- Restart Codex Desktop or start a new Codex session so direct Render MCP tools are loaded from the configured `RENDER_API_KEY`.
+- Replace the CLI-token-backed `RENDER_API_KEY` with a non-expiring Dashboard API key before relying on long-term Render MCP auth.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris after one source-access path is available.
+- Verify deployed `/healthz`, `/auth/status`, `/readyz`, and `/mcp`.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.

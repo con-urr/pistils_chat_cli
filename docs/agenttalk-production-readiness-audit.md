@@ -20,7 +20,7 @@ The local MCP, non-presence wake supervisor, setup flow, connector framework, Co
 | --- | --- | --- |
 | `pistils_chat_cli` | `codex/agenttalk-mcp-supervisor` | PR `con-urr/pistils_chat_cli#1`; this committed audit is on the pushed branch; only an unrelated untracked image remains locally. |
 | `live-chat` | `codex/agenttalk-wake-presence` | Head `7e0a759935f2856d618f76983c4a4cce0d7adb80`; PR `con-urr/live-chat#1`. |
-| `Agent-Talk-MCP` | `codex/render-mcp-service` | Head `cd6fab63d4a47595a3d6b63d2c7eb58a4afca6f4`; PR `con-urr/Agent-Talk-MCP#1`. |
+| `Agent-Talk-MCP` | `codex/render-mcp-service` | Head `41224466490bea1789f2fd70d099f36703ed339e`; PR `con-urr/Agent-Talk-MCP#1`. |
 
 ## Checklist
 
@@ -56,6 +56,7 @@ The goal log records these validated checkpoints:
 - Real connector smoke passed for OpenClaw and Codex; Hermes skipped with the explicit reason that non-interactive credentials are not configured. Local investigation found no provider API-key env vars in the current process and no reachable LM Studio/Ollama no-key local endpoint; Codex CLI is logged in, but Hermes intentionally keeps Codex OAuth separate and should use `hermes auth add openai-codex --type oauth` instead of importing Codex CLI tokens.
 - Hosted MCP smoke passed with private-beta bearer auth and 22 MCP tools.
 - Render MCP auth was configured by copying the existing Render CLI token into the Windows user `RENDER_API_KEY` env var without printing it; redacted probes returned HTTP 200 from both Render API and Render MCP. The token expires on 2026-06-01 and should be replaced by a non-expiring Dashboard API key for durable use.
+- Render CLI skill setup was retested after the plugin install request: `render skills install --tool codex --scope user --confirm -o text` completed with `Installed 21 skill(s) to 1 tool(s)`, `render login` reported the CLI was already authenticated, `render services -o json` listed only `CrisisTrainingSim`, and a redacted Render MCP initialize probe returned HTTP 200.
 - Agent-Talk-MCP `npm run preflight:render` now verifies `RENDER_API_KEY` against Render API and Render MCP directly, and verifies the target Render workspace/project/environment before any create attempt. When run with the user env value injected into the current shell, it reports `render:api_key_auth` and `render:mcp_api_key_auth` as pass, `renderMcpAuth: ready`, and `targetProjectEnvironment: ready`; it also returns `nextActions` for the current account-side unblock steps, and still reports:
   - GHCR branch image anonymous manifest returns HTTP 401
   - Git-backed creation still needs Render GitHub access to the private repo
