@@ -3192,3 +3192,41 @@ Still open after blocked gate retest:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
+
+Work log - 2026-05-26, Hermes OAuth timeout cleanup hardening
+
+Completed in pistils_chat_cli:
+
+- Hardened `scripts/hermes-codex-oauth.mjs` with an explicit `--timeout-seconds` / `AGENTTALK_HERMES_OAUTH_TIMEOUT_SECONDS` path.
+- The helper now:
+  - emits redacted timeout telemetry when a Hermes command exceeds the configured timeout;
+  - kills the active Hermes auth/config child on timeout or process signals;
+  - exits with code 3 for timeout failures;
+  - still defaults to no internal timeout for normal user-approved interactive OAuth.
+- Added `scripts/smoke-hermes-codex-oauth-timeout.mjs`.
+- Wired `smoke:hermes-codex-oauth-timeout` and the existing no-confirm guard smoke into `npm run check`.
+- Updated `scripts/audit-goal.mjs` so the final audit verifies helper artifact wiring plus both guard and timeout-cleanup smokes.
+- Updated README.md, `docs/integrations/hermes-agent.md`, and `docs/agenttalk-production-readiness-audit.md` with timeout-cleanup coverage.
+
+Validation passed:
+
+- pistils_chat_cli: `node --check scripts\hermes-codex-oauth.mjs`
+- pistils_chat_cli: `node --check scripts\smoke-hermes-codex-oauth-timeout.mjs`
+- pistils_chat_cli: `node --check scripts\smoke-hermes-codex-oauth-guard.mjs`
+- pistils_chat_cli: `node --check scripts\audit-goal.mjs`
+- pistils_chat_cli: `npm run smoke:hermes-codex-oauth-timeout`
+- pistils_chat_cli: `npm run smoke:hermes-codex-oauth-guard`
+- pistils_chat_cli: `npm run check`
+- pistils_chat_cli: `npm run audit:goal`
+  - new `hermes:codex_oauth_timeout_smoke` passes;
+  - current dirty-worktree warning is expected until this log/code update is committed;
+  - final completion remains blocked by Render source/service/deployed-smoke and Hermes credential/real-smoke gates.
+- pistils_chat_cli: `git diff --check`
+
+Still open after Hermes OAuth timeout cleanup hardening:
+
+- Commit and push this helper/test/doc/audit/log update, wait for GitHub checks, and rerun `npm run audit:goal` on the clean current head.
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.

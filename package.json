@@ -78,7 +78,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "check": "npm run build && npm run smoke:cli-surface && npm run smoke:supervisor && npm run smoke:hermes-status && npm run smoke:wake-connectors && npm run smoke:setup && npm run pack:check",
+    "check": "npm run build && npm run smoke:cli-surface && npm run smoke:supervisor && npm run smoke:hermes-status && npm run smoke:wake-connectors && npm run smoke:setup && npm run smoke:hermes-codex-oauth-guard && npm run smoke:hermes-codex-oauth-timeout && npm run pack:check",
     "audit:goal": "node scripts/audit-goal.mjs",
     "hermes:codex-oauth": "node scripts/hermes-codex-oauth.mjs",
     "preflight:hermes": "node scripts/hermes-readiness-preflight.mjs",
@@ -86,6 +86,7 @@
     "smoke:daemon-routing": "node scripts/smoke-daemon-routing.mjs",
     "smoke:mcp": "node scripts/smoke-mcp.mjs",
     "smoke:hermes-codex-oauth-guard": "node scripts/smoke-hermes-codex-oauth-guard.mjs",
+    "smoke:hermes-codex-oauth-timeout": "node scripts/smoke-hermes-codex-oauth-timeout.mjs",
     "smoke:hermes-status": "node scripts/smoke-hermes-status.mjs",
     "smoke:real-connectors": "node scripts/smoke-real-connectors.mjs",
     "smoke:setup": "node scripts/smoke-setup.mjs",

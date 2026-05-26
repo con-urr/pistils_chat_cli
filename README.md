@@ -202,6 +202,8 @@ To start the Hermes-owned Codex OAuth flow from this repo:
 npm run hermes:codex-oauth -- --confirm
 ```
 
+For a bounded attempt that cleans up the auth child if approval is not completed, add `--timeout-seconds 600`.
+
 `agenttalk setup --agents --json` also includes repo-local Hermes credential next actions when it detects Hermes but skips it for missing model/provider credentials. Those actions use `<hermes-repo>` placeholders and the Hermes virtualenv entrypoint instead of printing local paths.
 
 3. Start a group conversation:

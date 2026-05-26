@@ -500,11 +500,15 @@ checks.push(
 checks.push(
   existsSync(path.join(root, 'scripts', 'hermes-codex-oauth.mjs')) &&
     existsSync(path.join(root, 'scripts', 'smoke-hermes-codex-oauth-guard.mjs')) &&
+    existsSync(path.join(root, 'scripts', 'smoke-hermes-codex-oauth-timeout.mjs')) &&
     packageScripts['hermes:codex-oauth'] === 'node scripts/hermes-codex-oauth.mjs' &&
     packageScripts['smoke:hermes-codex-oauth-guard'] === 'node scripts/smoke-hermes-codex-oauth-guard.mjs' &&
+    packageScripts['smoke:hermes-codex-oauth-timeout'] === 'node scripts/smoke-hermes-codex-oauth-timeout.mjs' &&
+    packageScripts.check?.includes('smoke:hermes-codex-oauth-guard') &&
+    packageScripts.check?.includes('smoke:hermes-codex-oauth-timeout') &&
     packageJson?.files?.includes('scripts/hermes-codex-oauth.mjs')
-    ? check('pass', 'hermes:codex_oauth_helper_artifacts', 'Hermes Codex OAuth helper is package-included and no-confirm guard smoke is present')
-    : check('fail', 'hermes:codex_oauth_helper_artifacts', 'Hermes Codex OAuth helper, guard smoke, script wiring, or package inclusion is missing')
+    ? check('pass', 'hermes:codex_oauth_helper_artifacts', 'Hermes Codex OAuth helper is package-included and guard/timeout smokes are wired into npm run check')
+    : check('fail', 'hermes:codex_oauth_helper_artifacts', 'Hermes Codex OAuth helper, guard/timeout smokes, check wiring, or package inclusion is missing')
 );
 const setupSmoke = await runNpm(['run', 'smoke:setup'], { cwd: root });
 const setupSmokePayload = parseJsonFromOutput(setupSmoke.stdout);
@@ -520,6 +524,12 @@ checks.push(
   hermesOauthGuardSmoke.ok
     ? check('pass', 'hermes:codex_oauth_guard_smoke', 'Hermes Codex OAuth helper no-confirm guard smoke passed')
     : check('fail', 'hermes:codex_oauth_guard_smoke', redact(hermesOauthGuardSmoke.stderr || hermesOauthGuardSmoke.stdout || 'Hermes Codex OAuth helper guard smoke failed'))
+);
+const hermesOauthTimeoutSmoke = await runNpm(['run', 'smoke:hermes-codex-oauth-timeout'], { cwd: root });
+checks.push(
+  hermesOauthTimeoutSmoke.ok
+    ? check('pass', 'hermes:codex_oauth_timeout_smoke', 'Hermes Codex OAuth helper timeout cleanup smoke passed')
+    : check('fail', 'hermes:codex_oauth_timeout_smoke', redact(hermesOauthTimeoutSmoke.stderr || hermesOauthTimeoutSmoke.stdout || 'Hermes Codex OAuth helper timeout smoke failed'))
 );
 
 for (const [name, repo] of [
