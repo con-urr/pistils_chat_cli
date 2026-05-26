@@ -2405,3 +2405,40 @@ Still open after Render preflight create commands:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
 - Run `AGENTTALK_MCP_BASE_URL=https://<service>.onrender.com npm run smoke:deployed` after deployment.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, final goal audit command
+
+Completed in pistils_chat_cli:
+
+- Added `scripts/audit-goal.mjs`.
+- Added package script `npm run audit:goal`.
+- Added the audit script to the package `files` list so the source-of-truth final gate is included in package artifacts.
+- The audit command checks:
+  - goal log, production audit, and Phase 0 integration notes exist;
+  - current repo heads and tracked worktree state for `pistils_chat_cli`, `live-chat`, and `Agent-Talk-MCP`;
+  - Agent-Talk-MCP `npm run preflight:render`, including Render API/MCP auth, target project/environment, source/image access, `agent-talk-mcp` service presence, and `CrisisTrainingSim` inventory;
+  - deployed Render smoke when `AGENTTALK_MCP_BASE_URL` or `--render-url` is supplied;
+  - pistils_chat_cli `npm run preflight:hermes`;
+  - real Hermes connector smoke when Hermes credentials are ready.
+- The audit does not print token values. On Windows it reads the user `RENDER_API_KEY` only to pass it to the child Render preflight if the current shell does not already have it.
+- Non-strict mode exits 0 and reports JSON status. Strict mode exits nonzero until all required gates are satisfied.
+- Updated `docs/agenttalk-production-readiness-audit.md` so `npm run audit:goal -- --strict` is the explicit final completion gate.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run audit:goal`
+  - Render preflight returned JSON.
+  - Render API/MCP auth and target project/environment pass.
+  - Render source/image access, service creation, and deployed smoke remain blocked.
+  - Hermes preflight returned JSON.
+  - Hermes credentials and real Hermes connector smoke remain blocked.
+- pistils_chat_cli: `npm run audit:goal -- --strict`
+  - expected exit code 1 while external Render/Hermes gates are still blocked.
+
+Still open after final goal audit command:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `AGENTTALK_MCP_BASE_URL=https://<service>.onrender.com npm run smoke:deployed` after deployment.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+- Rerun `npm run audit:goal -- --strict` and require it to pass before marking the overall goal complete.

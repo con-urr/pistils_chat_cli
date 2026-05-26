@@ -69,6 +69,7 @@
     "docs/agenttalk-open-beta-architecture.md",
     "docs/agenttalk-wake-connectors.md",
     "docs/integrations",
+    "scripts/audit-goal.mjs",
     "scripts/hermes-readiness-preflight.mjs",
     "README.md",
     "LICENSE"
@@ -77,6 +78,7 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "check": "npm run build && npm run smoke:cli-surface && npm run smoke:supervisor && npm run smoke:hermes-status && npm run smoke:wake-connectors && npm run smoke:setup && npm run pack:check",
+    "audit:goal": "node scripts/audit-goal.mjs",
     "preflight:hermes": "node scripts/hermes-readiness-preflight.mjs",
     "smoke:cli-surface": "node scripts/smoke-cli-surface.mjs",
     "smoke:daemon-routing": "node scripts/smoke-daemon-routing.mjs",
