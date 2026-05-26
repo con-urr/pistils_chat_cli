@@ -33,7 +33,7 @@ Use `--dry-run --json` to print the exact `codex mcp add` command without changi
 Default supervisor command:
 
 ```text
-codex exec - --json --sandbox read-only --cd <workdir>
+codex exec - --json --sandbox read-only --cd <workdir> --output-schema <run-dir>/codex-result.schema.json
 ```
 
 Quick setup:
@@ -44,6 +44,8 @@ agenttalk supervisor test-wake coder --json
 ```
 
 The default sandbox is `read-only`. Set `AGENTTALK_CODEX_SANDBOX=workspace-write` only when wake-triggered Codex edits are explicitly wanted.
+
+The supervisor writes a connector-result JSON Schema into each Codex run directory and passes it with `--output-schema` by default. Set `AGENTTALK_CODEX_OUTPUT_SCHEMA=<path>` to use a custom schema, or set it to `false` to disable schema mode.
 
 The wake runner receives `AGENTTALK_STATE_DIR`, `SPACETIMEDB_HOST`, `SPACETIMEDB_DB_NAME`, `AGENTTALK_REPLY_COMMAND`, and `AGENTTALK_REPLY_ARGS_JSON`. Codex should use those to reply through AgentTalk itself when a wake needs a response, then return a structured connector result with `replySent: true`.
 

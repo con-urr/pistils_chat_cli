@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const supervisor = path.join(root, 'dist', 'agenttalk-supervisor.js');
 const home = path.join(os.tmpdir(), `agenttalk-wake-connectors-smoke-${process.pid}-${Date.now()}`);
+const fakeBin = path.join(home, 'fake-bin');
 const mockCode = [
   "const required=['AGENTTALK_STATE_DIR','AGENTTALK_CONVERSATION_ID','AGENTTALK_CLI','AGENTTALK_REPLY_COMMAND','AGENTTALK_REPLY_ARGS_JSON','SPACETIMEDB_HOST','SPACETIMEDB_DB_NAME'];",
   "const missing=required.filter(name=>!process.env[name]);",
@@ -29,6 +31,43 @@ const mockCodexJsonlCode = [
 ].join('');
 const mockCodexJsonlCommand = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(mockCodexJsonlCode)}`;
 
+async function installFakeCodex() {
+  await fs.mkdir(fakeBin, { recursive: true });
+  const fakeCodexScript = path.join(fakeBin, 'fake-codex.mjs');
+  await fs.writeFile(
+    fakeCodexScript,
+    [
+      "import { existsSync, readFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      "const schemaIndex = args.indexOf('--output-schema');",
+      "if (schemaIndex === -1 || !args[schemaIndex + 1]) { process.stderr.write('missing --output-schema'); process.exit(2); }",
+      "if (!args.includes('--json')) { process.stderr.write('missing --json'); process.exit(3); }",
+      "const sandboxIndex = args.indexOf('--sandbox');",
+      "if (sandboxIndex === -1 || args[sandboxIndex + 1] !== 'read-only') { process.stderr.write('unexpected sandbox'); process.exit(4); }",
+      "const schemaPath = args[schemaIndex + 1];",
+      "if (!existsSync(schemaPath)) { process.stderr.write('schema file missing'); process.exit(5); }",
+      "const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));",
+      "if (!schema.required?.includes('ok') || !schema.required?.includes('handled') || !schema.required?.includes('replySent')) { process.stderr.write('schema missing connector result requirements'); process.exit(6); }",
+      "const result = { ok: true, handled: true, replySent: true, replyText: null, message: 'fake codex default handled wake', error: null, artifacts: null, metadata: 'defaultCodex' };",
+      "const newline = String.fromCharCode(10);",
+      "const events = [{ type: 'thread.started', thread_id: 'fake-codex-default' }, { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: JSON.stringify(result) } }, { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }];",
+      "process.stdout.write(events.map(event => JSON.stringify(event)).join(newline) + newline);",
+    ].join('\n'),
+    'utf8'
+  );
+  if (process.platform === 'win32') {
+    await fs.writeFile(
+      path.join(fakeBin, 'codex.cmd'),
+      `@echo off\r\n"${process.execPath}" "${fakeCodexScript}" %*\r\n`,
+      'utf8'
+    );
+  } else {
+    const codexPath = path.join(fakeBin, 'codex');
+    await fs.writeFile(codexPath, `#!/usr/bin/env sh\nexec "${process.execPath}" "${fakeCodexScript}" "$@"\n`, 'utf8');
+    await fs.chmod(codexPath, 0o755);
+  }
+}
+
 function run(args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [supervisor, ...args], {
@@ -36,6 +75,7 @@ function run(args) {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
         AGENTTALK_SUPERVISOR_HOME: home,
       },
     });
@@ -62,6 +102,7 @@ function parseJson(result) {
   return JSON.parse(result.stdout);
 }
 
+await installFakeCodex();
 await run(['init', '--json']);
 
 const cases = [
@@ -70,6 +111,13 @@ const cases = [
   { name: 'openclaw-agent', handle: 'openclaw-agent', kind: 'openclaw', command: mockCommand },
   { name: 'hermes-agent', handle: 'hermes-agent', kind: 'hermes', command: mockCommand },
   { name: 'codex-agent', handle: 'codex-agent', kind: 'codex', command: mockCommand },
+  {
+    name: 'codex-default-agent',
+    handle: 'codex-default-agent',
+    kind: 'codex',
+    repo: root,
+    expectReplySent: true,
+  },
   {
     name: 'codex-jsonl-agent',
     handle: 'codex-jsonl-agent',
@@ -96,6 +144,9 @@ for (const testCase of cases) {
   if (testCase.command) {
     args.push('--command', testCase.command);
   }
+  if (testCase.repo) {
+    args.push('--repo', testCase.repo);
+  }
   await run(args);
   const wake = parseJson(await run(['test-wake', testCase.name, '--json']));
   if (wake.ok !== true || wake.result?.handled !== true) {
@@ -111,6 +162,7 @@ for (const testCase of cases) {
     kind: testCase.kind,
     handled: wake.result.handled,
     replyContract: testCase.command ? wake.result.metadata.replyContract === true : undefined,
+    defaultCodex: wake.result.message === 'fake codex default handled wake',
     replySent: wake.result.replySent === true,
   });
 }

@@ -48,6 +48,41 @@ type ProcessResult = {
 
 const MAX_CAPTURE_BYTES = 1024 * 1024;
 
+function connectorResultJsonSchema() {
+  return {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    additionalProperties: false,
+    required: ['ok', 'handled', 'replySent', 'replyText', 'message', 'error', 'artifacts', 'metadata'],
+    properties: {
+      ok: { type: 'boolean' },
+      handled: { type: 'boolean' },
+      replySent: { type: ['boolean', 'null'] },
+      replyText: { type: ['string', 'null'] },
+      message: { type: ['string', 'null'] },
+      error: { type: ['string', 'null'] },
+      artifacts: {
+        type: ['array', 'null'],
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['path', 'url', 'mimeType'],
+          properties: {
+            path: { type: ['string', 'null'] },
+            url: { type: ['string', 'null'] },
+            mimeType: { type: ['string', 'null'] },
+          },
+        },
+      },
+      metadata: { type: ['string', 'null'] },
+    },
+  };
+}
+
+function disabledEnvValue(value: string | undefined) {
+  return Boolean(value && ['0', 'false', 'off', 'none', 'disabled'].includes(value.toLowerCase()));
+}
+
 function agenttalkCliPath() {
   return path.resolve(__dirname, '..', 'agenttalk.js');
 }
@@ -98,11 +133,12 @@ ${messages}
 
 Instructions:
 - Decide whether you need to reply.
+- If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
 - If replying yourself, send through AgentTalk with AGENTTALK_REPLY_COMMAND or AGENTTALK_REPLY_ARGS_JSON.
 - Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
 - Do not reveal secrets, env values, or local paths in user-facing replies.
 - Return or print a structured connector result JSON when possible:
-  {"ok":true,"handled":true,"replySent":true,"message":"replied through AgentTalk"}
+  {"ok":true,"handled":true,"replySent":false,"replyText":null,"message":"handled wake","error":null,"artifacts":null,"metadata":null}
 `;
 }
 
@@ -198,12 +234,19 @@ function defaultHermesSpec(agent: SupervisorAgentConfig, input: WakeConnectorInp
   };
 }
 
-function defaultCodexSpec(agent: SupervisorAgentConfig, input: WakeConnectorInput): ProcessSpec {
+function defaultCodexSpec(
+  agent: SupervisorAgentConfig,
+  input: WakeConnectorInput,
+  codexOutputSchemaPath?: string
+): ProcessSpec {
   const workdir = process.env.AGENTTALK_CODEX_WORKDIR ?? agent.repoPath ?? process.cwd();
   const sandbox = process.env.AGENTTALK_CODEX_SANDBOX ?? 'read-only';
   const command = process.platform === 'win32' ? 'codex.cmd' : 'codex';
   const args = ['exec', '-', '--json', '--sandbox', sandbox, '--cd', workdir];
-  const outputSchema = process.env.AGENTTALK_CODEX_OUTPUT_SCHEMA;
+  const outputSchemaOverride = process.env.AGENTTALK_CODEX_OUTPUT_SCHEMA;
+  const outputSchema = disabledEnvValue(outputSchemaOverride)
+    ? undefined
+    : outputSchemaOverride || codexOutputSchemaPath;
   if (outputSchema) {
     args.push('--output-schema', outputSchema);
   }
@@ -216,7 +259,11 @@ function defaultCodexSpec(agent: SupervisorAgentConfig, input: WakeConnectorInpu
   };
 }
 
-function buildProcessSpec(agent: SupervisorAgentConfig, input: WakeConnectorInput): ProcessSpec | null {
+function buildProcessSpec(
+  agent: SupervisorAgentConfig,
+  input: WakeConnectorInput,
+  options: { codexOutputSchemaPath?: string } = {}
+): ProcessSpec | null {
   if (agent.kind === 'noop') {
     return null;
   }
@@ -239,7 +286,7 @@ function buildProcessSpec(agent: SupervisorAgentConfig, input: WakeConnectorInpu
     return defaultHermesSpec(agent, input);
   }
   if (agent.kind === 'codex') {
-    return defaultCodexSpec(agent, input);
+    return defaultCodexSpec(agent, input, options.codexOutputSchemaPath);
   }
   throw new Error(`Unsupported connector kind: ${agent.kind}`);
 }
@@ -480,15 +527,29 @@ export async function executeWakeConnector(
   const stdoutPath = path.join(runDir, 'stdout.log');
   const stderrPath = path.join(runDir, 'stderr.log');
   const resultPath = path.join(runDir, 'result.json');
+  const codexOutputSchemaPath = path.join(runDir, 'codex-result.schema.json');
   const contextJson = JSON.stringify(toJsonSafe(input.contextMessages));
   const payloadJson = JSON.stringify(toJsonSafe(input.payload));
 
   await fs.writeFile(inputPath, stringifyJsonSafe(input), 'utf8');
+  const shouldWriteCodexSchema =
+    agent.kind === 'codex' &&
+    !process.env.AGENTTALK_CODEX_OUTPUT_SCHEMA &&
+    !disabledEnvValue(process.env.AGENTTALK_CODEX_OUTPUT_SCHEMA);
+  if (shouldWriteCodexSchema) {
+    await fs.writeFile(
+      codexOutputSchemaPath,
+      `${JSON.stringify(connectorResultJsonSchema(), null, 2)}\n`,
+      'utf8'
+    );
+  }
 
   let processResult: ProcessResult | undefined;
   let result: WakeConnectorResult;
   try {
-    const spec = buildProcessSpec(agent, input);
+    const spec = buildProcessSpec(agent, input, {
+      codexOutputSchemaPath: shouldWriteCodexSchema ? codexOutputSchemaPath : undefined,
+    });
     if (spec) {
       processResult = await runProcess(
         spec,

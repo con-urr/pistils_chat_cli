@@ -1751,3 +1751,37 @@ Still open after Render source-access retest:
 - Create the new free Render service `agent-talk-mcp` only after one of those source-access paths is available.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, default Codex connector output schema
+
+Completed:
+
+- Made Codex wake runner schema mode first-class.
+- The supervisor now writes `codex-result.schema.json` into each Codex run directory and passes it with `codex exec --output-schema` by default.
+- `AGENTTALK_CODEX_OUTPUT_SCHEMA=<path>` can still override the schema.
+- `AGENTTALK_CODEX_OUTPUT_SCHEMA=false` can disable schema mode for older or incompatible Codex builds.
+- Tightened the generated schema to match the local Codex structured-output requirements:
+  - every object property is listed in `required`
+  - optional values are represented as nullable fields
+  - artifact item fields are required and nullable
+  - metadata is constrained to a nullable string
+- Extended `smoke:wake-connectors` with a fake `codex` executable that exercises the default Codex runner path, verifies `--output-schema`, checks that the schema file exists, and emits Codex-shaped JSONL.
+- Hardened the Codex/OpenClaw/Hermes wake prompt for synthetic `test-*` supervisor wakes so runtime connectors return a handled test result instead of trying to send a real AgentTalk reply against a fake test conversation.
+- Updated docs/integrations/codex.md.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run build`
+- pistils_chat_cli: `npm run smoke:wake-connectors`
+- pistils_chat_cli: real `codex exec --json --output-schema <temp-schema>` probe with the generated schema shape
+- pistils_chat_cli: `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors`
+  - OpenClaw handled a real local runtime test wake
+  - Codex handled a real local runtime test wake with schema mode enabled
+  - Hermes skipped because non-interactive inference credentials are still unavailable
+- pistils_chat_cli: `npm run check`
+
+Still open after default Codex connector output schema:
+
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+- Runtime-specific OpenClaw/Hermes/Codex self-reply still depends on each external runtime choosing to execute the provided AgentTalk reply command; Codex now has schema-constrained structured result output by default.
+- Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
