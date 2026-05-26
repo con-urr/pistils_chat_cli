@@ -3277,3 +3277,19 @@ Still open after Hermes OAuth process-tree cleanup hardening:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
+
+Current-head check note after process-tree cleanup push:
+
+- Pushed pistils_chat_cli commit `8f8d4a8a9d37d3d82bfc86edbfd0d197a310230a` on `codex/agenttalk-mcp-supervisor`.
+- Reran `npm run audit:goal` on a clean tracked worktree after the push.
+- Local and repo-owned checks still pass, including `hermes:codex_oauth_timeout_smoke`.
+- GitHub Actions did not attach `validate (20)` / `validate (22)` check-runs to this head after multiple waits, so the audit currently reports `github:pistils_chat_cli_checks` as failed for missing check-runs.
+- This note is being pushed as a fresh PR synchronization event so the next audit can verify whether CI attaches to the new head.
+
+Still open after process-tree cleanup current-head check note:
+
+- Wait for GitHub checks on the next head and rerun `npm run audit:goal`.
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
