@@ -2172,3 +2172,40 @@ Still open after Render preflight next actions:
 - Create the new free Render service `agent-talk-mcp` after one source-access path is available.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Hermes auth-path investigation
+
+Completed in pistils_chat_cli:
+
+- Probed the local Hermes CLI command surface without reading auth files or printing secrets.
+- Confirmed `hermes auth add <provider>` supports:
+  - `--type oauth|api-key`
+  - `--api-key` for explicit non-interactive API-key setup
+  - secure prompting when `--api-key` is omitted
+- Confirmed `hermes config set <key> <value>` can persist model/provider choices.
+- Confirmed Codex CLI is logged in, but Hermes-owned `openai-codex` auth is logged out.
+- Inspected Hermes code and confirmed Hermes intentionally keeps Codex OAuth tokens in `~/.hermes/auth.json`, separate from Codex CLI, to avoid refresh-token conflicts.
+- Confirmed importing Codex CLI tokens is possible in Hermes but is not the recommended path because separate Hermes OAuth is safer.
+- Checked current process env for common inference provider API-key variables; none were set.
+- Checked local no-key model endpoints:
+  - LM Studio at `127.0.0.1:1234` was unreachable.
+  - Ollama at `127.0.0.1:11434` was unreachable.
+- Updated `scripts/hermes-readiness-preflight.mjs` so `npm run preflight:hermes` now reports:
+  - Hermes auth-add command support
+  - Hermes config-set command support
+  - inference credential env var names that are set, without values
+  - Codex CLI login state
+  - Hermes-owned OpenAI Codex auth state
+  - next actions for Hermes-owned Codex OAuth, API-key provider setup, and Nous OAuth
+- Updated README.md, docs/integrations/hermes-agent.md, and docs/agenttalk-production-readiness-audit.md with the safe Hermes auth paths.
+
+Still open after Hermes auth-path investigation:
+
+- Complete a Hermes-owned OAuth login or configure an API-key provider for Hermes:
+  - `hermes auth add openai-codex --type oauth`
+  - `hermes config set model.provider openai-codex`
+  - `hermes config set model.default gpt-5.3-codex`
+  - or use an API-key provider with `hermes auth add <provider> --type api-key`.
+- Rerun `npm run preflight:hermes` and require `realHermesConnectorSmoke` to be `ready`.
+- Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle instead of skip.
+- Resolve Render source access and create/verify the `agent-talk-mcp` Render service.

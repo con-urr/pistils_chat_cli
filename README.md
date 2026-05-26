@@ -194,6 +194,8 @@ npm run preflight:hermes
 AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors
 ```
 
+`preflight:hermes` reports only credential presence and auth state, never secret values. If Hermes is unconfigured, the preflight returns exact next actions for a Hermes-owned Codex OAuth session, an API-key provider, or Nous OAuth. Hermes keeps Codex OAuth separate from the Codex CLI; avoid importing Codex CLI tokens into Hermes unless you accept refresh-token conflict risk.
+
 3. Start a group conversation:
 
 ```bash

@@ -16,6 +16,28 @@ const hermes = path.join(repo, 'hermes');
 const python = process.platform === 'win32'
   ? path.join(repo, 'venv', 'Scripts', 'python.exe')
   : path.join(repo, 'venv', 'bin', 'python');
+const codexCommand = process.platform === 'win32' ? 'cmd.exe' : 'codex';
+const codexLoginStatusArgs = process.platform === 'win32'
+  ? ['/d', '/s', '/c', 'codex login status']
+  : ['login', 'status'];
+const inferenceCredentialEnvVars = [
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'DEEPSEEK_API_KEY',
+  'GEMINI_API_KEY',
+  'GLM_API_KEY',
+  'GOOGLE_API_KEY',
+  'KIMI_API_KEY',
+  'KIMI_CODING_API_KEY',
+  'MINIMAX_API_KEY',
+  'NOUS_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'QWEN_API_KEY',
+  'XAI_API_KEY',
+  'ZAI_API_KEY',
+  'Z_AI_API_KEY',
+];
 
 function check(status, name, detail, extra = {}) {
   return { status, name, detail, ...extra };
@@ -129,6 +151,15 @@ function hermesStatusHasInferenceCredentials(stdout) {
   }
 }
 
+function commandOutputIncludes(result, ...needles) {
+  const output = `${result.stdout}\n${result.stderr}`;
+  return result.ok && needles.every(needle => output.includes(needle));
+}
+
+function parseLoggedInStatus(stdout) {
+  return /:\s*logged in\b/i.test(stdout) || /^logged in\b/i.test(stdout.trim());
+}
+
 function redact(text) {
   return text
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]')
@@ -136,6 +167,12 @@ function redact(text) {
 }
 
 const checks = [];
+const diagnostics = {
+  inferenceCredentialEnvVarsSet: inferenceCredentialEnvVars.filter(name => Boolean(process.env[name])),
+  codexCliLogin: 'not-checked',
+  hermesOpenAiCodexAuth: 'not-checked',
+  note: 'Only variable names and auth states are reported; secret values are never read or printed.',
+};
 
 checks.push(
   existsSync(repo)
@@ -166,6 +203,35 @@ if (existsSync(hermes) && existsSync(python)) {
       : check('fail', 'hermes:chat_command', redact(chatHelp.stderr || chatHelp.stdout || 'Hermes chat help failed'))
   );
 
+  const authAddHelp = await run(python, [hermes, 'auth', 'add', '--help']);
+  checks.push(
+    commandOutputIncludes(authAddHelp, '--type', '--api-key', 'provider')
+      ? check('pass', 'hermes:auth_add_command', 'Hermes auth add supports non-interactive API-key setup and OAuth provider selection')
+      : check('fail', 'hermes:auth_add_command', redact(authAddHelp.stderr || authAddHelp.stdout || 'Hermes auth add help failed'))
+  );
+
+  const configSetHelp = await run(python, [hermes, 'config', 'set', '--help']);
+  checks.push(
+    commandOutputIncludes(configSetHelp, 'key', 'value')
+      ? check('pass', 'hermes:config_set_command', 'Hermes config set can persist provider/model choices')
+      : check('fail', 'hermes:config_set_command', redact(configSetHelp.stderr || configSetHelp.stdout || 'Hermes config set help failed'))
+  );
+
+  const hermesCodexAuth = await run(python, [hermes, 'auth', 'status', 'openai-codex']);
+  if (hermesCodexAuth.ok) {
+    diagnostics.hermesOpenAiCodexAuth = parseLoggedInStatus(hermesCodexAuth.stdout) ? 'logged-in' : 'logged-out';
+  } else {
+    diagnostics.hermesOpenAiCodexAuth = 'unavailable';
+  }
+
+  const codexLoginStatus = await run(codexCommand, codexLoginStatusArgs, { cwd: process.cwd() });
+  if (codexLoginStatus.ok) {
+    const codexStatusOutput = `${codexLoginStatus.stdout}\n${codexLoginStatus.stderr}`;
+    diagnostics.codexCliLogin = /logged in/i.test(codexStatusOutput) ? 'logged-in' : 'logged-out';
+  } else {
+    diagnostics.codexCliLogin = 'unavailable';
+  }
+
   const status = await run(python, [hermes, 'status']);
   if (status.ok) {
     const hasInferenceCredentials = hermesStatusHasInferenceCredentials(status.stdout);
@@ -191,6 +257,7 @@ const payload = {
   ok,
   strict,
   checks,
+  diagnostics,
   gates: {
     realHermesConnectorSmoke: ok ? 'ready' : 'requires-non-interactive-inference-credentials',
   },
@@ -203,11 +270,25 @@ const payload = {
       ]
     : [
         {
-          label: 'Configure Hermes provider',
-          command: 'hermes model',
+          label: 'Hermes-owned Codex OAuth login',
+          command: 'hermes auth add openai-codex --type oauth',
+          note: 'Creates a Hermes-owned OAuth session. Avoid importing Codex CLI tokens unless you accept refresh-token conflict risk.',
         },
         {
-          label: 'OAuth login option',
+          label: 'Set Hermes Codex provider',
+          command: 'hermes config set model.provider openai-codex',
+        },
+        {
+          label: 'Set Hermes Codex model',
+          command: 'hermes config set model.default gpt-5.3-codex',
+        },
+        {
+          label: 'API-key provider option',
+          command: 'hermes auth add openrouter --type api-key --label agenttalk',
+          note: 'Prompts securely when --api-key is omitted; then set model.provider/model.default for the chosen provider.',
+        },
+        {
+          label: 'Nous OAuth option',
           command: 'hermes login --provider nous',
         },
         {
