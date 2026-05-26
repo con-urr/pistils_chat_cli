@@ -2920,3 +2920,43 @@ Still open after Render MCP and REST deploy boundary:
 - Run deployed MCP smoke after creation.
 - Wait for the Agent-Talk-MCP GitHub CI/image workflows on commit `2e94fe3`, then rerun the top-level goal audit.
 - Complete Hermes credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, guarded Render create helper
+
+Completed in Agent-Talk-MCP:
+
+- Added `scripts/render-create-service.mjs`, a guarded Render REST create helper for the exact target service.
+- Added npm script `render:create`.
+- The helper:
+  - refuses to run without `--confirm`;
+  - runs `scripts/render-preflight.mjs` first;
+  - refuses to create unless the target project/environment is ready and `agent-talk-mcp` is safely absent;
+  - reports the existing target service and exits without creating if `agent-talk-mcp` already exists in Connor's workspace / My project / Cervaris;
+  - creates only `agent-talk-mcp` in owner `tea-d51f80re5dus73814oj0`, environment `evm-d7ampnp4tr6s739q3q9g`;
+  - supports `--mode git`, `--mode image`, and `--mode private-image --registry-credential-id <id>`;
+  - never prints `RENDER_API_KEY` or registry credentials.
+- Updated `README.md` and `docs/render-deploy.md` with the guarded create commands:
+  - `npm run render:create -- --mode git --confirm`;
+  - `npm run render:create -- --mode image --confirm`;
+  - `npm run render:create -- --mode private-image --registry-credential-id <render-registry-credential-id> --confirm`.
+- Pushed Agent-Talk-MCP commit `a24074c` on `codex/render-mcp-service`.
+
+Validation passed:
+
+- Agent-Talk-MCP: `node --check scripts\render-create-service.mjs`
+- Agent-Talk-MCP: `node --check scripts\render-preflight.mjs`
+- Agent-Talk-MCP: `npm run check`
+- Agent-Talk-MCP: `npm run preflight:render`
+- Agent-Talk-MCP: `npm run render:create`
+  - refused without `--confirm` and did not create a service.
+- Agent-Talk-MCP: `npm run render:create -- --mode image --confirm`
+  - refused before create because GHCR is still not anonymously pullable.
+- Agent-Talk-MCP: `git diff --check`
+
+Still open after guarded Render create helper:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
+- Wait for the Agent-Talk-MCP GitHub CI/image workflows on commit `a24074c`, then rerun the top-level goal audit.
+- Complete Hermes credentials and rerun the real Hermes connector smoke.
