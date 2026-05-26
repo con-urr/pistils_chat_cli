@@ -3720,3 +3720,41 @@ Still open after installed Hermes helper CLI surface:
 - User must approve `agenttalk hermes codex-oauth --confirm` in the browser or configure a Hermes API-key provider, then rerun `agenttalk hermes preflight` and `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm.cmd run smoke:real-connectors`.
 - User must either grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or provide a narrow GHCR read token through `GHCR_USERNAME=<github-user> GHCR_READ_TOKEN=<read-packages-token> npm run render:registry-credential -- --confirm`.
 - After the Render account-side step, rerun `npm.cmd run preflight:render`, create the `agent-talk-mcp` Render service, and run deployed smoke.
+
+Work log - 2026-05-26, Render service created and smoke-tested
+
+Completed in Agent-Talk-MCP:
+
+- After Render GitHub integration access was granted to `con-urr/Agent-Talk-MCP`, `npm.cmd run render:create -- --mode git --confirm` created the free Git-backed `agent-talk-mcp` service in Connor's workspace / My project / Cervaris.
+- The first create retry failed before service creation because the payload included `ipAllowList`, which Render restricts to Enterprise workspaces. Commit `ae7ff983f8ede0e7552645b2a9b7b6e4f8fd9ad9` removes that field from the create helper.
+- Updated `scripts/render-preflight.mjs` so an existing target service satisfies the Git-backed deploy gate and suppresses stale GitHub/GHCR next actions. Private GHCR anonymous manifest 401 is now a fallback-image warning while the active Render service is Git-backed.
+- Pushed Agent-Talk-MCP commit `ae7ff983f8ede0e7552645b2a9b7b6e4f8fd9ad9` on `codex/render-mcp-service`.
+
+Render evidence:
+
+- Service id: `srv-d8aqcrjtqb8s73ae9nfg`
+- Service URL: `https://agent-talk-mcp.onrender.com`
+- Dashboard URL: `https://dashboard.render.com/web/srv-d8aqcrjtqb8s73ae9nfg`
+- Latest deploy: `dep-d8aqfdreo5us73brvi3g`, trigger `new_commit`, status `live`, finished `2026-05-26T14:02:05.620025Z`, source commit `ae7ff983f8ede0e7552645b2a9b7b6e4f8fd9ad9`.
+- `CrisisTrainingSim` remained present and untouched in Render service inventory.
+
+Validation passed:
+
+- Agent-Talk-MCP: `node --check scripts\render-preflight.mjs`
+- Agent-Talk-MCP: `node --check scripts\render-create-service.mjs`
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm.cmd run check`
+- Agent-Talk-MCP: `npm.cmd run preflight:render`, which now reports `targetService.url: https://agent-talk-mcp.onrender.com`, `gitBackedDeploy: ready`, `renderMcpAuth: ready`, `targetProjectEnvironment: ready`, `nextActions: []`, and no hard Render source/service/deployed-smoke blocker.
+- Agent-Talk-MCP: `AGENTTALK_MCP_BASE_URL=https://agent-talk-mcp.onrender.com npm.cmd run smoke:deployed`, which passed in private-beta auth-boundary mode with bearer auth required.
+- Agent-Talk-MCP GitHub Actions current head `ae7ff983f8ede0e7552645b2a9b7b6e4f8fd9ad9`: CI push run `26452891799`, CI pull_request run `26452894998`, and image publish run `26452891793` all completed successfully.
+
+Completed in pistils_chat_cli:
+
+- Updated `docs/agenttalk-production-readiness-audit.md` to record the live Render service, latest Agent-Talk-MCP head, deploy id, deployed smoke evidence, and current final-audit state.
+- Re-ran `npm.cmd run audit:goal`; Render source access, service creation, deployed smoke, Render auth/target checks, `CrisisTrainingSim` inventory, and Agent-Talk-MCP current-head CI/image workflows now pass.
+
+Still open after Render service creation:
+
+- Configure Hermes with non-interactive inference credentials through `agenttalk hermes codex-oauth --confirm` or an API-key provider.
+- Rerun `agenttalk hermes preflight` and `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm.cmd run smoke:real-connectors`.
+- Final `npm.cmd run audit:goal -- --strict` remains blocked until `hermes:credentials` and `hermes:real_connector_smoke` pass.
