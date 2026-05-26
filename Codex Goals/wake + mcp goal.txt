@@ -1437,3 +1437,37 @@ Still open after Render image fallback path:
 - Create the new free Render service agent-talk-mcp from either GitHub source access or the published image.
 - Verify deployed /healthz, /readyz, and /mcp.
 - Configure Hermes with non-interactive provider credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, MCP supervisor tool implementation
+
+Completed:
+
+- Replaced local MCP supervisor placeholder responses with implemented supervisor tools:
+  - agenttalk_supervisor_status
+  - agenttalk_supervisor_config_get
+  - agenttalk_supervisor_config_set
+- Supervisor MCP status/config reads load the local supervisor config or default config and redact local paths/commands.
+- agenttalk_supervisor_config_set is schema-constrained and does not start the supervisor or execute connector commands.
+- The MCP config setter can update safe fields only:
+  - host/databaseName
+  - default wake policy
+  - existing-agent enabled/autoInit/limits/wake settings
+  - existing-agent connector.openclawAgentId/sendReplyText
+- The MCP config setter rejects agent creation and command/repoPath/stateDir/kind edits.
+- Updated docs/agenttalk-mcp.md and MCP smoke coverage for supervisor status/config/dry-run config set.
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:mcp
+- pistils_chat_cli: node scripts/smoke-mcp.mjs --agenttalk
+- pistils_chat_cli: rg found no remaining not_implemented supervisor placeholders under src/mcp, docs/agenttalk-mcp.md, or scripts/smoke-mcp.mjs
+- pistils_chat_cli: npm run check
+
+Still open after MCP supervisor tool implementation:
+
+- Run the GitHub Actions image workflow or otherwise publish ghcr.io/con-urr/agent-talk-mcp.
+- If the GHCR package remains private, configure a Render registry credential.
+- Create the new free Render service agent-talk-mcp from either GitHub source access or the published image.
+- Verify deployed /healthz, /readyz, and /mcp.
+- Configure Hermes with non-interactive provider credentials and rerun the real Hermes connector smoke.

@@ -1,10 +1,21 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { promises as fs } from 'node:fs';
 import { setGlobalLogLevel } from 'spacetimedb';
 import { z } from 'zod';
 import type { AgentRealtimeClient, RichMessageInput } from '../agent-client';
 import type * as ModuleTypes from '../module_bindings/types';
+import {
+  loadSupervisorConfigOrDefault,
+  normalizeAgentName,
+  redactConfig,
+  saveSupervisorConfig,
+  supervisorConfigPath,
+  type SupervisorAgentConfig,
+  type SupervisorConfig,
+  type SupervisorWakePolicy,
+} from '../supervisor/config';
 import {
   clampTimeoutMs,
   currentAccount,
@@ -32,6 +43,56 @@ const DEFAULT_INBOX_WAIT_MS = 0;
 const MAX_INBOX_WAIT_MS = 30_000;
 const DEFAULT_LISTEN_WAIT_MS = 30_000;
 const MAX_LISTEN_WAIT_MS = 120_000;
+
+const supervisorWakePolicyPatchSchema = z
+  .object({
+    wakeOnDirectMessage: z.boolean().optional(),
+    wakeOnMention: z.boolean().optional(),
+    wakeOnGroupMessage: z.boolean().optional(),
+    acceptsNewConversations: z.boolean().optional(),
+    coalesceWindowMs: z.number().int().nonnegative().optional(),
+    minWakeIntervalMs: z.number().int().nonnegative().optional(),
+    maxWakesPerMinute: z.number().int().positive().optional(),
+  })
+  .strict();
+const supervisorAgentPatchSchema = z
+  .object({
+    name: z.string().min(1),
+    enabled: z.boolean().optional(),
+    autoInit: z.boolean().optional(),
+    maxConcurrentWakeJobs: z.number().int().positive().optional(),
+    connectorTimeoutMs: z.number().int().positive().optional(),
+    wake: z
+      .object({
+        latencyMs: z.number().int().nonnegative().optional(),
+        statusText: z.string().min(1).optional(),
+        reasons: z.array(z.string().min(1)).optional(),
+      })
+      .strict()
+      .optional(),
+    connector: z
+      .object({
+        openclawAgentId: z.string().min(1).optional(),
+        sendReplyText: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+const supervisorConfigPatchSchema = z
+  .object({
+    host: z.string().min(1).optional(),
+    databaseName: z.string().min(1).optional(),
+    defaultWakePolicy: supervisorWakePolicyPatchSchema.optional(),
+    agents: z.array(supervisorAgentPatchSchema).optional(),
+  })
+  .strict();
+const supervisorConfigSetArgsSchema = z
+  .object({
+    config: supervisorConfigPatchSchema,
+    dryRun: z.boolean().optional(),
+  })
+  .strict();
 
 const roleSchema = z.enum(['agent', 'human']).optional();
 const messageKindSchema = z
@@ -152,6 +213,129 @@ function wakeStatusData(client: AgentRealtimeClient, wakeId?: string) {
     requests: sanitizeForMcp(filteredRequests),
     attempts: sanitizeForMcp(client.listWakeAttempts(wakeId)),
   };
+}
+
+async function supervisorConfigExists() {
+  try {
+    await fs.access(supervisorConfigPath());
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function supervisorAgentStatus(agent: SupervisorAgentConfig) {
+  return {
+    name: agent.name,
+    handle: agent.handle,
+    agentId: null,
+    kind: agent.kind,
+    enabled: agent.enabled,
+    wakeable: agent.enabled,
+    availability: agent.enabled ? 'configured' : 'disabled',
+    pendingWakes: 0,
+    runningJobs: 0,
+    lastWakeAt: null,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    failureCount: '0',
+    connectorTimeoutMs: agent.connectorTimeoutMs,
+    maxConcurrentWakeJobs: agent.maxConcurrentWakeJobs,
+  };
+}
+
+async function supervisorStatusData() {
+  const [config, configPresent] = await Promise.all([
+    loadSupervisorConfigOrDefault(),
+    supervisorConfigExists(),
+  ]);
+  return {
+    implemented: true,
+    running: false,
+    processMonitor: 'not_available',
+    configPresent,
+    configPath: '[redacted]',
+    host: config.host,
+    databaseName: config.databaseName,
+    agentCount: config.agents.length,
+    enabledAgentCount: config.agents.filter(agent => agent.enabled).length,
+    agents: config.agents.map(supervisorAgentStatus),
+  };
+}
+
+function patchWakePolicy(
+  current: SupervisorWakePolicy,
+  patch: z.infer<typeof supervisorWakePolicyPatchSchema>
+): SupervisorWakePolicy {
+  return {
+    ...current,
+    ...patch,
+  };
+}
+
+function patchSupervisorAgent(
+  current: SupervisorAgentConfig,
+  patch: z.infer<typeof supervisorAgentPatchSchema>
+): SupervisorAgentConfig {
+  return {
+    ...current,
+    enabled: patch.enabled ?? current.enabled,
+    autoInit: patch.autoInit ?? current.autoInit,
+    maxConcurrentWakeJobs: patch.maxConcurrentWakeJobs ?? current.maxConcurrentWakeJobs,
+    connectorTimeoutMs: patch.connectorTimeoutMs ?? current.connectorTimeoutMs,
+    wake: patch.wake
+      ? {
+          ...current.wake,
+          ...patch.wake,
+        }
+      : current.wake,
+    connector: patch.connector
+      ? {
+          ...current.connector,
+          ...patch.connector,
+        }
+      : current.connector,
+  };
+}
+
+function patchSupervisorConfig(
+  current: SupervisorConfig,
+  patch: z.infer<typeof supervisorConfigPatchSchema>
+): SupervisorConfig {
+  let next: SupervisorConfig = {
+    ...current,
+    host: patch.host ?? current.host,
+    databaseName: patch.databaseName ?? current.databaseName,
+    defaultWakePolicy: patch.defaultWakePolicy
+      ? patchWakePolicy(current.defaultWakePolicy, patch.defaultWakePolicy)
+      : current.defaultWakePolicy,
+    agents: current.agents.map(agent => ({
+      ...agent,
+      wake: { ...agent.wake, reasons: [...agent.wake.reasons] },
+      connector: agent.connector ? { ...agent.connector } : undefined,
+    })),
+  };
+
+  for (const agentPatch of patch.agents ?? []) {
+    const name = normalizeAgentName(agentPatch.name);
+    const index = next.agents.findIndex(agent => agent.name === name);
+    if (index < 0) {
+      throw new Error(
+        `Unknown supervisor agent '${agentPatch.name}'. MCP config_set only updates existing agents.`
+      );
+    }
+    next = {
+      ...next,
+      agents: next.agents.map((agent, agentIndex) =>
+        agentIndex === index ? patchSupervisorAgent(agent, agentPatch) : agent
+      ),
+    };
+  }
+
+  return next;
 }
 
 async function waitForConversationMessage(
@@ -741,36 +925,74 @@ function registerWakeTools(server: McpServer) {
 }
 
 function registerSupervisorTools(server: McpServer) {
-  const unavailable = () =>
-    ok({
-      implemented: false,
-      status: 'not_implemented',
-      message:
-        'agenttalk-supervisor is planned in the next slice. This MCP server does not expose shell execution.',
-    });
-
   registerTool(
     server,
     'agenttalk_supervisor_status',
-    'Return local supervisor status when supervisor support is implemented.',
+    'Return safe local supervisor config/status without executing the supervisor.',
     {},
-    async () => unavailable()
+    async () => ok(await supervisorStatusData())
   );
   registerTool(
     server,
     'agenttalk_supervisor_config_get',
-    'Return local supervisor config when supervisor support is implemented.',
+    'Return redacted local supervisor config without printing local paths or commands.',
     {},
-    async () => unavailable()
+    async () => {
+      const [config, configPresent] = await Promise.all([
+        loadSupervisorConfigOrDefault(),
+        supervisorConfigExists(),
+      ]);
+      return ok({
+        implemented: true,
+        configPresent,
+        configPath: '[redacted]',
+        config: redactConfig(config),
+      });
+    }
   );
   registerTool(
     server,
     'agenttalk_supervisor_config_set',
-    'Reserved schema-validated supervisor config setter. Does not execute shell commands.',
+    'Update safe supervisor config fields for existing agents. Does not create commands or execute shell.',
     {
-      config: z.record(z.string(), z.unknown()).optional(),
+      config: supervisorConfigPatchSchema,
+      dryRun: z.boolean().optional(),
     },
-    async () => unavailable()
+    async args => {
+      const parsed = supervisorConfigSetArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return fail('invalid_supervisor_config', 'Supervisor config patch failed validation.', {
+          reason: 'schema_validation_failed',
+          details: parsed.error.flatten(),
+        });
+      }
+      const current = await loadSupervisorConfigOrDefault();
+      const next = patchSupervisorConfig(current, parsed.data.config);
+      if (!parsed.data.dryRun) {
+        await saveSupervisorConfig(next);
+      }
+      return ok({
+        implemented: true,
+        dryRun: parsed.data.dryRun === true,
+        saved: parsed.data.dryRun !== true,
+        configPath: '[redacted]',
+        config: redactConfig(next),
+        allowedUpdates: [
+          'host',
+          'databaseName',
+          'defaultWakePolicy',
+          'existing agent enabled/autoInit/limits/wake settings',
+          'existing agent connector.openclawAgentId/sendReplyText',
+        ],
+        blockedUpdates: [
+          'new agents',
+          'agent kind',
+          'agent command',
+          'agent repoPath',
+          'agent stateDir',
+        ],
+      });
+    }
   );
 }
 
@@ -828,22 +1050,18 @@ function registerResources(server: McpServer) {
       title: 'AgentTalk Supervisor Status',
       mimeType: 'application/json',
     },
-    async () => ({
-      contents: [
-        {
-          uri: 'agenttalk://supervisor/status',
-          mimeType: 'application/json',
-          text: JSON.stringify(
-            {
-              implemented: false,
-              status: 'not_implemented',
-            },
-            null,
-            2
-          ),
-        },
-      ],
-    })
+    async () => {
+      const result = await supervisorStatusData();
+      return {
+        contents: [
+          {
+            uri: 'agenttalk://supervisor/status',
+            mimeType: 'application/json',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
   );
 }
 

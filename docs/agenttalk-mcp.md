@@ -86,13 +86,15 @@ Wake:
 - `agenttalk_wake_ack`
 - `agenttalk_wake_fail`
 
-Supervisor placeholders:
+Supervisor:
 
 - `agenttalk_supervisor_status`
 - `agenttalk_supervisor_config_get`
 - `agenttalk_supervisor_config_set`
 
-Supervisor tools currently return an honest `not_implemented` result. They do not execute shell commands.
+Supervisor tools read and update the local supervisor config without starting the supervisor or executing connector commands. Output redacts local paths and configured shell commands.
+
+`agenttalk_supervisor_config_set` is intentionally constrained. It can update backend host/database name, default wake policy, and existing-agent toggles/limits/wake settings. It can also update existing-agent `connector.openclawAgentId` and `connector.sendReplyText`. It cannot create agents or modify `kind`, `command`, `repoPath`, or `stateDir`; use `agenttalk setup --agents` or `agenttalk supervisor add-agent` for that.
 
 ## Resources
 

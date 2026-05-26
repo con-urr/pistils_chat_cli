@@ -13,6 +13,10 @@ const smokeStateDir = path.join(
   os.tmpdir(),
   `agenttalk-mcp-smoke-${process.pid}-${Date.now()}`
 );
+const smokeSupervisorHome = path.join(
+  os.tmpdir(),
+  `agenttalk-mcp-supervisor-smoke-${process.pid}-${Date.now()}`
+);
 const childEnv = { ...process.env };
 delete childEnv.AGENTTALK_TOKEN;
 
@@ -22,6 +26,7 @@ const child = spawn(process.execPath, useAgenttalkAlias ? [cliPath, 'mcp'] : [se
   env: {
     ...childEnv,
     AGENTTALK_STATE_DIR: smokeStateDir,
+    AGENTTALK_SUPERVISOR_HOME: smokeSupervisorHome,
     SPACETIMEDB_HOST: 'https://maincloud.spacetimedb.com',
     SPACETIMEDB_DB_NAME: 'crimsonconfidentialgibbon',
     AGENTTALK_MCP_SMOKE: '1',
@@ -116,6 +121,8 @@ try {
     'agenttalk_chat_start',
     'agenttalk_inbox',
     'agenttalk_wake_status',
+    'agenttalk_supervisor_status',
+    'agenttalk_supervisor_config_get',
   ]) {
     if (!names.has(required)) {
       fail(`Missing MCP tool ${required}`);
@@ -132,6 +139,55 @@ try {
     fail(`agenttalk_whoami returned unexpected payload: ${whoamiText}`);
   }
 
+  const supervisorStatus = await request('tools/call', {
+    name: 'agenttalk_supervisor_status',
+    arguments: {},
+  });
+  const supervisorStatusText = supervisorStatus?.content?.[0]?.text ?? '';
+  const parsedSupervisorStatus = JSON.parse(supervisorStatusText);
+  if (
+    parsedSupervisorStatus.ok !== true ||
+    parsedSupervisorStatus.data?.implemented !== true ||
+    parsedSupervisorStatus.data?.configPath !== '[redacted]'
+  ) {
+    fail(`agenttalk_supervisor_status returned unexpected payload: ${supervisorStatusText}`);
+  }
+
+  const supervisorConfig = await request('tools/call', {
+    name: 'agenttalk_supervisor_config_get',
+    arguments: {},
+  });
+  const supervisorConfigText = supervisorConfig?.content?.[0]?.text ?? '';
+  const parsedSupervisorConfig = JSON.parse(supervisorConfigText);
+  if (
+    parsedSupervisorConfig.ok !== true ||
+    parsedSupervisorConfig.data?.implemented !== true ||
+    parsedSupervisorConfig.data?.config?.logDir !== '[redacted]'
+  ) {
+    fail(`agenttalk_supervisor_config_get returned unexpected payload: ${supervisorConfigText}`);
+  }
+
+  const supervisorDryRun = await request('tools/call', {
+    name: 'agenttalk_supervisor_config_set',
+    arguments: {
+      dryRun: true,
+      config: {
+        defaultWakePolicy: {
+          maxWakesPerMinute: 12,
+        },
+      },
+    },
+  });
+  const supervisorDryRunText = supervisorDryRun?.content?.[0]?.text ?? '';
+  const parsedSupervisorDryRun = JSON.parse(supervisorDryRunText);
+  if (
+    parsedSupervisorDryRun.ok !== true ||
+    parsedSupervisorDryRun.data?.dryRun !== true ||
+    parsedSupervisorDryRun.data?.config?.defaultWakePolicy?.maxWakesPerMinute !== 12
+  ) {
+    fail(`agenttalk_supervisor_config_set dryRun returned unexpected payload: ${supervisorDryRunText}`);
+  }
+
   console.log(
     JSON.stringify({
       ok: true,
@@ -141,6 +197,10 @@ try {
       whoami: {
         identity: parsed.data.identity,
         account: parsed.data.account?.handle ?? null,
+      },
+      supervisor: {
+        implemented: parsedSupervisorStatus.data.implemented,
+        agents: parsedSupervisorStatus.data.agentCount,
       },
     })
   );
