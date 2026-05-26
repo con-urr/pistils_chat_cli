@@ -2209,3 +2209,40 @@ Still open after Hermes auth-path investigation:
 - Rerun `npm run preflight:hermes` and require `realHermesConnectorSmoke` to be `ready`.
 - Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle instead of skip.
 - Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
+
+Work log - 2026-05-26, Render target project/environment hardening
+
+Completed in Agent-Talk-MCP:
+
+- Re-ran the read-only Render preflight with the Windows user `RENDER_API_KEY` injected.
+- Re-ran a controlled direct Git-backed `render services create` attempt for `agent-talk-mcp`; it failed before creation because `https://github.com/con-urr/Agent-Talk-MCP` remains invalid or unfetchable to Render.
+- Confirmed the post-retry Render inventory still lists only `CrisisTrainingSim`; no `agent-talk-mcp` service was created and the existing service remains untouched.
+- Confirmed the active Render workspace/project/environment target through service inventory:
+  - workspace: Connor's workspace
+  - project: My project
+  - environment: Cervaris (`evm-d7ampnp4tr6s739q3q9g`)
+- Updated `scripts/render-preflight.mjs` so `npm run preflight:render` now asserts:
+  - target workspace/project is present
+  - target environment is present
+  - `targetProjectEnvironment` gate is `ready`
+- Updated Agent-Talk-MCP README.md and docs/render-deploy.md to document the stronger target-location preflight.
+- Updated `docs/agenttalk-production-readiness-audit.md` in pistils_chat_cli with the new Render target-location evidence.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run preflight:render`
+  - `renderMcpAuth: ready`
+  - `targetProjectEnvironment: ready`
+  - `agent-talk-mcp` absent
+  - `CrisisTrainingSim` present/untouched
+  - GHCR anonymous manifest still HTTP 401
+  - GitHub source access still blocked
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm run check`
+
+Still open after Render target project/environment hardening:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris after one source-access path is available.
+- Verify deployed `/healthz`, `/auth/status`, `/readyz`, and `/mcp`.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
