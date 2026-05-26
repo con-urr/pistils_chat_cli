@@ -1428,6 +1428,7 @@ Validation passed:
 
 - Agent-Talk-MCP: npm run check
 - Agent-Talk-MCP: render blueprints validate render.yaml --output json
+- Public GHCR manifest probe for ghcr.io/con-urr/agent-talk-mcp:codex-render-mcp-service returned HTTP 401 Unauthorized, so the image is not currently publicly pullable from this environment
 
 Still open after Render image fallback path:
 
