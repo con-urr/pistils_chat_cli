@@ -1522,8 +1522,9 @@ Completed in Agent-Talk-MCP:
 - Updated README.md and docs/render-deploy.md to include /auth/status in local and deployed validation.
 - Tried to inspect/trigger the GHCR publish path:
   - local gh CLI is not installed on PATH
-  - GitHub connector exposed workflow-run inspection but not fresh workflow dispatch
-  - workflow-run inspection for Agent-Talk-MCP commit a684a6ede14b406314a5e004569f869fdee995da returned no pull-request workflow runs
+- GitHub connector exposed workflow-run inspection but not fresh workflow dispatch
+- workflow-run inspection for Agent-Talk-MCP commit a684a6ede14b406314a5e004569f869fdee995da returned no pull-request workflow runs
+- After pushing Agent-Talk-MCP commit 0c11d1bfcf90190c68633fb283a6d4af51573b08, a public GHCR manifest probe for ghcr.io/con-urr/agent-talk-mcp:codex-render-mcp-service still returned HTTP 401 Unauthorized
 
 Validation passed:
 
