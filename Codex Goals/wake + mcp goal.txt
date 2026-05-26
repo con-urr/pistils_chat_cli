@@ -2013,3 +2013,37 @@ Still open after Hermes readiness preflight:
 - Rerun `npm run preflight:hermes` and expect `realHermesConnectorSmoke` to be `ready`.
 - Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle instead of skip.
 - Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
+
+Work log - 2026-05-26, Render CLI auth and create retry
+
+Completed:
+
+- Confirmed Render CLI v2.18.0 is installed.
+- Ran `render login`; the CLI was already authenticated.
+- Confirmed `render whoami` returns the expected Render account.
+- Refreshed Render skills for Codex with `render skills install --tool codex --scope user --confirm -o text`; the installer reported 21 skills installed.
+- Confirmed Codex config already has `[mcp_servers.render]` pointing at `https://mcp.render.com/mcp` with `bearer_token_env_var = "RENDER_API_KEY"`.
+- Confirmed `RENDER_API_KEY` is not set in the current Codex shell, so Render MCP/plugin auth is still separate from CLI browser login.
+- Confirmed `render services create` exists in CLI v2.18.0 and supports non-interactive service creation.
+
+Validation / evidence:
+
+- `render services -o json` still lists only `CrisisTrainingSim`; `agent-talk-mcp` is absent.
+- Direct Git-backed create attempt for `agent-talk-mcp` with `https://github.com/con-urr/Agent-Talk-MCP.git` failed before creation because Render rejects the `.git` suffix.
+- Direct Git-backed create attempt for `agent-talk-mcp` with `https://github.com/con-urr/Agent-Talk-MCP` also failed before creation as invalid or unfetchable, matching the private-repo Render GitHub integration gate.
+- Re-listed services after both failed create attempts; `CrisisTrainingSim` remained the only service and was untouched.
+- Reran Agent-Talk-MCP `npm run preflight:render`; it still reports:
+  - render.yaml validates
+  - Render CLI is authenticated
+  - `agent-talk-mcp` is absent
+  - `CrisisTrainingSim` is present and untouched
+  - `RENDER_API_KEY` is not set
+  - GHCR anonymous manifest is HTTP 401
+  - git-backed deploy requires Render GitHub integration access
+
+Still open after Render CLI auth and create retry:
+
+- Set `RENDER_API_KEY` in the Codex Desktop environment if the Render MCP plugin should authenticate.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` after one source-access path is available.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
