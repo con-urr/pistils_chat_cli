@@ -2845,3 +2845,37 @@ Still open after setup wizard Hermes skip next actions:
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun `npm run preflight:hermes`.
 - Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle a real wake.
 - Render service creation/deployed smoke remains blocked on Render GitHub/GHCR source access.
+
+Work log - 2026-05-26, setup guidance push and Render source-access recheck
+
+Completed in pistils_chat_cli:
+
+- Pushed commit `b58fb0871c4328132833463ea85f552f592f801d` on `codex/agenttalk-mcp-supervisor`.
+- Confirmed GitHub Actions run `26443451196` passed both `validate (20)` and `validate (22)` jobs on that head.
+- Updated PR `con-urr/pistils_chat_cli#1` with the new head, setup-wizard Hermes credential guidance, and current validation evidence.
+- Reconfirmed Render CLI install/auth after user-requested install flow:
+  - `render v2.18.0`
+  - `render skills install --tool codex --scope user --confirm -o text`
+  - `render login` reported the CLI was already authenticated.
+- Re-ran the Git-backed Render create command for `agent-talk-mcp` in environment `evm-d7ampnp4tr6s739q3q9g`; it still failed before service creation with `passed in repository URL is invalid or unfetchable`.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run audit:goal`
+  - current head is `b58fb0871c4328132833463ea85f552f592f801d`;
+  - tracked worktrees are clean across pistils_chat_cli, live-chat, and Agent-Talk-MCP;
+  - GitHub checks pass on all three current PR heads;
+  - Render API/MCP auth and target project/environment pass;
+  - final completion remains blocked only by Render source/service/deployed-smoke and Hermes credential/real-smoke gates.
+- Agent-Talk-MCP: `npm run preflight:render`
+  - Render CLI/API/MCP auth and target environment pass;
+  - `agent-talk-mcp` is still absent;
+  - Git-backed deploy remains blocked on Render GitHub integration access;
+  - image-backed deploy remains blocked on public GHCR access or a Render registry credential.
+
+Still open after setup guidance push and Render source-access recheck:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Create the free `agent-talk-mcp` Render service in Connor's workspace / My project / Cervaris after source access is available.
+- Run deployed MCP smoke after creation.
+- Complete Hermes credentials and rerun the real Hermes connector smoke.
