@@ -2958,6 +2958,24 @@ Still open after guarded Render create helper:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
+
+Work log - 2026-05-26, Hermes OAuth default-timeout post-push audit
+
+Completed in pistils_chat_cli:
+
+- Committed and pushed `fbea3af9b01f7eb39213066b826a107d34d9fcfe` (`Default Hermes OAuth helper timeout`) to `codex/agenttalk-mcp-supervisor`.
+- Reran `npm run audit:goal` on a clean tracked worktree after the push.
+- Audit summary on `fbea3af9b01f7eb39213066b826a107d34d9fcfe`: `pass:26`, `warn:2`, `fail:6`.
+- The dirty-worktree warning from the pre-commit audit cleared.
+- GitHub REST check after a 90 second wait found no check-runs attached to `fbea3af9b01f7eb39213066b826a107d34d9fcfe`; the newest visible pistils CI workflow run remains the earlier successful pull-request run on `56a9664650761d00753a1098b3d34de55766b3d5`.
+
+Still open after Hermes OAuth default-timeout post-push audit:
+
+- Resolve why GitHub Actions no longer attaches pistils CI check-runs to new PR heads after `56a9664650761d00753a1098b3d34de55766b3d5`, or explicitly rerun/repair CI so `validate (20)` and `validate (22)` exist on the current head.
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
 - Wait for the Agent-Talk-MCP GitHub CI/image workflows on commit `a24074c`, then rerun the top-level goal audit.
 - Complete Hermes credentials and rerun the real Hermes connector smoke.
 
