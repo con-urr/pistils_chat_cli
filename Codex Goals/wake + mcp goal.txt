@@ -3470,3 +3470,28 @@ Still open after Hermes OAuth default-timeout hardening:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
+
+Work log - 2026-05-26, Render registry credential preflight recognition
+
+Completed in Agent-Talk-MCP:
+
+- Updated `scripts/render-preflight.mjs` so the private-image readiness check recognizes either `RENDER_REGISTRY_CREDENTIAL_ID` or the older `RENDER_REGISTRY_CREDENTIAL` marker without printing credential values.
+- Updated `docs/render-deploy.md` to document `RENDER_REGISTRY_CREDENTIAL_ID` for non-interactive private-image create runs.
+- Committed and pushed Agent-Talk-MCP commit `bc0e7ea` on `codex/render-mcp-service`.
+
+Validation passed:
+
+- Agent-Talk-MCP: `node --check scripts\render-preflight.mjs`
+- Agent-Talk-MCP: `node --check scripts\render-create-service.mjs`
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm.cmd run check`
+- Agent-Talk-MCP: controlled `npm.cmd run preflight:render` with a dummy `RENDER_REGISTRY_CREDENTIAL_ID` value, which reported `registryCredentialConfigured: true`, `imageDeploy: requires-render-create-with-registry-credential`, and `createCommands.imageBackedWithRegistryCredential.status: ready-with-configured-registry-credential`.
+- Agent-Talk-MCP: post-push `npm.cmd run preflight:render` without a registry credential still reports Render API/MCP auth ready, target workspace/project/environment ready, `agent-talk-mcp` absent, and `CrisisTrainingSim` untouched; the deploy remains blocked by private GitHub/GHCR access.
+
+Still open after Render registry credential preflight recognition:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm`, `npm run render:create -- --mode image --confirm`, or the private-image path with the real Render registry credential after source/image access is available.
+- Run deployed MCP smoke after service creation.
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
+- Restore pistils current-head GitHub Actions check-runs, then rerun `npm run audit:goal -- --strict`.
