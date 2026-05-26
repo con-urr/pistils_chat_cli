@@ -2134,3 +2134,41 @@ Still open after Render preflight API/MCP auth verification:
 - Create the new free Render service `agent-talk-mcp` after one source-access path is available.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render preflight next actions
+
+Completed in Agent-Talk-MCP:
+
+- Added `nextActions` to `scripts/render-preflight.mjs`.
+- The preflight now reports the account-side unblock links when gates are blocked:
+  - Render GitHub app repository access: `https://github.com/apps/render/installations/new`
+  - Render image-backed deploy docs: `https://render.com/docs/deploying-an-image`
+- The preflight reports the `render services create` command only when `agent-talk-mcp` is absent and at least one deploy path is ready.
+- Updated Agent-Talk-MCP README.md and docs/render-deploy.md to describe `nextActions`.
+- Pushed Agent-Talk-MCP commit `cd6fab63d4a47595a3d6b63d2c7eb58a4afca6f4`.
+- Updated Agent-Talk-MCP PR #1 with the `nextActions` validation.
+
+Validation passed:
+
+- Agent-Talk-MCP: `npm run check`
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm run preflight:render` with the Windows user `RENDER_API_KEY` injected
+  - `render:api_key_auth` passed with HTTP 200
+  - `render:mcp_api_key_auth` passed with HTTP 200
+  - `renderMcpAuth` is `ready`
+  - `nextActions` currently includes:
+    - Grant Render GitHub access
+    - Unblock GHCR image pull
+  - `agent-talk-mcp` remains absent
+  - `CrisisTrainingSim` remains present and untouched
+  - GHCR anonymous manifest remains HTTP 401
+  - git-backed deploy still requires Render GitHub integration access
+
+Still open after Render preflight next actions:
+
+- Restart Codex Desktop or start a new Codex session so the process environment includes `RENDER_API_KEY`.
+- Replace the CLI-token-backed env value with a non-expiring Dashboard API key before relying on long-term Render MCP auth.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` after one source-access path is available.
+- Verify deployed /healthz, /auth/status, /readyz, and /mcp.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
