@@ -81,6 +81,7 @@
     "smoke:real-connectors": "node scripts/smoke-real-connectors.mjs",
     "smoke:setup": "node scripts/smoke-setup.mjs",
     "smoke:supervisor": "node scripts/smoke-supervisor.mjs",
+    "smoke:supervisor-live-reply": "node scripts/smoke-supervisor-live-reply.mjs",
     "smoke:supervisor-live": "node scripts/smoke-supervisor-live-wake.mjs",
     "smoke:wake-connectors": "node scripts/smoke-wake-connectors.mjs",
     "prepublishOnly": "npm run clean && npm run check",

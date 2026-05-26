@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AgentRealtimeClient, AgentTalkWakeClient } from '../agent-client';
@@ -63,6 +64,11 @@ function supervisorRegistrationId(agentId: string) {
 
 function safePathSegment(value: string) {
   return value.replace(/[\\/:*?"<>|]/g, '_');
+}
+
+function shortClientRequestId(prefix: string, value: string) {
+  const digest = createHash('sha256').update(value).digest('hex').slice(0, 24);
+  return `${prefix}:${digest}`;
 }
 
 async function appendLog(
@@ -273,7 +279,8 @@ async function dispatchWake(
       runDir
     );
 
-    if (result.ok && result.handled) {
+    const finalResult = await maybeSendConnectorReply(runtime, claimedWake, attemptId, result);
+    if (finalResult.ok && finalResult.handled) {
       await runtime.wakeClient.ackWake(
         wake.wakeId,
         attemptId
@@ -284,12 +291,12 @@ async function dispatchWake(
         event: 'wake_acked',
         wakeId: wake.wakeId,
         attemptId,
-        result: toJsonSafe(result),
+        result: toJsonSafe(finalResult),
       });
       return;
     }
 
-    await failWake(config, runtime, wake.wakeId, attemptId, result);
+    await failWake(config, runtime, wake.wakeId, attemptId, finalResult);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (attemptId) {
@@ -305,6 +312,47 @@ async function dispatchWake(
       error: message,
     });
   }
+}
+
+async function maybeSendConnectorReply(
+  runtime: RuntimeAgent,
+  wake: ModuleTypes.WakeRequestView,
+  attemptId: string,
+  result: WakeConnectorResult
+): Promise<WakeConnectorResult> {
+  const replyText = result.replyText?.trim();
+  if (
+    !runtime.config.connector?.sendReplyText ||
+    result.replySent ||
+    !replyText
+  ) {
+    return result;
+  }
+
+  const replyRequestId = await runtime.realtime.sendConversationMessage(
+    wake.conversationId,
+    replyText,
+    {
+      kind: 'chat',
+      correlationId: wake.wakeId,
+      metadataJson: stringifyJsonSafe({
+        source: 'agenttalk-supervisor',
+        wakeId: wake.wakeId,
+        attemptId,
+        connectorKind: runtime.config.kind,
+      }, false).trim(),
+      clientRequestId: shortClientRequestId('supervisor:reply', `${wake.wakeId}:${attemptId}`),
+    }
+  );
+
+  return {
+    ...result,
+    replySent: true,
+    metadata: {
+      connectorMetadata: result.metadata,
+      supervisorReplyRequestId: replyRequestId,
+    },
+  };
 }
 
 async function failWake(

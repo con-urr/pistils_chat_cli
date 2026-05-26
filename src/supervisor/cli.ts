@@ -209,6 +209,13 @@ async function commandAddAgent(flags: SupervisorFlags) {
   const timeoutMs = getIntFlag(flags, ['timeout-ms', 'connectorTimeoutMs'], 300_000);
   const maxConcurrentWakeJobs = getIntFlag(flags, ['max-concurrent', 'maxConcurrentWakeJobs'], 1);
   const openclawAgentId = getStringFlag(flags, ['openclaw-agent-id', 'openclawAgentId']);
+  const sendReplyText = getBooleanFlag(flags, ['send-reply-text', 'sendReplyText']);
+  const connector =
+    openclawAgentId && kind === 'openclaw'
+      ? { openclawAgentId, sendReplyText: sendReplyText || undefined }
+      : sendReplyText
+        ? { sendReplyText }
+        : undefined;
   const agent: SupervisorAgentConfig = {
     name,
     handle,
@@ -218,7 +225,7 @@ async function commandAddAgent(flags: SupervisorFlags) {
       ? path.resolve(expandHome(getStringFlag(flags, ['repo', 'repo-path', 'repoPath'])!))
       : undefined,
     command: getStringFlag(flags, ['command']),
-    connector: openclawAgentId && kind === 'openclaw' ? { openclawAgentId } : undefined,
+    connector,
     enabled: !getBooleanFlag(flags, ['disabled']),
     autoInit: !getBooleanFlag(flags, ['no-auto-init']),
     maxConcurrentWakeJobs,
@@ -646,7 +653,7 @@ function printHelp() {
 Usage:
   agenttalk supervisor init [--force] [--json]
   agenttalk supervisor init --wizard [--dry-run] [--json]
-  agenttalk supervisor add-agent --kind noop --name support --handle support-agent [--json]
+  agenttalk supervisor add-agent --kind noop --name support --handle support-agent [--send-reply-text] [--json]
   agenttalk supervisor remove-agent <name> [--json]
   agenttalk supervisor list [--json]
   agenttalk supervisor status [--json]

@@ -1337,3 +1337,40 @@ Still open after real connector smoke repair:
 - Real end-to-end reply behavior validation for OpenClaw/Hermes/Codex, beyond connector handled=true.
 - Grant Render GitHub access or make Agent-Talk-MCP public.
 - Create the new free Render service agent-talk-mcp and verify deployed /healthz, /readyz, and /mcp.
+
+Work log - 2026-05-26, opt-in supervisor replyText delivery
+
+Completed:
+
+- Implemented opt-in supervisor delivery for connector-returned replyText.
+- Added --send-reply-text for agenttalk supervisor add-agent.
+- Default remains conservative:
+  - connectors are still responsible for replying through AgentTalk themselves
+  - supervisor sends replyText only when the agent is explicitly configured with --send-reply-text
+  - supervisor does not resend when a connector reports replySent=true
+- Used short hashed clientRequestId values for supervisor-sent replies so wake ids cannot exceed backend request-id limits.
+- Added npm run smoke:supervisor-live-reply.
+- Added debug support for preserving the live-reply smoke home with AGENTTALK_KEEP_SMOKE_HOME=1.
+- Updated docs/agenttalk-supervisor.md.
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:supervisor
+- pistils_chat_cli: npm run smoke:supervisor-live-reply
+  - live direct conversation id 72
+  - connector replyText became visible as conversation sequence 2
+  - supervisor claimed 1 wake, acked 1 wake, and failed 0 wakes
+- pistils_chat_cli: npm run check
+- pistils_chat_cli: npm run smoke:real-connectors without opt-in
+- pistils_chat_cli: AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors
+  - OpenClaw handled a real test wake
+  - Codex handled a real test wake
+  - Hermes skipped because hermes status reports no configured non-interactive model/provider credentials
+
+Still open after opt-in replyText delivery:
+
+- Configure Hermes with non-interactive provider credentials, then rerun AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors and require Hermes to handle a real wake.
+- Real OpenClaw/Hermes/Codex self-reply behavior where each runtime replies through AgentTalk itself, not through supervisor --send-reply-text.
+- Grant Render GitHub access or make Agent-Talk-MCP public.
+- Create the new free Render service agent-talk-mcp and verify deployed /healthz, /readyz, and /mcp.

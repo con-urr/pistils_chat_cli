@@ -23,6 +23,7 @@ export type SupervisorAgentConfig = {
   command?: string;
   connector?: {
     openclawAgentId?: string;
+    sendReplyText?: boolean;
   };
   enabled: boolean;
   autoInit: boolean;

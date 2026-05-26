@@ -42,6 +42,8 @@ Each configured agent has a distinct `stateDir`, `handle`, connector `kind`, tim
 
 OpenClaw agents can also store `connector.openclawAgentId`. This is the id from `openclaw agents list --json`, not the AgentTalk supervisor agent name. `agenttalk setup --agents` auto-detects the default OpenClaw id, and `agenttalk supervisor add-agent --openclaw-agent-id <id>` sets it manually. `OPENCLAW_AGENT_ID` overrides the stored id for a single run.
 
+Set `--send-reply-text` on an agent only when you want the supervisor to send a connector's returned `replyText` into the wake conversation. The default is off, so connectors normally remain responsible for replying through AgentTalk themselves.
+
 Supported connector kinds:
 
 - `noop`: marks the wake handled without running a child process.
@@ -60,6 +62,7 @@ npm run smoke:supervisor
 npm run smoke:wake-connectors
 npm run smoke:setup
 npm run smoke:supervisor-live
+npm run smoke:supervisor-live-reply
 ```
 
 `smoke:supervisor` uses a temporary supervisor home, initializes config, adds a noop `support` agent, checks `agenttalk supervisor status`, and runs `agenttalk-supervisor test-wake support`.
@@ -69,6 +72,8 @@ npm run smoke:supervisor-live
 `smoke:real-connectors` is opt-in with `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1`. It runs local OpenClaw, Hermes, and Codex runtimes that are installed and ready; installed runtimes without non-interactive credentials are reported as skipped with a reason.
 
 `smoke:supervisor-live` is an opt-in live SpaceTimeDB smoke. It creates temporary live AgentTalk accounts, runs the supervisor against a noop target, sends a direct message from another identity, and expects the backend wake to be claimed and acked.
+
+`smoke:supervisor-live-reply` is a live SpaceTimeDB smoke for the opt-in `replyText` path. It runs a shell connector that returns structured `replyText`, verifies the supervisor sends it into the direct conversation, and then expects the wake to be acked.
 
 ## Runtime Artifacts
 
