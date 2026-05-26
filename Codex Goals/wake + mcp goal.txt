@@ -2959,6 +2959,27 @@ Still open after guarded Render create helper:
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
 
+Work log - 2026-05-26, pistils CI event repair attempt
+
+Observed for missing pistils current-head checks:
+
+- Current PR head at investigation time: `e758a246aaa5e5c1aa5c29cdfa215c703a703c12`.
+- GitHub had push events for the later heads, including `8f8d4a8a9d37d3d82bfc86edbfd0d197a310230a`, `a34ff499585b285099547c25873c8199d7823b4b`, `b4d53622632d10b7bb48e6f216961801e54471ee`, `fbea3af9b01f7eb39213066b826a107d34d9fcfe`, and `e758a246aaa5e5c1aa5c29cdfa215c703a703c12`.
+- GitHub had no check-suite or workflow run at all for `e758a246aaa5e5c1aa5c29cdfa215c703a703c12`.
+- `origin/main` still has CI `push` limited to `main`; the PR branch has the attempted `codex/**` push trigger.
+- Repository Actions settings are enabled with `allowed_actions=all`; workflow default permissions are `read`.
+
+Repair attempted:
+
+- Closed and immediately reopened PR #1 through the GitHub REST API to force a `pull_request.reopened` event.
+- Verified the PR returned to `open` and remained `draft`.
+- After waiting, GitHub still had no check-runs on `e758a246aaa5e5c1aa5c29cdfa215c703a703c12`; latest visible pistils CI workflow run remained `26447404260` on `56a9664650761d00753a1098b3d34de55766b3d5`.
+
+Still open after pistils CI event repair attempt:
+
+- Current-head pistils GitHub checks remain blocked with no check-suite created by GitHub.
+- Avoid blind sync commits; the next likely repair is to update/merge the default-branch workflow so it can run branch pushes or manual dispatches, or rerun from the GitHub UI with the workflow definition available on `main`.
+
 Work log - 2026-05-26, Hermes OAuth default-timeout post-push audit
 
 Completed in pistils_chat_cli:
