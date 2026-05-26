@@ -863,7 +863,7 @@ const payload = {
   nextActions: [
     ...(!sourceAccessReady
       ? [
-          'Grant Render GitHub access to con-urr/Agent-Talk-MCP or unblock GHCR image pulls.',
+          'Grant Render GitHub access to con-urr/Agent-Talk-MCP, or run GHCR_USERNAME=<github-user> GHCR_READ_TOKEN=<read-packages-token> npm run render:registry-credential -- --confirm in Agent-Talk-MCP to add a narrow Render GHCR credential.',
         ]
       : []),
     ...(!serviceCreated

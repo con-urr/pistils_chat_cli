@@ -3609,3 +3609,31 @@ Still open after Agent-Talk-MCP CI and image publish recovery:
 - Create the `agent-talk-mcp` Render service after Render GitHub app access or a narrow GHCR registry credential is added.
 - Run deployed smoke against the new Render URL.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, guarded Render GHCR credential helper
+
+Completed in Agent-Talk-MCP:
+
+- Added `scripts/render-create-registry-credential.mjs` and `npm run render:registry-credential`.
+- The helper refuses to call Render unless `--confirm` is provided, requires a user-supplied `GHCR_USERNAME` and `GHCR_READ_TOKEN` (or an explicit `--token-env`), uses Render's registry credential API with `registry: GITHUB`, and reports only sanitized credential metadata plus the follow-up private-image create command.
+- Added `scripts/smoke-render-registry-credential-guard.mjs` and wired it into `npm.cmd run check` so a fake token is verified not to leak when `--confirm` is omitted.
+- Updated `scripts/render-preflight.mjs` and `docs/render-deploy.md` so the blocked GHCR path now points to the guarded helper instead of a vague manual credential step.
+- Committed and pushed Agent-Talk-MCP commit `d4b45c8` on `codex/render-mcp-service`.
+
+Validation passed:
+
+- Agent-Talk-MCP: `node --check scripts\render-create-registry-credential.mjs`
+- Agent-Talk-MCP: `node --check scripts\smoke-render-registry-credential-guard.mjs`
+- Agent-Talk-MCP: `node --check scripts\render-preflight.mjs`
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm.cmd run smoke:render-registry-credential-guard`
+- Agent-Talk-MCP: `npm.cmd run check`
+- Agent-Talk-MCP: `npm.cmd run preflight:render`, which still confirms `agent-talk-mcp` absent, `CrisisTrainingSim` untouched, Render auth ready, GHCR anonymous manifest 401, and zero Render GitHub registry credentials.
+- Agent-Talk-MCP GitHub Actions current head `d4b45c81da47f3f0422a6f4821732f829f3325cf`: CI pull_request run `26449829758`, CI push run `26449827574`, and image publish run `26449827711` all completed successfully.
+- `npm.cmd run audit:goal` in pistils_chat_cli now sees Agent-Talk-MCP head `d4b45c8` with green CI/image publish and still reports final summary `pass: 28`, `warn: 3`, `fail: 5`.
+
+Still open after guarded Render GHCR credential helper:
+
+- User must either grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or provide a narrow GHCR read token through `GHCR_USERNAME=<github-user> GHCR_READ_TOKEN=<read-packages-token> npm run render:registry-credential -- --confirm`.
+- After that account-side step, rerun `npm.cmd run preflight:render`, create the `agent-talk-mcp` Render service, and run deployed smoke.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
