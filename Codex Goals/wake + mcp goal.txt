@@ -2607,6 +2607,10 @@ Completed in Agent-Talk-MCP:
 - The CI job runs on Ubuntu with Node 20.x and Node 22.x, installs dependencies with `npm install`, and runs `npm run check`.
 - Pushed Agent-Talk-MCP commit `a03aa8c8bed7213ee3d90f29a7d321ef327f47c7` to `codex/render-mcp-service`.
 - Updated `docs/agenttalk-production-readiness-audit.md` so the repo-state evidence and Render artifact checklist include the new CI workflow.
+- Verified GitHub Actions after push:
+  - CI pull_request run `26440517950` completed successfully for head `a03aa8c8bed7213ee3d90f29a7d321ef327f47c7`.
+  - CI push run `26440516426` completed successfully for the same head.
+  - Publish AgentTalk MCP image run `26440516420` completed successfully for the same head.
 
 Validation passed:
 
@@ -2617,7 +2621,6 @@ Validation passed:
 
 Still open after hosted MCP PR CI:
 
-- Wait for GitHub Actions to report the new Agent-Talk-MCP CI result on PR `con-urr/Agent-Talk-MCP#1`.
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a separate narrow GHCR read credential to Render.
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
 - Run `npm run audit:goal -- --strict` after service creation and Hermes credential setup.
