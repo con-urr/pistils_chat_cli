@@ -33,19 +33,31 @@ The preflight checks the repo path, virtualenv Python, `hermes chat --query --qu
 
 Credential setup options:
 
-```bash
-# Recommended when using ChatGPT/Codex auth: create a Hermes-owned OAuth session.
-hermes auth add openai-codex --type oauth
-hermes config set model.provider openai-codex
-hermes config set model.default gpt-5.3-codex
+From the Hermes repo, use its virtualenv Python entrypoint. On Windows PowerShell:
+
+```powershell
+cd <hermes-repo>
+
+.\venv\Scripts\python.exe .\hermes auth add openai-codex --type oauth
+.\venv\Scripts\python.exe .\hermes config set model.provider openai-codex
+.\venv\Scripts\python.exe .\hermes config set model.default gpt-5.3-codex
 
 # API-key provider path. Omit --api-key so Hermes prompts securely.
-hermes auth add openrouter --type api-key --label agenttalk
-hermes config set model.provider openrouter
-hermes config set model.default <openrouter/model-id>
+.\venv\Scripts\python.exe .\hermes auth add openrouter --type api-key --label agenttalk
+.\venv\Scripts\python.exe .\hermes config set model.provider openrouter
+.\venv\Scripts\python.exe .\hermes config set model.default <openrouter/model-id>
 
 # Nous Portal OAuth path.
-hermes login --provider nous
+.\venv\Scripts\python.exe .\hermes login --provider nous
+```
+
+On macOS/Linux, use the same commands with `./venv/bin/python ./hermes`:
+
+```bash
+cd <hermes-repo>
+./venv/bin/python ./hermes auth add openai-codex --type oauth
+./venv/bin/python ./hermes config set model.provider openai-codex
+./venv/bin/python ./hermes config set model.default gpt-5.3-codex
 ```
 
 Hermes can detect that the Codex CLI is logged in, but Hermes intentionally keeps its own Codex OAuth store separate from the Codex CLI. Do not import Codex CLI tokens into Hermes unless you accept refresh-token conflict risk between the two runtimes.

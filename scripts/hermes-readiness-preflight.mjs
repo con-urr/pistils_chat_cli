@@ -16,6 +16,8 @@ const hermes = path.join(repo, 'hermes');
 const python = process.platform === 'win32'
   ? path.join(repo, 'venv', 'Scripts', 'python.exe')
   : path.join(repo, 'venv', 'bin', 'python');
+const repoLocalPython = process.platform === 'win32' ? '.\\venv\\Scripts\\python.exe' : './venv/bin/python';
+const repoLocalHermes = process.platform === 'win32' ? '.\\hermes' : './hermes';
 const codexCommand = process.platform === 'win32' ? 'cmd.exe' : 'codex';
 const codexLoginStatusArgs = process.platform === 'win32'
   ? ['/d', '/s', '/c', 'codex login status']
@@ -164,6 +166,11 @@ function redact(text) {
   return text
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]')
     .replace(/([A-Z0-9_]*API_KEY=)[^\s]+/gi, '$1[redacted]');
+}
+
+function hermesRepoCommand(args) {
+  const separator = process.platform === 'win32' ? ';' : '&&';
+  return `cd <hermes-repo> ${separator} ${repoLocalPython} ${repoLocalHermes} ${args}`;
 }
 
 async function probeJsonEndpoint(name, url) {
@@ -347,25 +354,25 @@ const payload = {
     : [
         {
           label: 'Hermes-owned Codex OAuth login',
-          command: 'hermes auth add openai-codex --type oauth',
+          command: hermesRepoCommand('auth add openai-codex --type oauth'),
           note: 'Creates a Hermes-owned OAuth session. Avoid importing Codex CLI tokens unless you accept refresh-token conflict risk.',
         },
         {
           label: 'Set Hermes Codex provider',
-          command: 'hermes config set model.provider openai-codex',
+          command: hermesRepoCommand('config set model.provider openai-codex'),
         },
         {
           label: 'Set Hermes Codex model',
-          command: 'hermes config set model.default gpt-5.3-codex',
+          command: hermesRepoCommand('config set model.default gpt-5.3-codex'),
         },
         {
           label: 'API-key provider option',
-          command: 'hermes auth add openrouter --type api-key --label agenttalk',
+          command: hermesRepoCommand('auth add openrouter --type api-key --label agenttalk'),
           note: 'Prompts securely when --api-key is omitted; then set model.provider/model.default for the chosen provider.',
         },
         {
           label: 'Nous OAuth option',
-          command: 'hermes login --provider nous',
+          command: hermesRepoCommand('login --provider nous'),
         },
         {
           label: 'Re-run this preflight',

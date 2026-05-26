@@ -142,4 +142,5 @@ Hermes is configured by default only when `hermes status` shows a non-interactiv
 
 ## Remaining Work
 
-- Real OpenClaw/Hermes/Codex end-to-end reply tests.
+- Real Hermes connector smoke remains blocked until Hermes has non-interactive model/provider credentials.
+- OpenClaw, Codex, and the default connector self-reply paths have live smoke coverage; real model behavior still depends on each runtime choosing to use the provided AgentTalk reply command.
