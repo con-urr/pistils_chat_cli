@@ -3637,3 +3637,24 @@ Still open after guarded Render GHCR credential helper:
 - User must either grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or provide a narrow GHCR read token through `GHCR_USERNAME=<github-user> GHCR_READ_TOKEN=<read-packages-token> npm run render:registry-credential -- --confirm`.
 - After that account-side step, rerun `npm.cmd run preflight:render`, create the `agent-talk-mcp` Render service, and run deployed smoke.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Render registry credential audit coverage hardening
+
+Completed in pistils_chat_cli:
+
+- Updated `scripts/audit-goal.mjs` so `npm.cmd run audit:goal` verifies the Agent-Talk-MCP guarded registry credential helper artifacts and runs its no-confirm guard smoke.
+- The audit now reports `render:registry_credential_guard_artifacts` and `render:registry_credential_guard_smoke` separately from the existing Render service-create guard checks.
+- Updated `docs/agenttalk-production-readiness-audit.md` so the final-gate audit description includes guarded Render registry credential artifacts and smoke coverage.
+
+Validation passed:
+
+- `node --check scripts\audit-goal.mjs`
+- `git diff --check`
+- `npm.cmd run audit:goal`, which reports the new registry credential guard artifact and smoke checks as pass. The run remains blocked only by the known Render source/service/deployed-smoke and Hermes credential gates.
+
+Still open after Render registry credential audit coverage hardening:
+
+- Commit and push the pistils audit coverage hardening.
+- User must either grant Render GitHub app access to `con-urr/Agent-Talk-MCP` or provide a narrow GHCR read token through `GHCR_USERNAME=<github-user> GHCR_READ_TOKEN=<read-packages-token> npm run render:registry-credential -- --confirm`.
+- After that account-side step, rerun `npm.cmd run preflight:render`, create the `agent-talk-mcp` Render service, and run deployed smoke.
+- Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.

@@ -592,6 +592,8 @@ if (existsSync(agentTalkMcpRepo)) {
   const mcpPackagePath = path.join(agentTalkMcpRepo, 'package.json');
   const renderCreatePath = path.join(agentTalkMcpRepo, 'scripts', 'render-create-service.mjs');
   const renderCreateGuardSmokePath = path.join(agentTalkMcpRepo, 'scripts', 'smoke-render-create-guard.mjs');
+  const renderRegistryCredentialPath = path.join(agentTalkMcpRepo, 'scripts', 'render-create-registry-credential.mjs');
+  const renderRegistryCredentialGuardSmokePath = path.join(agentTalkMcpRepo, 'scripts', 'smoke-render-registry-credential-guard.mjs');
   let mcpPackage;
   try {
     mcpPackage = JSON.parse(readFileSync(mcpPackagePath, 'utf8'));
@@ -608,6 +610,15 @@ if (existsSync(agentTalkMcpRepo)) {
       ? check('pass', 'render:create_guard_artifacts', 'Agent-Talk-MCP has the guarded Render create helper and CI smoke wired into check')
       : check('fail', 'render:create_guard_artifacts', 'Agent-Talk-MCP guarded Render create helper or CI smoke wiring is missing')
   );
+  checks.push(
+    existsSync(renderRegistryCredentialPath) &&
+      existsSync(renderRegistryCredentialGuardSmokePath) &&
+      scripts['render:registry-credential'] === 'node scripts/render-create-registry-credential.mjs' &&
+      scripts['smoke:render-registry-credential-guard'] === 'node scripts/smoke-render-registry-credential-guard.mjs' &&
+      scripts.check?.includes('smoke:render-registry-credential-guard')
+      ? check('pass', 'render:registry_credential_guard_artifacts', 'Agent-Talk-MCP has the guarded Render registry credential helper and CI smoke wired into check')
+      : check('fail', 'render:registry_credential_guard_artifacts', 'Agent-Talk-MCP guarded Render registry credential helper or CI smoke wiring is missing')
+  );
 
   const guardSmoke = await runNpm(['run', 'smoke:render-create-guard'], {
     cwd: agentTalkMcpRepo,
@@ -617,6 +628,15 @@ if (existsSync(agentTalkMcpRepo)) {
     guardSmoke.ok
       ? check('pass', 'render:create_guard_smoke', 'Render create no-confirm guard smoke passed')
       : check('fail', 'render:create_guard_smoke', redact(guardSmoke.stderr || guardSmoke.stdout || 'Render create guard smoke failed'))
+  );
+  const registryCredentialGuardSmoke = await runNpm(['run', 'smoke:render-registry-credential-guard'], {
+    cwd: agentTalkMcpRepo,
+    env: process.env,
+  });
+  checks.push(
+    registryCredentialGuardSmoke.ok
+      ? check('pass', 'render:registry_credential_guard_smoke', 'Render registry credential no-confirm guard smoke passed')
+      : check('fail', 'render:registry_credential_guard_smoke', redact(registryCredentialGuardSmoke.stderr || registryCredentialGuardSmoke.stdout || 'Render registry credential guard smoke failed'))
   );
 }
 
