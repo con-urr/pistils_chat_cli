@@ -15,6 +15,7 @@ import {
   redactConfig,
   saveSupervisorConfig,
   supervisorConfigPath,
+  type AgentConnectorKind,
   type SupervisorAgentConfig,
   type SupervisorConfig,
 } from './config';
@@ -23,6 +24,14 @@ import { stringifyJsonSafe } from './json';
 import { runSupervisor } from './runtime';
 
 export type SupervisorFlags = Record<string, string | boolean>;
+type SupervisorDoctorCheck = {
+  name: string;
+  ok: boolean;
+  detail: string;
+  agent?: string;
+  kind?: AgentConnectorKind;
+  count?: number;
+};
 
 function writeStdout(line: string) {
   process.stdout.write(`${line}\n`);
@@ -113,9 +122,10 @@ function systemdQuote(value: string) {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-function runCommand(command: string, args: string[]) {
+function runCommand(command: string, args: string[], cwd?: string) {
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(command, args, {
+      cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -138,6 +148,38 @@ function runCommand(command: string, args: string[]) {
   });
 }
 
+async function exists(filePath: string) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findOnPath(command: string) {
+  const pathValue = process.env.PATH ?? '';
+  const exts =
+    process.platform === 'win32'
+      ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';')
+      : [''];
+  for (const dir of pathValue.split(path.delimiter)) {
+    if (!dir) {
+      continue;
+    }
+    for (const ext of exts) {
+      const candidate = path.join(
+        dir,
+        process.platform === 'win32' ? `${command}${ext.toLowerCase()}` : command
+      );
+      if (await exists(candidate)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function agentStatus(agent: SupervisorAgentConfig) {
   return {
     name: agent.name,
@@ -156,6 +198,287 @@ function agentStatus(agent: SupervisorAgentConfig) {
     connectorTimeoutMs: agent.connectorTimeoutMs,
     maxConcurrentWakeJobs: agent.maxConcurrentWakeJobs,
   };
+}
+
+function doctorCheck(input: SupervisorDoctorCheck): SupervisorDoctorCheck {
+  return input;
+}
+
+function section(text: string, start: string, end: string) {
+  const startIndex = text.indexOf(start);
+  if (startIndex < 0) {
+    return '';
+  }
+  const endIndex = text.indexOf(end, startIndex + start.length);
+  return endIndex < 0 ? text.slice(startIndex) : text.slice(startIndex, endIndex);
+}
+
+function hermesStatusHasCredentials(stdout: string) {
+  const credentialStatus = [
+    section(stdout, 'API Keys', 'Auth Providers'),
+    section(stdout, 'Auth Providers', 'API-Key Providers'),
+    section(stdout, 'API-Key Providers', 'Terminal Backend'),
+  ].join('\n');
+  return credentialStatus.includes(String.fromCharCode(0x2713));
+}
+
+async function checkRepoPath(agent: SupervisorAgentConfig, marker: string) {
+  if (!agent.repoPath) {
+    return doctorCheck({
+      name: 'agent:repo',
+      ok: false,
+      agent: agent.name,
+      kind: agent.kind,
+      detail: `${agent.kind} connector requires repoPath`,
+    });
+  }
+  const ok = await exists(path.join(agent.repoPath, marker));
+  return doctorCheck({
+    name: 'agent:repo',
+    ok,
+    agent: agent.name,
+    kind: agent.kind,
+    detail: ok ? `${marker} found` : `${marker} was not found`,
+  });
+}
+
+async function checkOpenClaw(agent: SupervisorAgentConfig): Promise<SupervisorDoctorCheck[]> {
+  if (agent.command?.trim()) {
+    return [
+      doctorCheck({
+        name: 'agent:custom_command',
+        ok: true,
+        agent: agent.name,
+        kind: agent.kind,
+        detail: 'custom command configured; doctor does not execute it',
+      }),
+    ];
+  }
+  const repoCheck = await checkRepoPath(agent, 'openclaw.mjs');
+  if (!repoCheck.ok || !agent.repoPath) {
+    return [repoCheck];
+  }
+  try {
+    const result = await runCommand(
+      process.execPath,
+      [path.join(agent.repoPath, 'openclaw.mjs'), 'agents', 'list', '--json'],
+      agent.repoPath
+    );
+    const parsed = JSON.parse(result.stdout) as Array<{ id?: unknown; isDefault?: unknown }>;
+    const configuredId = process.env.OPENCLAW_AGENT_ID ?? agent.connector?.openclawAgentId;
+    const hasConfiguredId =
+      typeof configuredId === 'string' && parsed.some(row => row.id === configuredId);
+    const hasAnyId = parsed.some(row => typeof row.id === 'string' && row.id.trim());
+    return [
+      repoCheck,
+      doctorCheck({
+        name: 'agent:openclaw_agents',
+        ok: hasAnyId,
+        agent: agent.name,
+        kind: agent.kind,
+        count: parsed.length,
+        detail: hasAnyId ? `read ${parsed.length} OpenClaw agent(s)` : 'no OpenClaw agents returned',
+      }),
+      doctorCheck({
+        name: 'agent:openclaw_agent_id',
+        ok: Boolean(configuredId ? hasConfiguredId : hasAnyId),
+        agent: agent.name,
+        kind: agent.kind,
+        detail: configuredId
+          ? hasConfiguredId
+            ? 'configured OpenClaw agent id is available'
+            : 'configured OpenClaw agent id was not found'
+          : hasAnyId
+            ? 'no stored OpenClaw agent id; default discovery can choose an agent'
+            : 'no OpenClaw agent id available',
+      }),
+    ];
+  } catch (error) {
+    return [
+      repoCheck,
+      doctorCheck({
+        name: 'agent:openclaw_agents',
+        ok: false,
+        agent: agent.name,
+        kind: agent.kind,
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    ];
+  }
+}
+
+async function checkHermes(agent: SupervisorAgentConfig): Promise<SupervisorDoctorCheck[]> {
+  if (agent.command?.trim()) {
+    return [
+      doctorCheck({
+        name: 'agent:custom_command',
+        ok: true,
+        agent: agent.name,
+        kind: agent.kind,
+        detail: 'custom command configured; doctor does not execute it',
+      }),
+    ];
+  }
+  const repoCheck = await checkRepoPath(agent, 'hermes');
+  if (!repoCheck.ok || !agent.repoPath) {
+    return [repoCheck];
+  }
+  const python = process.platform === 'win32'
+    ? path.join(agent.repoPath, 'venv', 'Scripts', 'python.exe')
+    : path.join(agent.repoPath, 'venv', 'bin', 'python');
+  const pythonOk = await exists(python);
+  const checks = [
+    repoCheck,
+    doctorCheck({
+      name: 'agent:hermes_python',
+      ok: pythonOk,
+      agent: agent.name,
+      kind: agent.kind,
+      detail: pythonOk ? 'Hermes virtualenv python found' : 'Hermes virtualenv python was not found',
+    }),
+  ];
+  if (!pythonOk) {
+    return checks;
+  }
+  try {
+    const result = await runCommand(python, [path.join(agent.repoPath, 'hermes'), 'status'], agent.repoPath);
+    const hasCredentials = hermesStatusHasCredentials(result.stdout);
+    return [
+      ...checks,
+      doctorCheck({
+        name: 'agent:hermes_credentials',
+        ok: hasCredentials,
+        agent: agent.name,
+        kind: agent.kind,
+        detail: hasCredentials
+          ? 'Hermes has non-interactive model/provider credentials'
+          : 'Hermes has no configured model/provider credentials for non-interactive wake runs',
+      }),
+    ];
+  } catch (error) {
+    return [
+      ...checks,
+      doctorCheck({
+        name: 'agent:hermes_status',
+        ok: false,
+        agent: agent.name,
+        kind: agent.kind,
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    ];
+  }
+}
+
+async function checkCodex(agent: SupervisorAgentConfig): Promise<SupervisorDoctorCheck[]> {
+  if (agent.command?.trim()) {
+    return [
+      doctorCheck({
+        name: 'agent:custom_command',
+        ok: true,
+        agent: agent.name,
+        kind: agent.kind,
+        detail: 'custom command configured; doctor does not execute it',
+      }),
+    ];
+  }
+  const codexOk = await findOnPath('codex');
+  const checks = [
+    doctorCheck({
+      name: 'agent:codex_cli',
+      ok: codexOk,
+      agent: agent.name,
+      kind: agent.kind,
+      detail: codexOk ? 'codex executable found on PATH' : 'codex executable was not found on PATH',
+    }),
+  ];
+  if (agent.repoPath) {
+    const repoOk = await exists(agent.repoPath);
+    checks.push(
+      doctorCheck({
+        name: 'agent:repo',
+        ok: repoOk,
+        agent: agent.name,
+        kind: agent.kind,
+        detail: repoOk ? 'Codex workdir exists' : 'Codex workdir was not found',
+      })
+    );
+  }
+  return checks;
+}
+
+async function checkAgentDoctor(agent: SupervisorAgentConfig): Promise<SupervisorDoctorCheck[]> {
+  const checks: SupervisorDoctorCheck[] = [
+    doctorCheck({
+      name: 'agent:enabled',
+      ok: true,
+      agent: agent.name,
+      kind: agent.kind,
+      detail: agent.enabled ? 'agent enabled' : 'agent disabled',
+    }),
+    doctorCheck({
+      name: 'agent:state_dir',
+      ok: await exists(agent.stateDir),
+      agent: agent.name,
+      kind: agent.kind,
+      detail: 'state dir check complete',
+    }),
+    doctorCheck({
+      name: 'agent:limits',
+      ok: agent.maxConcurrentWakeJobs > 0 && agent.connectorTimeoutMs > 0,
+      agent: agent.name,
+      kind: agent.kind,
+      detail: 'wake concurrency and connector timeout are positive',
+    }),
+  ];
+
+  if (!agent.enabled) {
+    return checks;
+  }
+  if (agent.kind === 'noop') {
+    return [
+      ...checks,
+      doctorCheck({
+        name: 'agent:connector',
+        ok: true,
+        agent: agent.name,
+        kind: agent.kind,
+        detail: 'noop connector ready',
+      }),
+    ];
+  }
+  if (agent.kind === 'shell') {
+    return [
+      ...checks,
+      doctorCheck({
+        name: 'agent:custom_command',
+        ok: Boolean(agent.command?.trim()),
+        agent: agent.name,
+        kind: agent.kind,
+        detail: agent.command?.trim()
+          ? 'shell command configured; doctor does not execute it'
+          : 'shell connector requires command',
+      }),
+    ];
+  }
+  if (agent.kind === 'openclaw') {
+    return [...checks, ...(await checkOpenClaw(agent))];
+  }
+  if (agent.kind === 'hermes') {
+    return [...checks, ...(await checkHermes(agent))];
+  }
+  if (agent.kind === 'codex') {
+    return [...checks, ...(await checkCodex(agent))];
+  }
+  return [
+    ...checks,
+    doctorCheck({
+      name: 'agent:connector',
+      ok: false,
+      agent: agent.name,
+      kind: agent.kind,
+      detail: `unsupported connector kind ${agent.kind}`,
+    }),
+  ];
 }
 
 async function commandInit(flags: SupervisorFlags) {
@@ -303,15 +626,41 @@ async function commandStatus(flags: SupervisorFlags) {
 async function commandDoctor(flags: SupervisorFlags) {
   const config = await loadSupervisorConfigOrDefault();
   await ensureSupervisorDirs(config);
-  commandOk(flags, {
+  const checks: SupervisorDoctorCheck[] = [
+    { name: 'config_load', ok: true, detail: 'supervisor config loaded' },
+    { name: 'directory_create', ok: true, detail: 'supervisor log/run directories are writable' },
+    {
+      name: 'agent_count',
+      ok: config.agents.length >= 0,
+      count: config.agents.length,
+      detail: `${config.agents.length} agent(s) configured`,
+    },
+  ];
+  for (const agent of config.agents) {
+    checks.push(...(await checkAgentDoctor(agent)));
+  }
+  const ok = checks.every(check => check.ok);
+  const payload = {
+    ok,
     config: redactConfig(config),
-    checks: [
-      { name: 'config_load', ok: true },
-      { name: 'directory_create', ok: true },
-      { name: 'agent_count', ok: config.agents.length >= 0, count: config.agents.length },
-    ],
-    message: 'agenttalk supervisor doctor passed local config checks',
-  });
+    checks,
+    message: ok
+      ? 'agenttalk supervisor doctor passed local config checks'
+      : 'agenttalk supervisor doctor found local config issues',
+  };
+  if (getBooleanFlag(flags, ['json'])) {
+    writeJson(payload);
+  } else {
+    writeStdout(`doctor: ${ok ? 'ok' : 'failed'}`);
+    for (const check of checks) {
+      const prefix = check.ok ? 'ok' : 'fail';
+      const agent = check.agent ? ` ${check.agent}` : '';
+      writeStdout(`${prefix} ${check.name}${agent}: ${check.detail}`);
+    }
+  }
+  if (!ok) {
+    process.exitCode = 1;
+  }
 }
 
 async function commandTestWake(positionals: string[], flags: SupervisorFlags) {

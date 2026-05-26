@@ -70,6 +70,14 @@ if (status.ok !== true || status.agents?.[0]?.name !== 'support') {
   throw new Error(`unexpected status result: ${JSON.stringify(status)}`);
 }
 
+const doctor = parseJson(await run(agenttalk, ['supervisor', 'doctor', '--json']));
+if (
+  doctor.ok !== true ||
+  !doctor.checks?.some(check => check.name === 'agent:connector' && check.ok === true)
+) {
+  throw new Error(`unexpected doctor result: ${JSON.stringify(doctor)}`);
+}
+
 const testWake = parseJson(await run(supervisor, ['test-wake', 'support', '--json']));
 if (testWake.ok !== true || testWake.result?.handled !== true) {
   throw new Error(`unexpected test-wake result: ${JSON.stringify(testWake)}`);
@@ -95,6 +103,7 @@ console.log(
     ok: true,
     entrypoints: ['agenttalk-supervisor', 'agenttalk supervisor'],
     agents: status.agents.length,
+    doctorChecks: doctor.checks.length,
     testWake: testWake.result,
     logs: logs.events.length,
     servicePlatform: service.platform,

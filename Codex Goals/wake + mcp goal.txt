@@ -1471,3 +1471,38 @@ Still open after MCP supervisor tool implementation:
 - Create the new free Render service agent-talk-mcp from either GitHub source access or the published image.
 - Verify deployed /healthz, /readyz, and /mcp.
 - Configure Hermes with non-interactive provider credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, supervisor doctor readiness checks
+
+Completed:
+
+- Tightened agenttalk supervisor doctor beyond shallow config checks.
+- Doctor now reports per-agent readiness without dispatching wakes:
+  - state dir presence
+  - positive concurrency and timeout limits
+  - noop readiness
+  - shell/custom command presence without executing configured commands
+  - OpenClaw repo marker plus openclaw agents list --json and configured agent-id availability
+  - Hermes repo marker, virtualenv python, and non-interactive credential readiness
+  - Codex executable availability and configured workdir presence
+- Doctor now returns ok=false and sets a failing exit code when enabled agents have failing checks.
+- Updated smoke:supervisor to run agenttalk supervisor doctor.
+- Updated docs/agenttalk-supervisor.md with doctor behavior and safety boundary.
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:supervisor
+- pistils_chat_cli: isolated real-machine supervisor setup + doctor in a temp AGENTTALK_SUPERVISOR_HOME
+  - OpenClaw configured and doctor verified 4 OpenClaw agents plus configured id availability
+  - Codex configured and doctor verified codex executable plus workdir
+  - Hermes skipped for the known no non-interactive model/provider credentials reason
+- pistils_chat_cli: npm run check
+
+Still open after supervisor doctor readiness checks:
+
+- Run the GitHub Actions image workflow or otherwise publish ghcr.io/con-urr/agent-talk-mcp.
+- If the GHCR package remains private, configure a Render registry credential.
+- Create the new free Render service agent-talk-mcp from either GitHub source access or the published image.
+- Verify deployed /healthz, /readyz, and /mcp.
+- Configure Hermes with non-interactive provider credentials and rerun the real Hermes connector smoke.

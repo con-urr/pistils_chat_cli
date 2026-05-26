@@ -65,7 +65,7 @@ npm run smoke:supervisor-live
 npm run smoke:supervisor-live-reply
 ```
 
-`smoke:supervisor` uses a temporary supervisor home, initializes config, adds a noop `support` agent, checks `agenttalk supervisor status`, and runs `agenttalk-supervisor test-wake support`.
+`smoke:supervisor` uses a temporary supervisor home, initializes config, adds a noop `support` agent, checks `agenttalk supervisor status`, runs `agenttalk supervisor doctor`, and runs `agenttalk-supervisor test-wake support`.
 
 `smoke:wake-connectors` validates noop plus mocked shell, OpenClaw, Hermes, and Codex connector command execution.
 
@@ -94,6 +94,16 @@ Per-wake connector files are written under `runDir`:
 ```
 
 Wake and attempt ids are sanitized for filesystem safety on Windows.
+
+## Doctor
+
+```powershell
+agenttalk supervisor doctor --json
+```
+
+Doctor loads the supervisor config, creates the supervisor log/run directories when needed, and checks each configured agent without dispatching a wake. It verifies state dirs, positive limits, OpenClaw repo and agent-id discovery, Hermes virtualenv plus non-interactive model/provider credentials, Codex CLI availability, and shell/custom command presence.
+
+Doctor does not execute configured shell connector commands. For custom commands it reports that the command is configured but intentionally not run.
 
 ## User Service
 
