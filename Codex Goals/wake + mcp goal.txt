@@ -2442,3 +2442,33 @@ Still open after final goal audit command:
 - Run `AGENTTALK_MCP_BASE_URL=https://<service>.onrender.com npm run smoke:deployed` after deployment.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
 - Rerun `npm run audit:goal -- --strict` and require it to pass before marking the overall goal complete.
+
+Work log - 2026-05-26, hosted MCP Render branch-selection docs
+
+Completed in Agent-Talk-MCP:
+
+- Corrected README.md so the current PR deploy branch is `codex/render-mcp-service`, not `main`.
+- Updated docs/render-deploy.md prerequisites to state that Dashboard Blueprint users must manually select `codex/render-mcp-service` before merge.
+- Updated docs/render-deploy.md to point users at `createCommands.gitBacked.command` from `npm run preflight:render` as the branch-correct CLI path.
+- Pushed Agent-Talk-MCP commit `799342648f6911cd41a2b39dbbf1e1a70d843947`.
+- Updated `con-urr/Agent-Talk-MCP#1` with the branch-selection documentation evidence.
+
+Validation passed:
+
+- Agent-Talk-MCP: `git diff --check`
+- Agent-Talk-MCP: `npm run check`
+- pistils_chat_cli: post-commit `npm run audit:goal`
+  - all repo head and tracked-worktree checks passed;
+  - Render preflight returned JSON;
+  - Render API/MCP auth and target project/environment passed;
+  - Render source/image access, service creation, and deployed smoke remained blocked;
+  - Hermes preflight returned JSON;
+  - Hermes credentials and real Hermes connector smoke remained blocked.
+
+Still open after hosted MCP Render branch-selection docs:
+
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, or make/configure the GHCR image pullable by Render.
+- Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris using the preflight-reported command after one source-access path is available.
+- Run `AGENTTALK_MCP_BASE_URL=https://<service>.onrender.com npm run smoke:deployed` after deployment.
+- Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+- Rerun `npm run audit:goal -- --strict` and require it to pass before marking the overall goal complete.
