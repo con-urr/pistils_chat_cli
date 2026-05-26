@@ -3149,3 +3149,23 @@ Still open after Hermes Codex OAuth helper:
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
 - Rerun real Hermes connector smoke after credentials are configured.
+
+Current-head verification after Hermes Codex OAuth helper:
+
+- Pushed pistils_chat_cli commit `a9f2138bf13c7e56463e03ef2489f7136b164ff5` on `codex/agenttalk-mcp-supervisor`.
+- Updated pistils_chat_cli PR #1 with the current head, validation commands, and remaining gates.
+- GitHub Actions passed on the current head: run `26446072191`, jobs `validate (20)` and `validate (22)`.
+- Reran `npm run audit:goal` on a clean tracked worktree.
+- Current audit summary after helper current-head verification:
+  - pass: 26
+  - warn: 2
+  - fail: 5
+- The new `hermes:codex_oauth_helper_artifacts` and `hermes:codex_oauth_guard_smoke` audit checks pass.
+
+Still open after Hermes helper current-head verification:
+
+- User must run `npm run hermes:codex-oauth -- --confirm` and approve the Hermes-owned OAuth browser flow, or configure an API-key provider.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
+- Rerun real Hermes connector smoke after credentials are configured.
