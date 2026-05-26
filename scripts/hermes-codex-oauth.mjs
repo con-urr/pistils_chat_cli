@@ -41,9 +41,27 @@ function redactedCommand(commandArgs) {
   return `cd <hermes-repo> ${separator} ${repoLocalPython} ${repoLocalHermes} ${commandArgs.join(' ')}`;
 }
 
+function killProcessTree(child) {
+  if (!child || !child.pid) {
+    return;
+  }
+  if (process.platform === 'win32') {
+    spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    }).on('error', () => {});
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGTERM');
+  } catch {
+    child.kill();
+  }
+}
+
 function stopActiveChild() {
-  if (activeChild && !activeChild.killed) {
-    activeChild.kill();
+  if (activeChild) {
+    killProcessTree(activeChild);
   }
 }
 
@@ -60,6 +78,7 @@ function runInteractive(commandArgs) {
       cwd: repo,
       stdio: 'inherit',
       windowsHide: false,
+      detached: process.platform !== 'win32',
     });
     activeChild = child;
     let timedOut = false;
@@ -76,10 +95,18 @@ function runInteractive(commandArgs) {
             timeoutSeconds,
             repo: '[redacted]',
           }, null, 2));
-          child.kill();
+          killProcessTree(child);
           forceKillTimer = setTimeout(() => {
             if (!closed) {
-              child.kill('SIGKILL');
+              if (process.platform === 'win32') {
+                killProcessTree(child);
+              } else {
+                try {
+                  process.kill(-child.pid, 'SIGKILL');
+                } catch {
+                  child.kill('SIGKILL');
+                }
+              }
             }
           }, 2000);
         }, timeoutMs)

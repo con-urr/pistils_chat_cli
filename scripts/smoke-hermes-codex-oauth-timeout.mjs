@@ -30,7 +30,9 @@ function run(command, args, options = {}) {
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), 'agenttalk-hermes-oauth-timeout-'));
 const fakeHermes = path.join(tempDir, 'fake-hermes.mjs');
+const fakeGrandchild = path.join(tempDir, 'fake-grandchild.mjs');
 const pidFile = path.join(tempDir, 'child.pid');
+const grandchildPidFile = path.join(tempDir, 'grandchild.pid');
 
 function isProcessRunning(pid) {
   try {
@@ -42,10 +44,22 @@ function isProcessRunning(pid) {
 }
 
 try {
+  await writeFile(fakeGrandchild, `
+import { writeFileSync } from 'node:fs';
+
+writeFileSync(process.env.AGENTTALK_FAKE_HERMES_GRANDCHILD_PID_FILE, String(process.pid));
+setInterval(() => {}, 1000);
+`, 'utf8');
+
   await writeFile(fakeHermes, `
+import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 writeFileSync(process.env.AGENTTALK_FAKE_HERMES_PID_FILE, String(process.pid));
+spawn(process.execPath, [process.env.AGENTTALK_FAKE_HERMES_GRANDCHILD], {
+  stdio: 'ignore',
+  windowsHide: true,
+});
 setInterval(() => {}, 1000);
 `, 'utf8');
 
@@ -59,11 +73,13 @@ setInterval(() => {}, 1000);
     '--hermes-entrypoint',
     fakeHermes,
     '--timeout-seconds',
-    '0.25',
+    '1',
   ], {
     env: {
       ...process.env,
       AGENTTALK_FAKE_HERMES_PID_FILE: pidFile,
+      AGENTTALK_FAKE_HERMES_GRANDCHILD_PID_FILE: grandchildPidFile,
+      AGENTTALK_FAKE_HERMES_GRANDCHILD: fakeGrandchild,
     },
   });
   const output = `${result.stdout}\n${result.stderr}`;
@@ -83,18 +99,28 @@ setInterval(() => {}, 1000);
   if (!existsSync(pidFile)) {
     throw new Error('hermes-codex-oauth timeout smoke did not observe the fake child process');
   }
+  if (!existsSync(grandchildPidFile)) {
+    throw new Error('hermes-codex-oauth timeout smoke did not observe the fake grandchild process');
+  }
   const childPid = Number(readFileSync(pidFile, 'utf8'));
+  const grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
   if (!Number.isInteger(childPid) || childPid <= 0) {
     throw new Error(`hermes-codex-oauth timeout smoke recorded an invalid child pid: ${childPid}`);
   }
+  if (!Number.isInteger(grandchildPid) || grandchildPid <= 0) {
+    throw new Error(`hermes-codex-oauth timeout smoke recorded an invalid grandchild pid: ${grandchildPid}`);
+  }
   if (isProcessRunning(childPid)) {
     throw new Error(`hermes-codex-oauth timeout left fake child process ${childPid} running`);
+  }
+  if (isProcessRunning(grandchildPid)) {
+    throw new Error(`hermes-codex-oauth timeout left fake grandchild process ${grandchildPid} running`);
   }
   if (/Bearer\s+[A-Za-z0-9._-]+|[A-Z0-9_]*API_KEY=[^\s]+/i.test(output)) {
     throw new Error('hermes-codex-oauth timeout leaked a credential-shaped value');
   }
 
-  console.log(JSON.stringify({ ok: true, guard: 'timeout-cleans-child' }));
+  console.log(JSON.stringify({ ok: true, guard: 'timeout-cleans-process-tree' }));
 } finally {
   await rm(tempDir, { recursive: true, force: true });
 }

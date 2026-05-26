@@ -3248,3 +3248,32 @@ Still open after timeout cleanup current-head verification:
 - Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
 - Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
 - Run deployed MCP smoke after service creation.
+
+Work log - 2026-05-26, Hermes OAuth process-tree cleanup hardening
+
+Completed in pistils_chat_cli:
+
+- Strengthened `scripts/hermes-codex-oauth.mjs` timeout/signal cleanup to kill the spawned Hermes command process tree:
+  - uses `taskkill /T /F` on Windows;
+  - uses a detached process group plus process-group signals on non-Windows;
+  - falls back to direct child kill if process-group cleanup is unavailable.
+- Extended `scripts/smoke-hermes-codex-oauth-timeout.mjs` so the fake Hermes command spawns a grandchild process and the smoke verifies both child and grandchild are gone after timeout.
+
+Validation passed:
+
+- pistils_chat_cli: `node --check scripts\hermes-codex-oauth.mjs`
+- pistils_chat_cli: `node --check scripts\smoke-hermes-codex-oauth-timeout.mjs`
+- pistils_chat_cli: `npm run smoke:hermes-codex-oauth-timeout`
+- pistils_chat_cli: `npm run check`
+- pistils_chat_cli: `npm run audit:goal`
+  - current dirty-worktree warning is expected until this helper/test/log update is committed;
+  - final completion remains blocked by Render source/service/deployed-smoke and Hermes credential/real-smoke gates.
+- pistils_chat_cli: `git diff --check`
+
+Still open after Hermes OAuth process-tree cleanup hardening:
+
+- Commit and push this helper/test/log update, wait for GitHub checks, and rerun `npm run audit:goal` on the clean current head.
+- User must approve a Hermes-owned OAuth browser/device flow or configure an API-key provider, then rerun `npm run preflight:hermes` and the real Hermes connector smoke.
+- Grant Render GitHub integration access to `con-urr/Agent-Talk-MCP`, make the GHCR package public, or add a narrow GHCR read credential to Render.
+- Run `npm run render:create -- --mode git --confirm` or the appropriate image mode after source/image access is available.
+- Run deployed MCP smoke after service creation.
