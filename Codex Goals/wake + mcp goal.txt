@@ -1268,3 +1268,37 @@ Still open after connector docs/opt-in smoke:
 - Run AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors when intentional model/runtime execution is acceptable.
 - Push/publish pistils_chat_cli MCP-export changes before Render builds Agent-Talk-MCP from GitHub.
 - Create/apply the new Render Blueprint service and verify the deployed /healthz, /readyz, and /mcp endpoints.
+
+Work log - 2026-05-26, branches, PRs, and Render create attempt
+
+Completed:
+
+- Created and pushed branch codex/agenttalk-mcp-supervisor in pistils_chat_cli.
+- Created draft PR: https://github.com/con-urr/pistils_chat_cli/pull/1
+- Created and pushed branch codex/agenttalk-wake-presence in live-chat.
+- Created draft PR: https://github.com/con-urr/live-chat/pull/1
+- Created and pushed branch codex/render-mcp-service in Agent-Talk-MCP.
+- Created draft PR: https://github.com/con-urr/Agent-Talk-MCP/pull/1
+- Verified Render workspace/project context:
+  - workspace: Connor's workspace
+  - project: My project
+  - environment: Cervaris / evm-d7ampnp4tr6s739q3q9g
+- Verified existing CrisisTrainingSim remained present and unchanged.
+- Attempted Render Git-backed service creation for Agent-Talk-MCP:
+  - service name: agent-talk-mcp
+  - repo: https://github.com/con-urr/Agent-Talk-MCP
+  - branch: codex/render-mcp-service
+  - result: Render returned repository URL invalid or unfetchable.
+- Confirmed via GitHub connector that Agent-Talk-MCP is private.
+- Created an image-backed probe service only to test Render CLI image-backed creation, then removed it. A follow-up render services list showed only CrisisTrainingSim remaining.
+
+Current Render blocker:
+
+- Render's GitHub integration cannot fetch the private Agent-Talk-MCP repo from the CLI.
+- To finish the hosted deploy, grant Render access to con-urr/Agent-Talk-MCP or make the repo public, then rerun service creation from branch codex/render-mcp-service.
+
+Still open after branches/PRs/Render attempt:
+
+- Grant Render GitHub access or make Agent-Talk-MCP public.
+- Create the new free Render service agent-talk-mcp and verify deployed /healthz, /readyz, and /mcp.
+- Run AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors when intentional model/runtime execution is acceptable.
