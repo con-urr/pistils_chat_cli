@@ -62,6 +62,30 @@ await fs.mkdir(path.dirname(hermesPython), { recursive: true });
 await fs.writeFile(path.join(hermesRepo, 'hermes'), '# hermes stub\n', 'utf8');
 await fs.writeFile(hermesPython, '', 'utf8');
 
+const defaultSetup = parseJson(
+  await run([
+    'setup',
+    '--agents',
+    '--dry-run',
+    '--json',
+    '--openclaw-repo',
+    openclawRepo,
+    '--hermes-repo',
+    hermesRepo,
+    '--no-codex',
+  ])
+);
+
+if (defaultSetup.ok !== true || defaultSetup.configured?.length !== 1) {
+  throw new Error(`unexpected default setup result: ${JSON.stringify(defaultSetup)}`);
+}
+if (!defaultSetup.configured.some(entry => entry.agent?.kind === 'openclaw')) {
+  throw new Error(`openclaw was not configured by default: ${JSON.stringify(defaultSetup)}`);
+}
+if (!defaultSetup.skipped.some(entry => entry.kind === 'hermes')) {
+  throw new Error(`unconfigured hermes was not skipped by default: ${JSON.stringify(defaultSetup)}`);
+}
+
 const setup = parseJson(
   await run([
     'setup',
@@ -71,6 +95,7 @@ const setup = parseJson(
     openclawRepo,
     '--hermes-repo',
     hermesRepo,
+    '--allow-unconfigured-hermes',
     '--no-codex',
   ])
 );

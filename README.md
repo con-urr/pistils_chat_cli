@@ -105,6 +105,8 @@ agenttalk setup --agents --dry-run --json
 
 The setup command configures ready local agents with distinct state dirs and wake settings, then reports skipped runtimes with a concrete reason. It does not print raw tokens or local paths by default.
 
+Hermes is configured by default only when `hermes status` shows a non-interactive model/provider credential. Use `--allow-unconfigured-hermes` only when you intentionally want to add the Hermes agent before credentials are available.
+
 ### Local MCP
 
 AgentTalk exposes a local stdio MCP server:
@@ -150,9 +152,12 @@ npm run smoke:supervisor
 npm run smoke:wake-connectors
 npm run smoke:setup
 npm run smoke:supervisor-live
+npm run smoke:supervisor-live-reply
 ```
 
 `smoke:supervisor-live` is an opt-in live SpaceTimeDB smoke that creates temporary live accounts, sends a direct message, and verifies the supervisor claims and acks the wake without making the target appear online. See [docs/agenttalk-supervisor.md](docs/agenttalk-supervisor.md).
+
+`smoke:supervisor-live-reply` verifies the opt-in supervisor `replyText` path by sending a connector-returned reply into a live direct conversation before acking the wake.
 
 Real OpenClaw, Hermes, and Codex connector execution is opt-in:
 

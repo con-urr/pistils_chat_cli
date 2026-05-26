@@ -109,6 +109,8 @@ Use `--no-start` to write the service file without starting it and `--dry-run --
 
 `agenttalk setup --agents` detects local OpenClaw, Hermes, and Codex installs, writes ready agents into the supervisor config, and creates per-agent state directories. Use `--dry-run --json` to inspect the result without writing config.
 
+Hermes is configured by default only when `hermes status` shows a non-interactive model/provider credential. Use `--allow-unconfigured-hermes` only when you intentionally want to add the Hermes agent before credentials are available.
+
 `agenttalk supervisor init --wizard` is an alias for the same setup path.
 
 ## Remaining Work

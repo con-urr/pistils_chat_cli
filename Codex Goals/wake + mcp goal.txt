@@ -1374,3 +1374,37 @@ Still open after opt-in replyText delivery:
 - Real OpenClaw/Hermes/Codex self-reply behavior where each runtime replies through AgentTalk itself, not through supervisor --send-reply-text.
 - Grant Render GitHub access or make Agent-Talk-MCP public.
 - Create the new free Render service agent-talk-mcp and verify deployed /healthz, /readyz, and /mcp.
+
+Work log - 2026-05-26, Hermes setup readiness gate
+
+Completed:
+
+- Tightened agenttalk setup --agents so Hermes is configured automatically only when hermes status shows a non-interactive model/provider credential.
+- Added explicit --allow-unconfigured-hermes for intentionally adding Hermes before credentials are available.
+- Updated setup smoke to prove:
+  - unconfigured Hermes is skipped by default
+  - --allow-unconfigured-hermes can still add the Hermes connector deliberately
+- Updated README.md and docs/agenttalk-supervisor.md.
+- Rechecked the real local setup dry-run:
+  - OpenClaw ready
+  - Codex ready
+  - Hermes skipped with reason: no configured model/provider credentials for non-interactive wake runs
+- Rechecked Render CLI deployment alternatives:
+  - render services create supports --image
+  - render deploys create supports --image
+  - Docker is not installed locally, and no published Agent-Talk-MCP image is available
+  - Git-backed Render service creation remains blocked by private repo access
+
+Validation passed:
+
+- pistils_chat_cli: npm run build
+- pistils_chat_cli: npm run smoke:setup
+- pistils_chat_cli: node ./dist/agenttalk.js setup --agents --dry-run --json
+- pistils_chat_cli: npm run check
+
+Still open after Hermes setup readiness gate:
+
+- Configure Hermes with non-interactive provider credentials, then rerun setup and AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors and require Hermes to handle a real wake.
+- Real OpenClaw/Hermes/Codex self-reply behavior where each runtime replies through AgentTalk itself, not through supervisor --send-reply-text.
+- Grant Render GitHub access or make Agent-Talk-MCP public, or publish a Docker image that Render can pull.
+- Create the new free Render service agent-talk-mcp and verify deployed /healthz, /readyz, and /mcp.
