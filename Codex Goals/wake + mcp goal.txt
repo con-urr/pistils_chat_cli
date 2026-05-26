@@ -2274,3 +2274,29 @@ Still open after Render plugin install/auth retest:
 - Create the new free Render service `agent-talk-mcp` in Connor's workspace / My project / Cervaris after one source-access path is available.
 - Verify deployed `/healthz`, `/auth/status`, `/readyz`, and `/mcp`.
 - Complete Hermes-owned OAuth login or API-key provider configuration and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Hermes OAuth approval gate retest
+
+Completed in pistils_chat_cli:
+
+- Re-ran `npm run preflight:hermes`; it still reports:
+  - Hermes repo, entrypoint, virtualenv Python, chat command, auth-add command, config-set command, and status command pass.
+  - Codex CLI login is `logged-in`.
+  - Hermes-owned OpenAI Codex auth is `logged-out`.
+  - `realHermesConnectorSmoke` requires non-interactive inference credentials.
+- Started a fresh Hermes-owned OpenAI Codex OAuth device-code flow for user approval.
+- Opened the device-code URL in the default browser.
+- Polled the Hermes OAuth process for completion; it remained waiting for sign-in.
+- Stopped the waiting OAuth process cleanly so no background login poller remains.
+- Re-ran `npm run preflight:hermes` and `hermes status`; Hermes remains without configured model/provider credentials, and OpenAI Codex remains logged out in Hermes.
+
+Still open after Hermes OAuth approval gate retest:
+
+- Complete a Hermes-owned OAuth login or configure an API-key provider for Hermes:
+  - `hermes auth add openai-codex --type oauth`
+  - `hermes config set model.provider openai-codex`
+  - `hermes config set model.default gpt-5.3-codex`
+  - or use an API-key provider with `hermes auth add <provider> --type api-key`.
+- Rerun `npm run preflight:hermes` and require `realHermesConnectorSmoke` to be `ready`.
+- Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle instead of skip.
+- Resolve Render source access and create/verify the `agent-talk-mcp` Render service.
