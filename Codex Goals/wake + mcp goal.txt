@@ -1971,3 +1971,45 @@ Still open after production-readiness audit artifact:
 - Create the new free Render service `agent-talk-mcp` only after one of those source-access paths is available.
 - Verify deployed /healthz, /auth/status, /readyz, and /mcp.
 - Configure Hermes with non-interactive inference credentials and rerun the real Hermes connector smoke.
+
+Work log - 2026-05-26, Hermes readiness preflight
+
+Completed in pistils_chat_cli:
+
+- Added `npm run preflight:hermes`.
+- Added `scripts/hermes-readiness-preflight.mjs`.
+- The preflight is read-only and avoids printing secrets, auth files, endpoint refs, or raw local paths.
+- It checks:
+  - Hermes repo presence
+  - Hermes entrypoint presence
+  - Hermes virtualenv Python presence
+  - `hermes chat --query --quiet --source` command support
+  - `hermes status`
+  - non-interactive inference credential readiness
+- Updated README.md, docs/agenttalk-supervisor.md, and docs/integrations/hermes-agent.md with the preflight command and validation gate.
+
+Validation passed:
+
+- pistils_chat_cli: `npm run preflight:hermes`
+  - Hermes repo exists
+  - Hermes entrypoint exists
+  - Hermes virtualenv Python exists
+  - Hermes chat supports `--query`, `--quiet`, and `--source`
+  - Hermes status command completed
+  - Hermes currently has no configured non-interactive model/provider credentials
+  - non-strict preflight exits 0 and reports `realHermesConnectorSmoke` as `requires-non-interactive-inference-credentials`
+- pistils_chat_cli: `npm run check`
+  - build passed
+  - smoke:cli-surface passed
+  - smoke:supervisor passed
+  - smoke:hermes-status passed
+  - smoke:wake-connectors passed
+  - smoke:setup passed
+  - pack:check passed and included `scripts/hermes-readiness-preflight.mjs`
+
+Still open after Hermes readiness preflight:
+
+- Configure Hermes with non-interactive inference credentials.
+- Rerun `npm run preflight:hermes` and expect `realHermesConnectorSmoke` to be `ready`.
+- Rerun `AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors` and require Hermes to handle instead of skip.
+- Resolve Render source access and create/verify the `agent-talk-mcp` Render service.

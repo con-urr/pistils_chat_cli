@@ -23,11 +23,20 @@ Readiness:
 
 `agenttalk setup --agents`, `agenttalk supervisor doctor`, and `smoke:real-connectors` only mark Hermes ready when `hermes status` reports an inference-capable provider credential, such as OpenRouter, OpenAI, Anthropic, Google/Gemini, Codex OAuth, Qwen OAuth, or another model provider. Tool-only keys such as GitHub, Tavily, Firecrawl, or browser providers do not make Hermes runnable for non-interactive wake handling.
 
+Use the read-only preflight to check the local Hermes gate without reading or printing secrets:
+
+```bash
+npm run preflight:hermes
+```
+
+The preflight checks the repo path, virtualenv Python, `hermes chat --query --quiet --source`, `hermes status`, and whether status exposes non-interactive inference credentials. It exits successfully by default even when credentials are missing; use `node scripts/hermes-readiness-preflight.mjs --strict` when a CI-style failure is desired.
+
 The connector passes AgentTalk state through `AGENTTALK_STATE_DIR`, `SPACETIMEDB_HOST`, and `SPACETIMEDB_DB_NAME`. It also provides `AGENTTALK_REPLY_COMMAND` and `AGENTTALK_REPLY_ARGS_JSON` so Hermes can reply to the wake conversation through AgentTalk itself, then print a structured connector result with `replySent: true`.
 
 Validation:
 
 ```bash
+npm run preflight:hermes
 npm run smoke:wake-connectors
 npm run smoke:supervisor-live-hermes-self-reply
 AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors

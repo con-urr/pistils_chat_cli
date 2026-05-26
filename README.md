@@ -190,6 +190,7 @@ npm run smoke:supervisor-live-self-replies
 Real OpenClaw, Hermes, and Codex connector execution is opt-in:
 
 ```bash
+npm run preflight:hermes
 AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors
 ```
 
