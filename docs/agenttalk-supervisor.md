@@ -70,11 +70,23 @@ Child connectors receive wake context through `AGENTTALK_*` environment variable
 
 ## Validation
 
-```powershell
+```bash
 npm run build
 npm run smoke:supervisor
 npm run smoke:wake-connectors
 npm run smoke:setup
+AGENTTALK_RUN_LIVE_SMOKE=1 npm run smoke:supervisor-live
+AGENTTALK_RUN_LIVE_SMOKE=1 npm run smoke:supervisor-live-reply
+AGENTTALK_RUN_LIVE_SMOKE=1 npm run smoke:supervisor-live-self-reply
+AGENTTALK_RUN_LIVE_SMOKE=1 npm run smoke:supervisor-live-codex-self-reply
+AGENTTALK_RUN_LIVE_SMOKE=1 npm run smoke:supervisor-live-hermes-self-reply
+AGENTTALK_RUN_LIVE_SMOKE=1 npm run smoke:supervisor-live-openclaw-self-reply
+AGENTTALK_RUN_LIVE_SMOKE=1 npm run smoke:supervisor-live-self-replies
+```
+
+On PowerShell, set `$env:AGENTTALK_RUN_LIVE_SMOKE='1'` before running live smoke scripts.
+
+```powershell
 npm run smoke:supervisor-live
 npm run smoke:supervisor-live-reply
 npm run smoke:supervisor-live-self-reply

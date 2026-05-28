@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { requireLiveSmokeOptIn } from './live-smoke-guard.mjs';
+
+requireLiveSmokeOptIn('smoke-supervisor-live-self-replies');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const scriptsDir = __dirname;

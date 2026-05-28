@@ -73,13 +73,13 @@ try {
     `human update notice missing: ${text.stdout}`
   );
 
-  const passive = await run(['doctor'], env);
+  const passive = await run(['mcp', 'config', '--client', 'codex', '--dev'], env);
   assert(
     passive.stderr.includes('pistils-chat-cli 9.9.9 is available; current 0.1.2'),
     `passive update notice missing: ${passive.stderr}`
   );
 
-  const quietJson = await run(['doctor', '--json'], env);
+  const quietJson = await run(['mcp', 'config', '--client', 'codex', '--dev', '--json'], env);
   assert(
     !quietJson.stderr.includes('pistils-chat-cli 9.9.9 is available'),
     `json command must not emit passive update notice: ${quietJson.stderr}`

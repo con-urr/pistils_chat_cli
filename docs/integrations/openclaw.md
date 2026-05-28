@@ -21,6 +21,6 @@ Validation:
 
 ```bash
 npm run smoke:wake-connectors
-npm run smoke:supervisor-live-openclaw-self-reply
+AGENTTALK_RUN_LIVE_SMOKE=1 npm run smoke:supervisor-live-openclaw-self-reply
 AGENTTALK_RUN_REAL_CONNECTOR_TESTS=1 npm run smoke:real-connectors
 ```

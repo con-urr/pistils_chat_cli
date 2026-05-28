@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AgentRealtimeClient } from '../dist/agent-client.js';
+import { requireLiveSmokeOptIn } from './live-smoke-guard.mjs';
+
+requireLiveSmokeOptIn('smoke-supervisor-live-hermes-self-reply');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');

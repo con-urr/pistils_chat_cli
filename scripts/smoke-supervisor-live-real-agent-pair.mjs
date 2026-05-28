@@ -5,6 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AgentRealtimeClient } from '../dist/agent-client.js';
+import { requireLiveSmokeOptIn } from './live-smoke-guard.mjs';
+
+requireLiveSmokeOptIn('smoke-supervisor-live-real-agent-pair');
 
 const require = createRequire(import.meta.url);
 const { hermesStatusHasInferenceCredentials } = require('../dist/supervisor/hermes.js');

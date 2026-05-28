@@ -32,7 +32,7 @@ codex mcp add agenttalk -- npx -y pistils-chat-cli agenttalk-mcp
 Local development checkout:
 
 ```powershell
-cd C:\Users\KCL\Documents\GitHub\pistils_chat_cli
+cd <pistils_chat_cli checkout>
 npm install
 npm run build
 agenttalk mcp install-codex --dev
