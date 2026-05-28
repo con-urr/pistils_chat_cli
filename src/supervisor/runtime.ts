@@ -5,11 +5,16 @@ import { AgentRealtimeClient, AgentTalkWakeClient } from '../agent-client';
 import type * as ModuleTypes from '../module_bindings/types';
 import { createWakeDispatchPayload } from '../wake';
 import {
+  allowedWakeSenderAgentIdsJson,
   ensureSupervisorDirs,
   expandHome,
   loadSupervisorConfigOrDefault,
+  normalizeControlProfile,
+  normalizeWakeSenderAgentIds,
   type SupervisorAgentConfig,
   type SupervisorConfig,
+  wakeAccessMode,
+  wakeSenderAgentIdsJson,
 } from './config';
 import { executeWakeConnector, type WakeConnectorResult } from './connectors';
 import { stringifyJsonSafe, toJsonSafe } from './json';
@@ -20,6 +25,7 @@ type RuntimeAgent = {
   realtime: AgentRealtimeClient;
   wakeClient: AgentTalkWakeClient;
   agentId: string;
+  connectorStateDir: string;
   registrationId: string;
   inFlightWakeIds: Set<string>;
   jobs: Set<Promise<void>>;
@@ -33,6 +39,11 @@ type RuntimeAgent = {
     lastFailureAt?: string;
     failureCount: number;
   };
+};
+
+type WakeDispatchLock = {
+  lockPath: string;
+  release: () => Promise<void>;
 };
 
 export type SupervisorRunOptions = {
@@ -71,6 +82,88 @@ function shortClientRequestId(prefix: string, value: string) {
   return `${prefix}:${digest}`;
 }
 
+function lockPidIsAlive(pid: unknown) {
+  if (typeof pid !== 'number' || !Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function acquireWakeDispatchLock(
+  runtime: RuntimeAgent,
+  wake: ModuleTypes.WakeRequestView,
+  attemptId: string
+): Promise<WakeDispatchLock | { busy: string }> {
+  const lockDir = path.join(runtime.connectorStateDir, 'locks');
+  await fs.mkdir(lockDir, { recursive: true });
+  await fs.chmod(lockDir, 0o700).catch(() => undefined);
+  const lockPath = path.join(lockDir, 'connector-dispatch.lock');
+  const startedAt = Date.now();
+  const metadata = {
+    pid: process.pid,
+    agentName: runtime.config.name,
+    agentId: runtime.agentId,
+    wakeId: wake.wakeId,
+    attemptId,
+    startedAt: new Date(startedAt).toISOString(),
+  };
+
+  const create = async (): Promise<WakeDispatchLock> => {
+    const handle = await fs.open(lockPath, 'wx');
+    await handle.writeFile(`${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+    await handle.close();
+    await fs.chmod(lockPath, 0o600).catch(() => undefined);
+    return {
+      lockPath,
+      release: async () => {
+        await fs.unlink(lockPath).catch(() => undefined);
+      },
+    };
+  };
+
+  try {
+    return await create();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      throw error;
+    }
+  }
+
+  let existing: Record<string, unknown> = {};
+  try {
+    existing = JSON.parse(await fs.readFile(lockPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    existing = {};
+  }
+  const existingStarted = typeof existing.startedAt === 'string'
+    ? Date.parse(existing.startedAt)
+    : 0;
+  const staleMs = Math.max(runtime.config.connectorTimeoutMs + 120_000, 300_000);
+  const stale =
+    !lockPidIsAlive(existing.pid) ||
+    !Number.isFinite(existingStarted) ||
+    Date.now() - existingStarted > staleMs;
+  if (stale) {
+    await fs.unlink(lockPath).catch(() => undefined);
+    try {
+      return await create();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error;
+      }
+    }
+  }
+
+  return {
+    busy: `runtime_busy: connector dispatch already active for wake ${String(existing.wakeId ?? 'unknown')}`,
+  };
+}
+
 async function appendLog(
   config: SupervisorConfig,
   agent: SupervisorAgentConfig | undefined,
@@ -102,6 +195,7 @@ async function connectAgent(config: SupervisorConfig, agent: SupervisorAgentConf
     host: config.host,
     databaseName: config.databaseName,
     token: realtime.token,
+    identity: realtime.identityHex,
   });
   return realtime;
 }
@@ -143,13 +237,18 @@ async function configureWake(
   realtime: AgentRealtimeClient,
   profile: ModuleTypes.AgentProfile
 ) {
+  const wakeEnabled = agent.enabled && agent.wake.enabled === true;
+  const wakeReasons = new Set(agent.wake.reasons ?? []);
   const registrationId = supervisorRegistrationId(profile.agentId);
-  await realtime.heartbeat(agent.wake.statusText, 'agenttalk-supervisor');
+  await realtime.heartbeat(
+    wakeEnabled ? agent.wake.statusText : 'Wake disabled',
+    'agenttalk-supervisor'
+  );
   await realtime.registerWake({
     kind: 'local_daemon',
     agentId: profile.agentId,
     registrationId,
-    enabled: agent.enabled,
+    enabled: wakeEnabled,
     metadataJson: JSON.stringify({
       supervisor: true,
       agentName: agent.name,
@@ -158,19 +257,103 @@ async function configureWake(
   });
   await realtime.setWakePolicy({
     agentId: profile.agentId,
-    wakeOnDirectMessage: config.defaultWakePolicy.wakeOnDirectMessage,
-    wakeOnMention: config.defaultWakePolicy.wakeOnMention,
-    wakeOnGroupMessage: config.defaultWakePolicy.wakeOnGroupMessage,
-    acceptsNewConversations: config.defaultWakePolicy.acceptsNewConversations,
+    wakeOnDirectMessage:
+      wakeEnabled && (wakeReasons.has('direct_message') || wakeReasons.has('direct')),
+    wakeOnMention: wakeEnabled && wakeReasons.has('mention'),
+    wakeOnGroupMessage: wakeEnabled && wakeReasons.has('group_message'),
+    wakeOnHandoff: wakeEnabled && wakeReasons.has('handoff'),
+    wakeOnBusinessInquiry: wakeEnabled && wakeReasons.has('business_inquiry'),
+    acceptsNewConversations: wakeEnabled,
     coalesceWindowMs: BigInt(config.defaultWakePolicy.coalesceWindowMs),
     minWakeIntervalMs: BigInt(config.defaultWakePolicy.minWakeIntervalMs),
     maxWakesPerMinute: BigInt(config.defaultWakePolicy.maxWakesPerMinute),
     maxConcurrentWakeJobs: BigInt(agent.maxConcurrentWakeJobs),
     expectedWakeLatencyMs: BigInt(agent.wake.latencyMs),
-    availabilityOverride: 'wakeable',
-    statusText: agent.wake.statusText,
+    availabilityOverride: wakeEnabled ? 'wakeable' : 'offline',
+    statusText: wakeEnabled ? agent.wake.statusText : 'Wake disabled',
+    allowedWakeSenderAgentIdsJson: allowedWakeSenderAgentIdsJson(agent.wake),
+    blockedWakeSenderAgentIdsJson: wakeSenderAgentIdsJson(agent.wake.blockedWakeSenderAgentIds),
   });
   return registrationId;
+}
+
+async function rememberAgentProfile(
+  config: SupervisorConfig,
+  agent: SupervisorAgentConfig,
+  profile: ModuleTypes.AgentProfile
+) {
+  const stateDir = path.resolve(expandHome(agent.stateDir));
+  const state = await loadAgentState(stateDir);
+  await saveAgentState(stateDir, {
+    ...state,
+    host: config.host,
+    databaseName: config.databaseName,
+    agentId: profile.agentId,
+    handle: profile.handle,
+    registrationState: 'registered',
+    lastProfileSyncAt: new Date().toISOString(),
+  });
+}
+
+function agentStateDir(agent: SupervisorAgentConfig) {
+  return path.resolve(expandHome(agent.stateDir));
+}
+
+function pluginRuntimeStateDir(agent: SupervisorAgentConfig) {
+  return path.join(agentStateDir(agent), 'runtime');
+}
+
+async function ensurePluginManagedRuntimeCredential(
+  config: SupervisorConfig,
+  agent: SupervisorAgentConfig,
+  adminRealtime: AgentRealtimeClient,
+  profile: ModuleTypes.AgentProfile
+) {
+  const controlProfile = normalizeControlProfile(agent.controlProfile);
+  if (controlProfile !== 'plugin_managed') {
+    return agentStateDir(agent);
+  }
+
+  await adminRealtime.setAgentCredentialScope({
+    identity: adminRealtime.identity,
+    agentId: profile.agentId,
+    credentialScope: 'admin',
+    credentialLabel: `${agent.name} supervisor admin`,
+  });
+
+  const stateDir = pluginRuntimeStateDir(agent);
+  const state = await loadAgentState(stateDir);
+  const runtimeRealtime = await AgentRealtimeClient.connect({
+    host: config.host,
+    databaseName: config.databaseName,
+    token: state.token,
+    subscriptionProfile: 'direct',
+  });
+  try {
+    await adminRealtime.bindAgentIdentity({
+      identity: runtimeRealtime.identity,
+      agentId: profile.agentId,
+      deviceLabel: `${agent.name} plugin runtime`,
+      credentialScope: 'plugin_runtime',
+      credentialLabel: `${agent.name} plugin runtime`,
+    });
+    await saveAgentState(stateDir, {
+      ...state,
+      host: config.host,
+      databaseName: config.databaseName,
+      token: runtimeRealtime.token,
+      identity: runtimeRealtime.identityHex,
+      agentId: profile.agentId,
+      handle: profile.handle,
+      credentialScope: 'plugin_runtime',
+      credentialLabel: `${agent.name} plugin runtime`,
+      registrationState: 'registered',
+      lastProfileSyncAt: new Date().toISOString(),
+    });
+  } finally {
+    runtimeRealtime.disconnect();
+  }
+  return stateDir;
 }
 
 async function prepareAgent(config: SupervisorConfig, agent: SupervisorAgentConfig) {
@@ -178,11 +361,19 @@ async function prepareAgent(config: SupervisorConfig, agent: SupervisorAgentConf
   try {
     const profile = await ensureAgentAccount(realtime, agent);
     const registrationId = await configureWake(config, agent, realtime, profile);
+    await rememberAgentProfile(config, agent, profile);
+    const connectorStateDir = await ensurePluginManagedRuntimeCredential(
+      config,
+      agent,
+      realtime,
+      profile
+    );
     const runtime: RuntimeAgent = {
       config: agent,
       realtime,
       wakeClient: new AgentTalkWakeClient(realtime),
       agentId: profile.agentId,
+      connectorStateDir,
       registrationId,
       inFlightWakeIds: new Set<string>(),
       jobs: new Set<Promise<void>>(),
@@ -254,49 +445,78 @@ async function dispatchWake(
       throw new Error(`Wake ${wake.wakeId} was claimed but no attempt row is visible`);
     }
 
+    const localDenial = localWakeDenial(runtime, claimedWake);
+    if (localDenial) {
+      await failWake(config, runtime, wake.wakeId, attemptId, {
+        ok: false,
+        handled: false,
+        replySent: false,
+        message: localDenial,
+        error: localDenial,
+      });
+      return;
+    }
+
+    const dispatchLock = await acquireWakeDispatchLock(runtime, claimedWake, attemptId);
+    if ('busy' in dispatchLock) {
+      await failWake(config, runtime, wake.wakeId, attemptId, {
+        ok: false,
+        handled: false,
+        replySent: false,
+        message: dispatchLock.busy,
+        error: dispatchLock.busy,
+        metadata: { reason: 'runtime_busy' },
+      });
+      return;
+    }
+
     await runtime.realtime.markWakeDispatched(
       wake.wakeId,
       attemptId,
       JSON.stringify({ supervisor: true, agentName: agent.name })
     );
-    const contextMessages = await runtime.wakeClient.fetchWakeContext(claimedWake);
-    const payload = createWakeDispatchPayload(claimedWake);
-    const runDir = path.join(config.runDir, safePathSegment(wake.wakeId), safePathSegment(attemptId));
-    const result = await executeWakeConnector(
-      config,
-      agent,
-      {
-        agentName: agent.name,
-        handle: agent.handle,
-        agentId: runtime.agentId,
-        stateDir: path.resolve(expandHome(agent.stateDir)),
-        repoPath: agent.repoPath,
-        wake: claimedWake,
-        attemptId,
-        contextMessages,
-        payload,
-      },
-      runDir
-    );
-
-    const finalResult = await maybeSendConnectorReply(runtime, claimedWake, attemptId, result);
-    if (finalResult.ok && finalResult.handled) {
-      await runtime.wakeClient.ackWake(
-        wake.wakeId,
-        attemptId
+    try {
+      const contextMessages = await runtime.wakeClient.fetchWakeContext(claimedWake);
+      const payload = createWakeDispatchPayload(claimedWake);
+      const runDir = path.join(config.runDir, safePathSegment(wake.wakeId), safePathSegment(attemptId));
+      const result = await executeWakeConnector(
+        config,
+        agent,
+        {
+          agentName: agent.name,
+          handle: agent.handle,
+          agentId: runtime.agentId,
+          stateDir: runtime.connectorStateDir,
+          repoPath: agent.repoPath,
+          wake: claimedWake,
+          attemptId,
+          contextMessages,
+          payload,
+        },
+        runDir
       );
-      runtime.stats.acked += 1;
-      runtime.stats.lastSuccessAt = new Date().toISOString();
-      await appendLog(config, agent, {
-        event: 'wake_acked',
-        wakeId: wake.wakeId,
-        attemptId,
-        result: toJsonSafe(finalResult),
-      });
-      return;
-    }
 
-    await failWake(config, runtime, wake.wakeId, attemptId, finalResult);
+      const finalResult = await maybeSendConnectorReply(runtime, claimedWake, attemptId, result);
+      if (finalResult.ok && finalResult.handled) {
+        await runtime.wakeClient.ackWake(
+          wake.wakeId,
+          attemptId
+        );
+        runtime.stats.acked += 1;
+        runtime.stats.lastSuccessAt = new Date().toISOString();
+        await appendLog(config, agent, {
+          event: 'wake_acked',
+          wakeId: wake.wakeId,
+          attemptId,
+          result: toJsonSafe(finalResult),
+        });
+        return;
+      }
+
+      await failWake(config, runtime, wake.wakeId, attemptId, finalResult);
+    } finally {
+      await dispatchLock.release();
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (attemptId) {
@@ -312,6 +532,38 @@ async function dispatchWake(
       error: message,
     });
   }
+}
+
+function localWakeDenial(runtime: RuntimeAgent, wake: ModuleTypes.WakeRequestView) {
+  const agent = runtime.config;
+  if (!agent.enabled) {
+    return 'local wake denied: connector disabled';
+  }
+  if (agent.wake.enabled !== true) {
+    return 'local wake denied: wake disabled';
+  }
+  if (wake.recipientAgentId !== runtime.agentId) {
+    return 'local wake denied: target agent mismatch';
+  }
+  const senderAgentId = wake.senderAgentId;
+  const blocked = normalizeWakeSenderAgentIds(
+    agent.wake.blockedWakeSenderAgentIds,
+    'Blocked wake senders'
+  );
+  if (blocked.includes(senderAgentId)) {
+    return 'local wake denied: sender blocked';
+  }
+  const accessMode = wakeAccessMode(agent.wake);
+  if (accessMode === 'allow_list') {
+    const allowed = normalizeWakeSenderAgentIds(
+      agent.wake.allowedWakeSenderAgentIds,
+      'Allowed wake senders'
+    );
+    if (!allowed.includes(senderAgentId)) {
+      return 'local wake denied: sender not in allow list';
+    }
+  }
+  return null;
 }
 
 async function maybeSendConnectorReply(
@@ -399,14 +651,90 @@ async function tickAgent(config: SupervisorConfig, runtime: RuntimeAgent) {
 }
 
 function runtimeStatus(runtime: RuntimeAgent) {
+  const effectivePolicy = runtime.realtime.currentWakePolicy();
+  const effectiveProfile = runtime.realtime.currentAgentWakeProfile();
+  const allowedWakeSenderAgentIds = normalizeWakeSenderAgentIds(
+    runtime.config.wake.allowedWakeSenderAgentIds,
+    'Allowed wake senders'
+  );
+  const blockedWakeSenderAgentIds = normalizeWakeSenderAgentIds(
+    runtime.config.wake.blockedWakeSenderAgentIds,
+    'Blocked wake senders'
+  );
+  const controlProfile = normalizeControlProfile(runtime.config.controlProfile);
+  const desiredReasons = new Set(runtime.config.wake.reasons ?? []);
+  const desiredAccessMode = wakeAccessMode(runtime.config.wake);
+  const desiredAllowedJson = allowedWakeSenderAgentIdsJson(runtime.config.wake);
+  const desiredBlockedJson = wakeSenderAgentIdsJson(runtime.config.wake.blockedWakeSenderAgentIds);
+  const drift =
+    effectivePolicy
+      ? {
+          differs:
+            effectivePolicy.wakeOnDirectMessage !==
+              (runtime.config.wake.enabled === true &&
+                (desiredReasons.has('direct_message') || desiredReasons.has('direct'))) ||
+            effectivePolicy.wakeOnMention !==
+              (runtime.config.wake.enabled === true && desiredReasons.has('mention')) ||
+            effectivePolicy.wakeOnGroupMessage !==
+              (runtime.config.wake.enabled === true && desiredReasons.has('group_message')) ||
+            effectivePolicy.wakeOnHandoff !==
+              (runtime.config.wake.enabled === true && desiredReasons.has('handoff')) ||
+            effectivePolicy.wakeOnBusinessInquiry !==
+              (runtime.config.wake.enabled === true && desiredReasons.has('business_inquiry')) ||
+            effectivePolicy.acceptsNewConversations !== (runtime.config.wake.enabled === true) ||
+            effectivePolicy.maxConcurrentWakeJobs !== BigInt(runtime.config.maxConcurrentWakeJobs) ||
+            (effectivePolicy.expectedWakeLatencyMs ?? 0n) !== BigInt(runtime.config.wake.latencyMs) ||
+            (effectivePolicy.allowedWakeSenderAgentIdsJson ?? '') !== desiredAllowedJson ||
+            (effectivePolicy.blockedWakeSenderAgentIdsJson ?? '[]') !== desiredBlockedJson,
+          effectiveAccessMode:
+            (effectivePolicy.allowedWakeSenderAgentIdsJson ?? '') === '' ? 'open' : 'allow_list',
+          desiredAccessMode,
+        }
+      : {
+          differs: true,
+          effectiveAccessMode: null,
+          desiredAccessMode,
+          reason: 'missing effective wake policy',
+        };
   return {
     name: runtime.config.name,
     handle: runtime.config.handle,
+    agentTalkAgentId: runtime.agentId,
+    agentTalkHandle: runtime.config.handle,
     agentId: runtime.agentId,
     kind: runtime.config.kind,
+    controlProfile,
+    credentialScope: controlProfile === 'plugin_managed' ? 'plugin_runtime' : 'autonomous',
+    registrationState: 'registered',
     enabled: runtime.config.enabled,
-    wakeable: true,
-    availability: 'wakeable',
+    wakeEnabled: runtime.config.wake.enabled === true,
+    wakeable: runtime.config.enabled && runtime.config.wake.enabled === true,
+    availability: runtime.config.enabled
+      ? runtime.config.wake.enabled === true
+        ? 'wakeable'
+        : 'wake_off'
+      : 'disabled',
+    wakeAccess: {
+      mode: wakeAccessMode(runtime.config.wake),
+      allowedWakeSenderAgentIds,
+      blockedWakeSenderAgentIds,
+    },
+    effectiveWake: {
+      profile: toJsonSafe(effectiveProfile ?? null),
+      policy: toJsonSafe(effectivePolicy ?? null),
+    },
+    desiredWake: {
+      enabled: runtime.config.wake.enabled === true,
+      accessMode: wakeAccessMode(runtime.config.wake),
+      allowedWakeSenderAgentIds,
+      blockedWakeSenderAgentIds,
+      maxConcurrentWakeJobs: runtime.config.maxConcurrentWakeJobs,
+    },
+    busyCheck: {
+      configured: Boolean(runtime.config.connector?.busyCommand?.trim()),
+      timeoutMs: runtime.config.connector?.busyCommandTimeoutMs ?? null,
+    },
+    drift,
     pendingWakes: claimableWakes(runtime).length,
     runningJobs: runtime.jobs.size,
     lastWakeAt: runtime.stats.lastWakeAt ?? null,
@@ -467,6 +795,30 @@ export async function runSupervisor(options: SupervisorRunOptions = {}) {
       agents: runtimes.map(runtimeStatus),
       logDir: '[redacted]',
       runDir: '[redacted]',
+    };
+  } finally {
+    for (const runtime of runtimes) {
+      runtime.realtime.disconnect();
+    }
+  }
+}
+
+export async function inspectSupervisorLiveStatus() {
+  const config = await loadSupervisorConfigOrDefault();
+  await ensureSupervisorDirs(config);
+  const runtimes: RuntimeAgent[] = [];
+  try {
+    for (const agent of config.agents) {
+      runtimes.push(await prepareAgent(config, agent));
+    }
+    return {
+      ok: true,
+      running: false,
+      live: true,
+      host: config.host,
+      databaseName: config.databaseName,
+      agents: runtimes.map(runtimeStatus),
+      message: 'supervisor live status inspected without dispatching wake jobs',
     };
   } finally {
     for (const runtime of runtimes) {

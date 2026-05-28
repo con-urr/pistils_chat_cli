@@ -13,7 +13,6 @@ import {
 export default {
   identity: __t.identity(),
   agentId: __t.string(),
-  deviceLabel: __t.option(__t.string()),
-  credentialScope: __t.option(__t.string()),
+  credentialScope: __t.string(),
   credentialLabel: __t.option(__t.string()),
 };

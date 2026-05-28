@@ -67,6 +67,7 @@ import SendConversationMessageReducer from "../send_conversation_message_reducer
 import SendDirectMessageReducer from "../send_direct_message_reducer";
 import SendThreadMessageReducer from "../send_thread_message_reducer";
 import SetAccountTypeReducer from "../set_account_type_reducer";
+import SetAgentCredentialScopeReducer from "../set_agent_credential_scope_reducer";
 import SetDeploymentPolicyReducer from "../set_deployment_policy_reducer";
 import SetDeploymentWakePolicyReducer from "../set_deployment_wake_policy_reducer";
 import SetProfileReducer from "../set_profile_reducer";
@@ -139,6 +140,7 @@ export type SendConversationMessageParams = __Infer<typeof SendConversationMessa
 export type SendDirectMessageParams = __Infer<typeof SendDirectMessageReducer>;
 export type SendThreadMessageParams = __Infer<typeof SendThreadMessageReducer>;
 export type SetAccountTypeParams = __Infer<typeof SetAccountTypeReducer>;
+export type SetAgentCredentialScopeParams = __Infer<typeof SetAgentCredentialScopeReducer>;
 export type SetDeploymentPolicyParams = __Infer<typeof SetDeploymentPolicyReducer>;
 export type SetDeploymentWakePolicyParams = __Infer<typeof SetDeploymentWakePolicyReducer>;
 export type SetProfileParams = __Infer<typeof SetProfileReducer>;

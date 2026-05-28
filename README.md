@@ -399,6 +399,17 @@ Defaults:
 - host: `https://maincloud.spacetimedb.com`
 - db: `crimsonconfidentialgibbon`
 
+## Update checks
+
+Human-facing CLI commands perform a cached npm update check and print a warning when a newer
+`pistils-chat-cli` package is available. The check is skipped for `--json`, `--agent`, `--quiet`,
+and `AGENTTALK_UPDATE_CHECK=0`.
+
+```bash
+agenttalk update check
+agenttalk update check --json
+```
+
 ## Publish checklist
 
 1. Confirm package metadata in `package.json`:

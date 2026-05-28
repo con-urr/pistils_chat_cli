@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type * as ModuleTypes from '../module_bindings/types';
 import type { WakeDispatchPayload } from '../wake';
-import type { SupervisorAgentConfig, SupervisorConfig } from './config';
+import { normalizeControlProfile, type SupervisorAgentConfig, type SupervisorConfig } from './config';
 import { stringifyJsonSafe, toJsonSafe } from './json';
 
 export type WakeConnectorInput = {
@@ -16,6 +16,10 @@ export type WakeConnectorInput = {
   attemptId: string;
   contextMessages: ModuleTypes.ConversationMessage[];
   payload: WakeDispatchPayload;
+  connectorSession?: {
+    key: string;
+    hermesSessionId?: string;
+  };
 };
 
 export type WakeConnectorResult = {
@@ -47,6 +51,20 @@ type ProcessResult = {
 };
 
 const MAX_CAPTURE_BYTES = 1024 * 1024;
+
+type HermesSessionRecord = {
+  sessionId: string;
+  agentTalkConversationId: string;
+  handle: string;
+  agentId?: string | null;
+  lastWakeId?: string;
+  updatedAt: string;
+};
+
+type HermesSessionMap = {
+  version: 1;
+  conversations: Record<string, HermesSessionRecord>;
+};
 
 function connectorResultJsonSchema() {
   return {
@@ -112,6 +130,98 @@ function truncateText(value: string, max = 4000) {
   return `${value.slice(0, max)}\n[truncated ${value.length - max} chars]`;
 }
 
+function hermesSessionStorePath(input: WakeConnectorInput) {
+  return path.join(input.stateDir, 'connector-sessions', 'hermes.json');
+}
+
+function hermesConversationKey(input: WakeConnectorInput) {
+  return `${input.handle}:${input.wake.conversationId.toString()}`;
+}
+
+async function readHermesSessionMap(filePath: string): Promise<HermesSessionMap> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(filePath, 'utf8')) as Partial<HermesSessionMap>;
+    if (parsed.version === 1 && parsed.conversations && typeof parsed.conversations === 'object') {
+      return {
+        version: 1,
+        conversations: parsed.conversations as Record<string, HermesSessionRecord>,
+      };
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+  return { version: 1, conversations: {} };
+}
+
+async function writeHermesSessionMap(filePath: string, map: HermesSessionMap) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.chmod(path.dirname(filePath), 0o700).catch(() => undefined);
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify(map, null, 2)}\n`, 'utf8');
+  await fs.rename(tmp, filePath);
+  await fs.chmod(filePath, 0o600).catch(() => undefined);
+}
+
+async function prepareHermesSession(input: WakeConnectorInput) {
+  const filePath = hermesSessionStorePath(input);
+  const key = hermesConversationKey(input);
+  const map = await readHermesSessionMap(filePath);
+  return {
+    filePath,
+    key,
+    sessionId: map.conversations[key]?.sessionId,
+  };
+}
+
+function parseHermesSessionId(stderr: string) {
+  const match = stderr.match(/(?:^|\r?\n)\s*session_id:\s*([^\s]+)/i);
+  return match?.[1];
+}
+
+function hermesSessionNotFound(result: ProcessResult, sessionId?: string) {
+  if (result.code === 0 || !sessionId) {
+    return false;
+  }
+  const text = `${result.stdout}\n${result.stderr}`;
+  return text.includes(`Session not found: ${sessionId}`) || /Session not found:/i.test(text);
+}
+
+async function recordHermesSession(
+  input: WakeConnectorInput,
+  session: { filePath: string; key: string },
+  processResult: ProcessResult
+) {
+  const sessionId = parseHermesSessionId(processResult.stderr);
+  if (!sessionId) {
+    return undefined;
+  }
+  const map = await readHermesSessionMap(session.filePath);
+  map.conversations[session.key] = {
+    sessionId,
+    agentTalkConversationId: input.wake.conversationId.toString(),
+    handle: input.handle,
+    agentId: input.agentId,
+    lastWakeId: input.wake.wakeId,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeHermesSessionMap(session.filePath, map);
+  return sessionId;
+}
+
+async function forgetHermesSession(
+  input: WakeConnectorInput,
+  session: { filePath: string; key: string }
+) {
+  const map = await readHermesSessionMap(session.filePath);
+  if (map.conversations[session.key]) {
+    delete map.conversations[session.key];
+    await writeHermesSessionMap(session.filePath, map);
+  }
+  input.connectorSession = { key: session.key };
+}
+
 function wakeText(input: WakeConnectorInput) {
   const messages = input.contextMessages.length
     ? input.contextMessages
@@ -135,6 +245,7 @@ Instructions:
 - Decide whether you need to reply.
 - If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
 - If replying yourself, send through AgentTalk with AGENTTALK_REPLY_COMMAND or AGENTTALK_REPLY_ARGS_JSON.
+- If the host runtime cannot access that reply command, return replyText with the message you want sent and replySent false; the local supervisor may send it when connector.sendReplyText is enabled.
 - Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
 - Do not reveal secrets, env values, or local paths in user-facing replies.
 - Return or print a structured connector result JSON when possible:
@@ -154,6 +265,7 @@ function connectorEnv(
 ) {
   const openclawAgentId = process.env.OPENCLAW_AGENT_ID ?? agent.connector?.openclawAgentId ?? agent.name;
   const replyArgs = replyCommandArgs(input);
+  const controlProfile = normalizeControlProfile(agent.controlProfile);
   return {
     ...process.env,
     AGENTTALK_WAKE_ID: input.wake.wakeId,
@@ -161,6 +273,9 @@ function connectorEnv(
     AGENTTALK_AGENT_NAME: input.agentName,
     AGENTTALK_AGENT_HANDLE: input.handle,
     AGENTTALK_AGENT_ID: input.agentId ?? '',
+    AGENTTALK_CONTROL_PROFILE: controlProfile,
+    AGENTTALK_CREDENTIAL_SCOPE:
+      controlProfile === 'plugin_managed' ? 'plugin_runtime' : 'autonomous',
     AGENTTALK_CONVERSATION_ID: input.wake.conversationId.toString(),
     AGENTTALK_MIN_SEQUENCE: input.wake.minSequence.toString(),
     AGENTTALK_MAX_SEQUENCE: input.wake.maxSequence.toString(),
@@ -227,9 +342,22 @@ function defaultHermesSpec(agent: SupervisorAgentConfig, input: WakeConnectorInp
     ? path.join(agent.repoPath, 'venv', 'Scripts', 'python.exe')
     : path.join(agent.repoPath, 'venv', 'bin', 'python');
   const hermes = path.join(agent.repoPath, 'hermes');
+  const args = [
+    hermes,
+    'chat',
+    '--query',
+    wakeText(input),
+    '--quiet',
+    '--source',
+    'agenttalk',
+    '--pass-session-id',
+  ];
+  if (input.connectorSession?.hermesSessionId) {
+    args.push('--resume', input.connectorSession.hermesSessionId);
+  }
   return {
     command: python,
-    args: [hermes, 'chat', '--query', wakeText(input), '--quiet', '--source', 'agenttalk'],
+    args,
     cwd: agent.repoPath,
   };
 }
@@ -384,6 +512,48 @@ function codexResultFromJsonl(agent: SupervisorAgentConfig, stdout: string): Wak
   };
 }
 
+function collectOpenClawPayloadTexts(value: unknown, output: string[]) {
+  if (!value || typeof value !== 'object') {
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  const payloads = record.payloads;
+  if (Array.isArray(payloads)) {
+    for (const payload of payloads) {
+      if (
+        payload &&
+        typeof payload === 'object' &&
+        typeof (payload as Record<string, unknown>).text === 'string'
+      ) {
+        output.push((payload as Record<string, string>).text);
+      }
+    }
+  }
+  collectOpenClawPayloadTexts(record.result, output);
+}
+
+function openClawResultFromJson(agent: SupervisorAgentConfig, stdout: string): WakeConnectorResult | undefined {
+  const parsed = parseJsonObject(stdout);
+  const payloadTexts: string[] = [];
+  collectOpenClawPayloadTexts(parsed, payloadTexts);
+
+  for (const text of payloadTexts.reverse()) {
+    const inner = parseJsonObject(text);
+    if (!inner) {
+      continue;
+    }
+    const result = resultFromParsedObject(agent, inner);
+    if (result) {
+      return {
+        ...result,
+        metadata: result.metadata ?? { connector: agent.kind, parsed: 'openclaw-payload' },
+      };
+    }
+  }
+
+  return undefined;
+}
+
 function normalizeConnectorResult(
   agent: SupervisorAgentConfig,
   processResult?: ProcessResult
@@ -424,6 +594,13 @@ function normalizeConnectorResult(
     const codexResult = codexResultFromJsonl(agent, processResult.stdout);
     if (codexResult) {
       return codexResult;
+    }
+  }
+
+  if (agent.kind === 'openclaw') {
+    const openClawResult = openClawResultFromJson(agent, processResult.stdout);
+    if (openClawResult) {
+      return openClawResult;
     }
   }
 
@@ -514,6 +691,128 @@ function runProcess(
   });
 }
 
+function busyCheckResult(
+  agent: SupervisorAgentConfig,
+  processResult: ProcessResult
+): WakeConnectorResult | undefined {
+  const baseMetadata = {
+    connector: agent.kind,
+    stage: 'busy-check',
+    durationMs: processResult.durationMs,
+    exitCode: processResult.code,
+    signal: processResult.signal,
+  };
+
+  if (processResult.timedOut) {
+    const error = `runtime_busy_check_failed: busy command timed out after ${processResult.durationMs}ms`;
+    return {
+      ok: false,
+      handled: false,
+      replySent: false,
+      message: error,
+      error,
+      metadata: { ...baseMetadata, reason: 'runtime_busy_check_timeout' },
+    };
+  }
+
+  const parsed = parseJsonObject(processResult.stdout);
+  if (parsed && typeof parsed.busy === 'boolean') {
+    if (!parsed.busy) {
+      return undefined;
+    }
+    const reason =
+      typeof parsed.reason === 'string'
+        ? parsed.reason
+        : typeof parsed.message === 'string'
+          ? parsed.message
+          : 'connector reported runtime busy';
+    const message = `runtime_busy: ${reason}`;
+    return {
+      ok: false,
+      handled: false,
+      replySent: false,
+      message,
+      error: message,
+      metadata: {
+        ...baseMetadata,
+        reason: 'runtime_busy',
+        busyCheck: parsed,
+      },
+    };
+  }
+
+  if (processResult.code === 75) {
+    const reason = truncateText((processResult.stdout || processResult.stderr).trim() || 'connector reported runtime busy');
+    const message = `runtime_busy: ${reason}`;
+    return {
+      ok: false,
+      handled: false,
+      replySent: false,
+      message,
+      error: message,
+      metadata: { ...baseMetadata, reason: 'runtime_busy' },
+    };
+  }
+
+  if (processResult.code !== 0) {
+    const error = `runtime_busy_check_failed: ${truncateText(
+      (processResult.stderr || processResult.stdout || `busy command exited ${processResult.code}`).trim()
+    )}`;
+    return {
+      ok: false,
+      handled: false,
+      replySent: false,
+      message: error,
+      error,
+      metadata: { ...baseMetadata, reason: 'runtime_busy_check_failed' },
+    };
+  }
+
+  return undefined;
+}
+
+async function runConnectorBusyCheck(
+  config: SupervisorConfig,
+  agent: SupervisorAgentConfig,
+  input: WakeConnectorInput,
+  paths: {
+    inputPath: string;
+    contextJson: string;
+    payloadJson: string;
+  }
+) {
+  const command = agent.connector?.busyCommand?.trim();
+  if (!command) {
+    return undefined;
+  }
+  const timeoutMs = Math.max(250, agent.connector?.busyCommandTimeoutMs ?? 5_000);
+  try {
+    const result = await runProcess(
+      {
+        command,
+        args: [],
+        cwd: agent.repoPath ?? process.cwd(),
+        shell: true,
+      },
+      connectorEnv(config, agent, input, paths),
+      timeoutMs
+    );
+    return busyCheckResult(agent, result);
+  } catch (error) {
+    const message = `runtime_busy_check_failed: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+    return {
+      ok: false,
+      handled: false,
+      replySent: false,
+      message,
+      error: message,
+      metadata: { connector: agent.kind, stage: 'busy-check', reason: 'runtime_busy_check_failed' },
+    };
+  }
+}
+
 export async function executeWakeConnector(
   config: SupervisorConfig,
   agent: SupervisorAgentConfig,
@@ -523,15 +822,26 @@ export async function executeWakeConnector(
   await fs.mkdir(runDir, { recursive: true });
   await fs.chmod(runDir, 0o700).catch(() => undefined);
 
+  const connectorInput: WakeConnectorInput = { ...input };
+  const hermesSession = agent.kind === 'hermes' && !agent.command?.trim()
+    ? await prepareHermesSession(connectorInput)
+    : undefined;
+  if (hermesSession) {
+    connectorInput.connectorSession = {
+      key: hermesSession.key,
+      hermesSessionId: hermesSession.sessionId,
+    };
+  }
+
   const inputPath = path.join(runDir, 'input.json');
   const stdoutPath = path.join(runDir, 'stdout.log');
   const stderrPath = path.join(runDir, 'stderr.log');
   const resultPath = path.join(runDir, 'result.json');
   const codexOutputSchemaPath = path.join(runDir, 'codex-result.schema.json');
-  const contextJson = JSON.stringify(toJsonSafe(input.contextMessages));
-  const payloadJson = JSON.stringify(toJsonSafe(input.payload));
+  const contextJson = JSON.stringify(toJsonSafe(connectorInput.contextMessages));
+  const payloadJson = JSON.stringify(toJsonSafe(connectorInput.payload));
 
-  await fs.writeFile(inputPath, stringifyJsonSafe(input), 'utf8');
+  await fs.writeFile(inputPath, stringifyJsonSafe(connectorInput), 'utf8');
   const shouldWriteCodexSchema =
     agent.kind === 'codex' &&
     !process.env.AGENTTALK_CODEX_OUTPUT_SCHEMA &&
@@ -544,20 +854,60 @@ export async function executeWakeConnector(
     );
   }
 
+  const busyResult = await runConnectorBusyCheck(config, agent, connectorInput, {
+    inputPath,
+    contextJson,
+    payloadJson,
+  });
+  if (busyResult) {
+    await fs.writeFile(stdoutPath, '', 'utf8');
+    await fs.writeFile(stderrPath, '', 'utf8');
+    await fs.writeFile(resultPath, stringifyJsonSafe(busyResult), 'utf8');
+    return busyResult;
+  }
+
   let processResult: ProcessResult | undefined;
   let result: WakeConnectorResult;
   try {
-    const spec = buildProcessSpec(agent, input, {
+    let spec = buildProcessSpec(agent, connectorInput, {
       codexOutputSchemaPath: shouldWriteCodexSchema ? codexOutputSchemaPath : undefined,
     });
     if (spec) {
       processResult = await runProcess(
         spec,
-        connectorEnv(config, agent, input, { inputPath, contextJson, payloadJson }),
+        connectorEnv(config, agent, connectorInput, { inputPath, contextJson, payloadJson }),
         agent.connectorTimeoutMs
       );
+      if (
+        hermesSession &&
+        hermesSession.sessionId &&
+        hermesSessionNotFound(processResult, hermesSession.sessionId)
+      ) {
+        await forgetHermesSession(connectorInput, hermesSession);
+        spec = buildProcessSpec(agent, connectorInput, {
+          codexOutputSchemaPath: shouldWriteCodexSchema ? codexOutputSchemaPath : undefined,
+        });
+        if (spec) {
+          processResult = await runProcess(
+            spec,
+            connectorEnv(config, agent, connectorInput, { inputPath, contextJson, payloadJson }),
+            agent.connectorTimeoutMs
+          );
+        }
+      }
     }
     result = normalizeConnectorResult(agent, processResult);
+    if (hermesSession && processResult) {
+      const sessionId = await recordHermesSession(connectorInput, hermesSession, processResult);
+      result = {
+        ...result,
+        metadata: {
+          connectorMetadata: result.metadata,
+          hermesSessionKey: hermesSession.key,
+          hermesSessionId: sessionId ?? connectorInput.connectorSession?.hermesSessionId ?? null,
+        },
+      };
+    }
   } catch (error) {
     result = {
       ok: false,

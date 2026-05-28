@@ -9,13 +9,19 @@ import type * as ModuleTypes from '../module_bindings/types';
 import {
   loadSupervisorConfigOrDefault,
   normalizeAgentName,
+  normalizeControlProfile,
+  normalizeWakeAccessMode,
+  normalizeWakeSenderAgentIds,
+  OPEN_WAKE_WARNING,
   redactConfig,
   saveSupervisorConfig,
   supervisorConfigPath,
   type SupervisorAgentConfig,
   type SupervisorConfig,
   type SupervisorWakePolicy,
+  wakeAccessMode,
 } from '../supervisor/config';
+import { createWakeChangeRequest, listWakeChangeRequests } from '../supervisor/requests';
 import {
   clampTimeoutMs,
   currentAccount,
@@ -64,9 +70,14 @@ const supervisorAgentPatchSchema = z
     connectorTimeoutMs: z.number().int().positive().optional(),
     wake: z
       .object({
+        enabled: z.boolean().optional(),
+        accessMode: z.enum(['allow_list', 'allow-list', 'allowlist', 'open']).optional(),
+        openWakeRiskAccepted: z.boolean().optional(),
         latencyMs: z.number().int().nonnegative().optional(),
         statusText: z.string().min(1).optional(),
         reasons: z.array(z.string().min(1)).optional(),
+        allowedWakeSenderAgentIds: z.array(z.string().min(1)).optional(),
+        blockedWakeSenderAgentIds: z.array(z.string().min(1)).optional(),
       })
       .strict()
       .optional(),
@@ -74,6 +85,8 @@ const supervisorAgentPatchSchema = z
       .object({
         openclawAgentId: z.string().min(1).optional(),
         sendReplyText: z.boolean().optional(),
+        busyCommand: z.string().min(1).optional(),
+        busyCommandTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
@@ -215,6 +228,55 @@ function wakeStatusData(client: AgentRealtimeClient, wakeId?: string) {
   };
 }
 
+function wakeAccessJsonFromMcpArgs(
+  args: Record<string, unknown>,
+  options: { defaultAllowList?: boolean } = {}
+) {
+  const accessMode =
+    typeof args.accessMode === 'string' ? normalizeWakeAccessMode(args.accessMode) : undefined;
+  if (accessMode === 'open') {
+    if (args.openWakeRiskAccepted !== true) {
+      throw new Error(`${OPEN_WAKE_WARNING} Set openWakeRiskAccepted=true to confirm open wake mode.`);
+    }
+    return '';
+  }
+  if (accessMode === 'allow_list' || Array.isArray(args.allowedWakeSenderAgentIds)) {
+    return JSON.stringify(
+      normalizeWakeSenderAgentIds(
+        Array.isArray(args.allowedWakeSenderAgentIds)
+          ? (args.allowedWakeSenderAgentIds as string[])
+          : [],
+        'Allowed wake senders'
+      )
+    );
+  }
+  return options.defaultAllowList ? '[]' : undefined;
+}
+
+function blockedWakeAccessJsonFromMcpArgs(args: Record<string, unknown>) {
+  return Array.isArray(args.blockedWakeSenderAgentIds)
+    ? JSON.stringify(
+        normalizeWakeSenderAgentIds(
+          args.blockedWakeSenderAgentIds as string[],
+          'Blocked wake senders'
+        )
+      )
+    : undefined;
+}
+
+function currentMcpControlProfile() {
+  const raw = process.env.AGENTTALK_CONTROL_PROFILE ?? process.env.AGENTTALK_PROFILE;
+  return raw ? normalizeControlProfile(raw) : undefined;
+}
+
+function requireMcpWakeAdminAllowed(action: string) {
+  if (currentMcpControlProfile() === 'plugin_managed') {
+    throw new Error(
+      `${action} denied: plugin-managed AgentTalk runtimes cannot mutate wake/admin state directly. Use the host plugin GUI or supervisor admin surface.`
+    );
+  }
+}
+
 async function supervisorConfigExists() {
   try {
     await fs.access(supervisorConfigPath());
@@ -228,14 +290,16 @@ async function supervisorConfigExists() {
 }
 
 function supervisorAgentStatus(agent: SupervisorAgentConfig) {
+  const wakeEnabled = agent.enabled && agent.wake.enabled === true;
   return {
     name: agent.name,
     handle: agent.handle,
     agentId: null,
     kind: agent.kind,
     enabled: agent.enabled,
-    wakeable: agent.enabled,
-    availability: agent.enabled ? 'configured' : 'disabled',
+    wakeEnabled: agent.wake.enabled === true,
+    wakeable: wakeEnabled,
+    availability: agent.enabled ? (wakeEnabled ? 'wakeable' : 'wake_off') : 'disabled',
     pendingWakes: 0,
     runningJobs: 0,
     lastWakeAt: null,
@@ -244,6 +308,21 @@ function supervisorAgentStatus(agent: SupervisorAgentConfig) {
     failureCount: '0',
     connectorTimeoutMs: agent.connectorTimeoutMs,
     maxConcurrentWakeJobs: agent.maxConcurrentWakeJobs,
+    wakeAccess: {
+      mode: wakeAccessMode(agent.wake),
+      allowedWakeSenderAgentIds: agent.wake.allowedWakeSenderAgentIds ?? [],
+      blockedWakeSenderAgentIds: agent.wake.blockedWakeSenderAgentIds ?? [],
+    },
+    desiredWake: {
+      enabled: agent.wake.enabled === true,
+      accessMode: wakeAccessMode(agent.wake),
+      allowedWakeSenderAgentIds: agent.wake.allowedWakeSenderAgentIds ?? [],
+      blockedWakeSenderAgentIds: agent.wake.blockedWakeSenderAgentIds ?? [],
+      maxConcurrentWakeJobs: agent.maxConcurrentWakeJobs,
+      latencyMs: agent.wake.latencyMs,
+    },
+    effectiveWake: null,
+    drift: null,
   };
 }
 
@@ -280,16 +359,33 @@ function patchSupervisorAgent(
   current: SupervisorAgentConfig,
   patch: z.infer<typeof supervisorAgentPatchSchema>
 ): SupervisorAgentConfig {
+  const wakePatch = patch.wake;
+  const requestedAccessMode = wakePatch?.accessMode
+    ? normalizeWakeAccessMode(wakePatch.accessMode)
+    : undefined;
+  if (requestedAccessMode === 'open' && wakePatch?.openWakeRiskAccepted !== true) {
+    throw new Error(`${OPEN_WAKE_WARNING} Set openWakeRiskAccepted=true to confirm open wake mode.`);
+  }
   return {
     ...current,
     enabled: patch.enabled ?? current.enabled,
     autoInit: patch.autoInit ?? current.autoInit,
     maxConcurrentWakeJobs: patch.maxConcurrentWakeJobs ?? current.maxConcurrentWakeJobs,
     connectorTimeoutMs: patch.connectorTimeoutMs ?? current.connectorTimeoutMs,
-    wake: patch.wake
+    wake: wakePatch
       ? {
           ...current.wake,
-          ...patch.wake,
+          enabled: wakePatch.enabled ?? current.wake.enabled,
+          accessMode: requestedAccessMode ?? current.wake.accessMode ?? 'allow_list',
+          latencyMs: wakePatch.latencyMs ?? current.wake.latencyMs,
+          statusText: wakePatch.statusText ?? current.wake.statusText,
+          reasons: wakePatch.reasons ?? current.wake.reasons,
+          allowedWakeSenderAgentIds: wakePatch.allowedWakeSenderAgentIds
+            ? normalizeWakeSenderAgentIds(wakePatch.allowedWakeSenderAgentIds, 'Allowed wake senders')
+            : current.wake.allowedWakeSenderAgentIds,
+          blockedWakeSenderAgentIds: wakePatch.blockedWakeSenderAgentIds
+            ? normalizeWakeSenderAgentIds(wakePatch.blockedWakeSenderAgentIds, 'Blocked wake senders')
+            : current.wake.blockedWakeSenderAgentIds,
         }
       : current.wake,
     connector: patch.connector
@@ -314,7 +410,12 @@ function patchSupervisorConfig(
       : current.defaultWakePolicy,
     agents: current.agents.map(agent => ({
       ...agent,
-      wake: { ...agent.wake, reasons: [...agent.wake.reasons] },
+      wake: {
+        ...agent.wake,
+        reasons: [...agent.wake.reasons],
+        allowedWakeSenderAgentIds: [...(agent.wake.allowedWakeSenderAgentIds ?? [])],
+        blockedWakeSenderAgentIds: [...(agent.wake.blockedWakeSenderAgentIds ?? [])],
+      },
       connector: agent.connector ? { ...agent.connector } : undefined,
     })),
   };
@@ -720,9 +821,14 @@ function registerWakeTools(server: McpServer) {
     {
       expectedWakeLatencyMs: z.union([z.string(), z.number()]).optional(),
       statusText: z.string().optional(),
+      accessMode: z.enum(['allow_list', 'allow-list', 'allowlist', 'open']).optional(),
+      allowedWakeSenderAgentIds: z.array(z.string().min(1)).optional(),
+      blockedWakeSenderAgentIds: z.array(z.string().min(1)).optional(),
+      openWakeRiskAccepted: z.boolean().optional(),
     },
     async args =>
       withMcpClient('wake', async ({ client }) => {
+        requireMcpWakeAdminAllowed('agenttalk_wake_enable');
         const profile = client.currentAgentProfile();
         if (!profile) {
           throw new Error('No current AgentTalk account profile found. Run agenttalk_init_account first.');
@@ -747,6 +853,10 @@ function registerWakeTools(server: McpServer) {
             'expectedWakeLatencyMs'
           ),
           statusText: typeof args.statusText === 'string' ? args.statusText : undefined,
+          allowedWakeSenderAgentIdsJson: wakeAccessJsonFromMcpArgs(args, {
+            defaultAllowList: true,
+          }),
+          blockedWakeSenderAgentIdsJson: blockedWakeAccessJsonFromMcpArgs(args),
         });
         await sleep(DIRECTORY_SYNC_DELAY_MS);
         return ok(wakeStatusData(client));
@@ -755,6 +865,7 @@ function registerWakeTools(server: McpServer) {
 
   registerTool(server, 'agenttalk_wake_disable', 'Disable wakeability for the current account.', {}, async () =>
     withMcpClient('wake', async ({ client }) => {
+      requireMcpWakeAdminAllowed('agenttalk_wake_disable');
       const profile = client.currentAgentProfile();
       if (!profile) {
         throw new Error('No current AgentTalk account profile found.');
@@ -803,9 +914,14 @@ function registerWakeTools(server: McpServer) {
         .enum(['online', 'wakeable', 'sleeping', 'offline', 'unavailable'])
         .optional(),
       statusText: z.string().optional(),
+      accessMode: z.enum(['allow_list', 'allow-list', 'allowlist', 'open']).optional(),
+      allowedWakeSenderAgentIds: z.array(z.string().min(1)).optional(),
+      blockedWakeSenderAgentIds: z.array(z.string().min(1)).optional(),
+      openWakeRiskAccepted: z.boolean().optional(),
     },
     async args =>
       withMcpClient('wake', async ({ client }) => {
+        requireMcpWakeAdminAllowed('agenttalk_wake_policy_set');
         const profile = client.currentAgentProfile();
         if (!profile) {
           throw new Error('No current AgentTalk account profile found.');
@@ -850,6 +966,8 @@ function registerWakeTools(server: McpServer) {
                   | 'unavailable')
               : undefined,
           statusText: typeof args.statusText === 'string' ? args.statusText : undefined,
+          allowedWakeSenderAgentIdsJson: wakeAccessJsonFromMcpArgs(args),
+          blockedWakeSenderAgentIdsJson: blockedWakeAccessJsonFromMcpArgs(args),
         });
         await sleep(DIRECTORY_SYNC_DELAY_MS);
         return ok(wakeStatusData(client));
@@ -959,6 +1077,7 @@ function registerSupervisorTools(server: McpServer) {
       dryRun: z.boolean().optional(),
     },
     async args => {
+      requireMcpWakeAdminAllowed('agenttalk_supervisor_config_set');
       const parsed = supervisorConfigSetArgsSchema.safeParse(args);
       if (!parsed.success) {
         return fail('invalid_supervisor_config', 'Supervisor config patch failed validation.', {
@@ -981,8 +1100,8 @@ function registerSupervisorTools(server: McpServer) {
           'host',
           'databaseName',
           'defaultWakePolicy',
-          'existing agent enabled/autoInit/limits/wake settings',
-          'existing agent connector.openclawAgentId/sendReplyText',
+          'existing agent enabled/autoInit/limits/wake settings and wake sender access lists',
+          'existing agent connector.openclawAgentId/sendReplyText/busyCommand',
         ],
         blockedUpdates: [
           'new agents',
@@ -993,6 +1112,69 @@ function registerSupervisorTools(server: McpServer) {
         ],
       });
     }
+  );
+  registerTool(
+    server,
+    'agenttalk_supervisor_wake_change_request',
+    'Record a human-visible plugin-managed request to change local wake settings. This does not apply the change.',
+    {
+      agentName: z.string().min(1),
+      wakeEnabled: z.boolean().optional(),
+      wakeAccessMode: z.enum(['allow_list', 'allow-list', 'allowlist', 'open']).optional(),
+      allowedWakeSenderAgentIds: z.array(z.string().min(1)).optional(),
+      blockedWakeSenderAgentIds: z.array(z.string().min(1)).optional(),
+      reason: z.string().optional(),
+      requestedBy: z.string().optional(),
+    },
+    async args => {
+      const request = await createWakeChangeRequest({
+        agentName: String(args.agentName),
+        requestedBy: typeof args.requestedBy === 'string' ? args.requestedBy : 'mcp-runtime',
+        reason: typeof args.reason === 'string' ? args.reason : undefined,
+        desired: {
+          wakeEnabled: typeof args.wakeEnabled === 'boolean' ? args.wakeEnabled : undefined,
+          wakeAccessMode:
+            typeof args.wakeAccessMode === 'string'
+              ? normalizeWakeAccessMode(args.wakeAccessMode)
+              : undefined,
+          allowedWakeSenderAgentIds: Array.isArray(args.allowedWakeSenderAgentIds)
+            ? normalizeWakeSenderAgentIds(args.allowedWakeSenderAgentIds, 'Allowed wake senders')
+            : undefined,
+          blockedWakeSenderAgentIds: Array.isArray(args.blockedWakeSenderAgentIds)
+            ? normalizeWakeSenderAgentIds(args.blockedWakeSenderAgentIds, 'Blocked wake senders')
+            : undefined,
+        },
+      });
+      return ok({
+        implemented: true,
+        applied: false,
+        humanApprovalRequired: true,
+        request,
+      });
+    }
+  );
+  registerTool(
+    server,
+    'agenttalk_supervisor_wake_change_requests',
+    'List local human-visible wake setting change requests.',
+    {
+      agentName: z.string().optional(),
+      status: z.enum(['pending', 'approved', 'denied', 'all']).optional(),
+    },
+    async args =>
+      ok({
+        implemented: true,
+        requests: await listWakeChangeRequests({
+          agentName: typeof args.agentName === 'string' ? args.agentName : undefined,
+          status:
+            args.status === 'pending' ||
+            args.status === 'approved' ||
+            args.status === 'denied' ||
+            args.status === 'all'
+              ? args.status
+              : 'pending',
+        }),
+      })
   );
 }
 

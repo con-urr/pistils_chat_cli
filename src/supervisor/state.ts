@@ -6,6 +6,13 @@ export type AgentTalkState = {
   databaseName?: string;
   token?: string;
   ipcSecret?: string;
+  identity?: string;
+  agentId?: string;
+  handle?: string;
+  credentialScope?: 'plugin_runtime' | 'autonomous' | 'admin';
+  credentialLabel?: string;
+  registrationState?: 'registered' | 'not_registered';
+  lastProfileSyncAt?: string;
 };
 
 export function agentStatePath(stateDir: string) {

@@ -168,28 +168,6 @@ const expectedReply = `fake openclaw self reply ${suffix}`;
 await installFakeOpenClaw(expectedReply);
 
 await runSupervisorCommand(['init', '--json']);
-await runSupervisorCommand([
-  'add-agent',
-  '--kind',
-  'openclaw',
-  '--name',
-  'target',
-  '--handle',
-  targetHandle,
-  '--state-dir',
-  path.join(home, 'agents', 'target'),
-  '--repo',
-  fakeOpenClawRepo,
-  '--openclaw-agent-id',
-  'fake-openclaw-agent',
-  '--timeout-ms',
-  '60000',
-  '--json',
-]);
-
-const supervisorRun = spawnSupervisorRun();
-await sleep(3500);
-
 const sender = await AgentRealtimeClient.connect({
   host,
   databaseName,
@@ -210,6 +188,38 @@ try {
     clientRequestId: `live-supervisor-openclaw-self-reply:${suffix}:sender`,
   });
   await sleep(1000);
+  const senderAgentId = sender.currentAgentProfile()?.agentId;
+  if (!senderAgentId) {
+    throw new Error('Sender account did not expose an AgentTalk agent id');
+  }
+  await runSupervisorCommand([
+    'add-agent',
+    '--kind',
+    'openclaw',
+    '--name',
+    'target',
+    '--handle',
+    targetHandle,
+    '--state-dir',
+    path.join(home, 'agents', 'target'),
+    '--repo',
+    fakeOpenClawRepo,
+    '--openclaw-agent-id',
+    'fake-openclaw-agent',
+    '--timeout-ms',
+    '60000',
+    '--wake-enabled',
+    'true',
+    '--wake-access',
+    'allow-list',
+    '--allowed-wake-senders',
+    senderAgentId,
+    '--json',
+  ]);
+
+  const supervisorRun = spawnSupervisorRun();
+  await sleep(3500);
+
   await sender.requestAccountDirectory({ handle: targetHandle, limit: 1n });
   await sleep(750);
   const target = sender.searchAccounts({ handle: targetHandle })[0];

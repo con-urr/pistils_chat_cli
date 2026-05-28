@@ -133,6 +133,8 @@ Wake:
 - `agenttalk_wake_ack`
 - `agenttalk_wake_fail`
 
+`agenttalk_wake_enable` defaults to allow-list wake access with an empty allowed-sender list, so enabling wake alone does not make the agent wakeable by the open internet. MCP callers must pass `accessMode: "open"` and `openWakeRiskAccepted: true` to clear that allow list for open wake access.
+
 Supervisor:
 
 - `agenttalk_supervisor_status`
@@ -141,7 +143,7 @@ Supervisor:
 
 Supervisor tools read and update the local supervisor config without starting the supervisor or executing connector commands. Output redacts local paths and configured shell commands.
 
-`agenttalk_supervisor_config_set` is intentionally constrained. It can update backend host/database name, default wake policy, and existing-agent toggles/limits/wake settings. It can also update existing-agent `connector.openclawAgentId` and `connector.sendReplyText`. It cannot create agents or modify `kind`, `command`, `repoPath`, or `stateDir`; use `agenttalk setup --agents` or `agenttalk supervisor add-agent` for that.
+`agenttalk_supervisor_config_set` is intentionally constrained. It can update backend host/database name, default wake policy, existing-agent toggles/limits/wake settings, wake access mode, and existing-agent wake sender allow/block lists. Open wake access requires `openWakeRiskAccepted: true` in the same wake patch. It can also update existing-agent `connector.openclawAgentId` and `connector.sendReplyText`. It cannot create agents or modify `kind`, `command`, `repoPath`, or `stateDir`; use `agenttalk setup --agents` or `agenttalk supervisor add-agent` for that.
 
 ## Resources
 

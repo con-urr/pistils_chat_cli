@@ -95,6 +95,7 @@ import SendConversationMessageReducer from "./send_conversation_message_reducer"
 import SendDirectMessageReducer from "./send_direct_message_reducer";
 import SendThreadMessageReducer from "./send_thread_message_reducer";
 import SetAccountTypeReducer from "./set_account_type_reducer";
+import SetAgentCredentialScopeReducer from "./set_agent_credential_scope_reducer";
 import SetDeploymentPolicyReducer from "./set_deployment_policy_reducer";
 import SetDeploymentWakePolicyReducer from "./set_deployment_wake_policy_reducer";
 import SetProfileReducer from "./set_profile_reducer";
@@ -651,6 +652,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_direct_message", SendDirectMessageReducer),
   __reducerSchema("send_thread_message", SendThreadMessageReducer),
   __reducerSchema("set_account_type", SetAccountTypeReducer),
+  __reducerSchema("set_agent_credential_scope", SetAgentCredentialScopeReducer),
   __reducerSchema("set_deployment_policy", SetDeploymentPolicyReducer),
   __reducerSchema("set_deployment_wake_policy", SetDeploymentWakePolicyReducer),
   __reducerSchema("set_profile", SetProfileReducer),

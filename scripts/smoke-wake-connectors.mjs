@@ -9,6 +9,8 @@ const root = path.resolve(__dirname, '..');
 const supervisor = path.join(root, 'dist', 'agenttalk-supervisor.js');
 const home = path.join(os.tmpdir(), `agenttalk-wake-connectors-smoke-${process.pid}-${Date.now()}`);
 const fakeBin = path.join(home, 'fake-bin');
+const fakeHermesRepo = path.join(home, 'fake-hermes-repo');
+const fakeOpenClawRepo = path.join(home, 'fake-openclaw-repo');
 const mockCode = [
   "const required=['AGENTTALK_STATE_DIR','AGENTTALK_CONVERSATION_ID','AGENTTALK_CLI','AGENTTALK_REPLY_COMMAND','AGENTTALK_REPLY_ARGS_JSON','SPACETIMEDB_HOST','SPACETIMEDB_DB_NAME'];",
   "const missing=required.filter(name=>!process.env[name]);",
@@ -68,6 +70,62 @@ async function installFakeCodex() {
   }
 }
 
+async function installFakeHermesRepo() {
+  const pythonPath = process.platform === 'win32'
+    ? path.join(fakeHermesRepo, 'venv', 'Scripts', 'python.exe')
+    : path.join(fakeHermesRepo, 'venv', 'bin', 'python');
+  await fs.mkdir(path.dirname(pythonPath), { recursive: true });
+  await fs.copyFile(process.execPath, pythonPath);
+  const hermesScript = path.join(fakeHermesRepo, 'hermes');
+  await fs.writeFile(
+    hermesScript,
+    [
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "const args = process.argv.slice(2);",
+      "if (args[0] !== 'chat') { process.stderr.write('missing chat command'); process.exit(2); }",
+      "if (!args.includes('--quiet')) { process.stderr.write('missing --quiet'); process.exit(3); }",
+      "if (!args.includes('--pass-session-id')) { process.stderr.write('missing --pass-session-id'); process.exit(4); }",
+      "const sourceIndex = args.indexOf('--source');",
+      "if (sourceIndex === -1 || args[sourceIndex + 1] !== 'agenttalk') { process.stderr.write('missing agenttalk source'); process.exit(5); }",
+      "const resumeIndex = args.indexOf('--resume');",
+      "const sessionId = resumeIndex === -1 ? 'fake-hermes-session-0' : args[resumeIndex + 1];",
+      "const stateDir = process.env.AGENTTALK_STATE_DIR;",
+      "if (!stateDir) { process.stderr.write('missing AGENTTALK_STATE_DIR'); process.exit(6); }",
+      "const callsPath = path.join(stateDir, 'fake-hermes-calls.json');",
+      "let calls = [];",
+      "try { calls = JSON.parse(fs.readFileSync(callsPath, 'utf8')); } catch {}",
+      "calls.push({ hasResume: resumeIndex !== -1, resumeSessionId: resumeIndex === -1 ? null : args[resumeIndex + 1], sessionId, conversationId: process.env.AGENTTALK_CONVERSATION_ID });",
+      "fs.writeFileSync(callsPath, JSON.stringify(calls, null, 2));",
+      "process.stdout.write(JSON.stringify({ ok: true, handled: true, replySent: false, message: 'fake hermes default handled wake', metadata: { fakeHermes: true, sessionId } }));",
+      "process.stderr.write('\\nsession_id: ' + sessionId + '\\n');",
+    ].join('\n'),
+    'utf8'
+  );
+  if (process.platform !== 'win32') {
+    await fs.chmod(pythonPath, 0o755);
+    await fs.chmod(hermesScript, 0o755);
+  }
+}
+
+async function installFakeOpenClawRepo() {
+  await fs.mkdir(fakeOpenClawRepo, { recursive: true });
+  const openclawScript = path.join(fakeOpenClawRepo, 'openclaw.mjs');
+  await fs.writeFile(
+    openclawScript,
+    [
+      "const args = process.argv.slice(2);",
+      "if (args[0] !== 'agent') { process.stderr.write('missing agent command'); process.exit(2); }",
+      "const agentIndex = args.indexOf('--agent');",
+      "if (agentIndex === -1 || args[agentIndex + 1] !== 'main') { process.stderr.write('unexpected openclaw agent id'); process.exit(3); }",
+      "if (!args.includes('--json')) { process.stderr.write('missing --json'); process.exit(4); }",
+      "const result = { ok: true, handled: true, replySent: false, replyText: 'fake openclaw payload reply', message: 'fake openclaw handled wake', metadata: { fakeOpenClaw: true } };",
+      "process.stdout.write(JSON.stringify({ runId: 'fake-openclaw-run', status: 'ok', result: { payloads: [{ text: JSON.stringify(result), mediaUrl: null }] } }));",
+    ].join('\n'),
+    'utf8'
+  );
+}
+
 function run(args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [supervisor, ...args], {
@@ -103,6 +161,8 @@ function parseJson(result) {
 }
 
 await installFakeCodex();
+await installFakeHermesRepo();
+await installFakeOpenClawRepo();
 await run(['init', '--json']);
 
 const cases = [
@@ -124,6 +184,14 @@ const cases = [
     kind: 'codex',
     command: mockCodexJsonlCommand,
     expectReplySent: true,
+  },
+  {
+    name: 'openclaw-default-agent',
+    handle: 'openclaw-default-agent',
+    kind: 'openclaw',
+    repo: fakeOpenClawRepo,
+    openclawAgentId: 'main',
+    expectReplyText: 'fake openclaw payload reply',
   },
 ];
 
@@ -147,6 +215,9 @@ for (const testCase of cases) {
   if (testCase.repo) {
     args.push('--repo', testCase.repo);
   }
+  if (testCase.openclawAgentId) {
+    args.push('--openclaw-agent-id', testCase.openclawAgentId);
+  }
   await run(args);
   const wake = parseJson(await run(['test-wake', testCase.name, '--json']));
   if (wake.ok !== true || wake.result?.handled !== true) {
@@ -158,13 +229,53 @@ for (const testCase of cases) {
   if (testCase.expectReplySent && wake.result?.replySent !== true) {
     throw new Error(`expected ${testCase.kind} JSONL result replySent=true: ${JSON.stringify(wake)}`);
   }
+  if (testCase.expectReplyText && wake.result?.replyText !== testCase.expectReplyText) {
+    throw new Error(`expected ${testCase.kind} payload replyText: ${JSON.stringify(wake)}`);
+  }
   results.push({
     kind: testCase.kind,
     handled: wake.result.handled,
     replyContract: testCase.command ? wake.result.metadata.replyContract === true : undefined,
     defaultCodex: wake.result.message === 'fake codex default handled wake',
+    defaultOpenClaw: wake.result.message === 'fake openclaw handled wake',
     replySent: wake.result.replySent === true,
+    replyText: wake.result.replyText,
   });
+}
+
+const hermesDefaultStateDir = path.join(home, 'agents', 'hermes-default-agent');
+await run([
+  'add-agent',
+  '--kind',
+  'hermes',
+  '--name',
+  'hermes-default-agent',
+  '--handle',
+  'hermes-default-agent',
+  '--repo',
+  fakeHermesRepo,
+  '--state-dir',
+  hermesDefaultStateDir,
+  '--json',
+]);
+const firstHermesWake = parseJson(await run(['test-wake', 'hermes-default-agent', '--json']));
+const secondHermesWake = parseJson(await run(['test-wake', 'hermes-default-agent', '--json']));
+if (
+  firstHermesWake.ok !== true ||
+  secondHermesWake.ok !== true ||
+  firstHermesWake.result?.metadata?.hermesSessionId !== 'fake-hermes-session-0' ||
+  secondHermesWake.result?.metadata?.hermesSessionId !== 'fake-hermes-session-0'
+) {
+  throw new Error(`unexpected default hermes results: ${JSON.stringify({ firstHermesWake, secondHermesWake })}`);
+}
+const hermesCalls = JSON.parse(await fs.readFile(path.join(hermesDefaultStateDir, 'fake-hermes-calls.json'), 'utf8'));
+if (
+  hermesCalls.length !== 2 ||
+  hermesCalls[0].hasResume !== false ||
+  hermesCalls[1].hasResume !== true ||
+  hermesCalls[1].resumeSessionId !== 'fake-hermes-session-0'
+) {
+  throw new Error(`default hermes connector should resume the first wake session: ${JSON.stringify(hermesCalls)}`);
 }
 
 console.log(JSON.stringify({ ok: true, results }));

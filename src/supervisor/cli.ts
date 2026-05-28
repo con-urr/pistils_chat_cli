@@ -7,22 +7,39 @@ import {
   defaultSupervisorConfig,
   ensureSupervisorDirs,
   expandHome,
+  clearOpenWakeApprovalPassphrase,
   loadSupervisorConfig,
   loadSupervisorConfigOrDefault,
   normalizeAgentName,
+  normalizeControlProfile,
   normalizeHandle,
   normalizeKind,
+  normalizeWakeAccessMode,
+  openWakeApprovalStatus,
+  normalizeWakeSenderAgentIds,
+  OPEN_WAKE_WARNING,
   redactConfig,
+  requireOpenWakeLocalApproval,
   saveSupervisorConfig,
+  setOpenWakeApprovalPassphrase,
   supervisorConfigPath,
   type AgentConnectorKind,
   type SupervisorAgentConfig,
   type SupervisorConfig,
+  wakeAccessMode,
 } from './config';
 import { executeWakeConnector } from './connectors';
 import { hermesStatusHasInferenceCredentials } from './hermes';
 import { stringifyJsonSafe } from './json';
-import { runSupervisor } from './runtime';
+import { inspectSupervisorLiveStatus, runSupervisor } from './runtime';
+import {
+  createWakeChangeRequest,
+  listWakeChangeRequests,
+  resolveWakeChangeRequest,
+  type WakeChangeRequestPatch,
+  type WakeChangeRequestStatus,
+} from './requests';
+import { loadAgentState } from './state';
 
 export type SupervisorFlags = Record<string, string | boolean>;
 type SupervisorDoctorCheck = {
@@ -36,6 +53,10 @@ type SupervisorDoctorCheck = {
 
 function writeStdout(line: string) {
   process.stdout.write(`${line}\n`);
+}
+
+function writeStderr(line: string) {
+  process.stderr.write(`${line}\n`);
 }
 
 function writeJson(value: unknown) {
@@ -65,6 +86,26 @@ function getBooleanFlag(flags: SupervisorFlags, keys: string[]) {
   return false;
 }
 
+function getOptionalBooleanFlag(flags: SupervisorFlags, keys: string[]) {
+  for (const key of keys) {
+    const value = flags[key];
+    if (value === true) {
+      return true;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.toLowerCase();
+      if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
+        return true;
+      }
+      if (normalized === 'false' || normalized === '0' || normalized === 'no') {
+        return false;
+      }
+      throw new Error(`${key} must be true or false`);
+    }
+  }
+  return undefined;
+}
+
 function getIntFlag(flags: SupervisorFlags, keys: string[], defaultValue: number) {
   const raw = getStringFlag(flags, keys);
   if (!raw) {
@@ -75,6 +116,190 @@ function getIntFlag(flags: SupervisorFlags, keys: string[], defaultValue: number
     throw new Error(`${keys[0]} must be a non-negative integer`);
   }
   return parsed;
+}
+
+function getWakeSenderAgentIdsFlag(
+  flags: SupervisorFlags,
+  keys: string[],
+  clearKeys: string[],
+  field: string
+) {
+  if (getBooleanFlag(flags, clearKeys)) {
+    return [] as string[];
+  }
+  const raw = getStringFlag(flags, keys);
+  return raw === undefined ? undefined : normalizeWakeSenderAgentIds(raw, field);
+}
+
+function getWakeAccessModeFlag(flags: SupervisorFlags) {
+  const raw = getStringFlag(flags, [
+    'wake-access',
+    'wake-access-mode',
+    'access-mode',
+    'wakeAccess',
+    'wakeAccessMode',
+  ]);
+  if (raw !== undefined) {
+    return normalizeWakeAccessMode(raw);
+  }
+  if (getBooleanFlag(flags, ['open-wake', 'openWake'])) {
+    return 'open' as const;
+  }
+  if (getBooleanFlag(flags, ['allow-list-wake', 'allowlist-wake', 'allowListWake'])) {
+    return 'allow_list' as const;
+  }
+  return undefined;
+}
+
+function hasOpenWakeConfirmation(flags: SupervisorFlags) {
+  return getBooleanFlag(flags, [
+    'i-understand-open-wake-risk',
+    'confirm-open-wake',
+    'yes-open-wake',
+    'openWakeRiskAccepted',
+  ]);
+}
+
+function getOpenWakeApprovalPassphrase(flags: SupervisorFlags) {
+  return (
+    getStringFlag(flags, [
+      'open-wake-approval-passphrase',
+      'approval-passphrase',
+      'openWakeApprovalPassphrase',
+    ]) ?? process.env.AGENTTALK_OPEN_WAKE_APPROVAL_PASSPHRASE
+  );
+}
+
+function requireOpenWakeConfirmation(flags: SupervisorFlags, config?: SupervisorConfig) {
+  if (!hasOpenWakeConfirmation(flags)) {
+    throw new Error(
+      `${OPEN_WAKE_WARNING}\nRe-run with --i-understand-open-wake-risk to confirm open wake mode.`
+    );
+  }
+  writeStderr(`[warn] ${OPEN_WAKE_WARNING}`);
+  requireOpenWakeLocalApproval(config, getOpenWakeApprovalPassphrase(flags));
+}
+
+function applyWakeAccessFlags(
+  agent: SupervisorAgentConfig,
+  flags: SupervisorFlags,
+  config?: SupervisorConfig
+) {
+  const mode = getWakeAccessModeFlag(flags);
+  if (mode === 'open') {
+    requireOpenWakeConfirmation(flags, config);
+    agent.wake.accessMode = 'open';
+  } else if (mode === 'allow_list') {
+    agent.wake.accessMode = 'allow_list';
+  }
+
+  const allowed = getWakeSenderAgentIdsFlag(
+    flags,
+    [
+      'allow-senders',
+      'allowed-senders',
+      'allowed-wake-senders',
+      'allow-wake-from',
+      'allowedWakeSenderAgentIds',
+    ],
+    ['clear-allow-senders', 'clear-allowed-senders', 'clearAllowedWakeSenderAgentIds'],
+    'Allowed wake senders'
+  );
+  const blocked = getWakeSenderAgentIdsFlag(
+    flags,
+    [
+      'block-senders',
+      'blocked-senders',
+      'blocked-wake-senders',
+      'block-wake-from',
+      'blockedWakeSenderAgentIds',
+    ],
+    ['clear-block-senders', 'clear-blocked-senders', 'clearBlockedWakeSenderAgentIds'],
+    'Blocked wake senders'
+  );
+
+  if (allowed !== undefined) {
+    agent.wake.allowedWakeSenderAgentIds = allowed;
+    agent.wake.accessMode = 'allow_list';
+  }
+  if (blocked !== undefined) {
+    agent.wake.blockedWakeSenderAgentIds = blocked;
+  }
+}
+
+function wakeChangePatchFromFlags(flags: SupervisorFlags): WakeChangeRequestPatch {
+  const patch: WakeChangeRequestPatch = {};
+  const wakeEnabled = getOptionalBooleanFlag(flags, ['wake-enabled', 'wakeEnabled', 'wake']);
+  if (wakeEnabled !== undefined) {
+    patch.wakeEnabled = wakeEnabled;
+  }
+  const mode = getWakeAccessModeFlag(flags);
+  if (mode !== undefined) {
+    patch.wakeAccessMode = mode;
+  }
+  const allowed = getWakeSenderAgentIdsFlag(
+    flags,
+    [
+      'allow-senders',
+      'allowed-senders',
+      'allowed-wake-senders',
+      'allow-wake-from',
+      'allowedWakeSenderAgentIds',
+    ],
+    ['clear-allow-senders', 'clear-allowed-senders', 'clearAllowedWakeSenderAgentIds'],
+    'Allowed wake senders'
+  );
+  const blocked = getWakeSenderAgentIdsFlag(
+    flags,
+    [
+      'block-senders',
+      'blocked-senders',
+      'blocked-wake-senders',
+      'block-wake-from',
+      'blockedWakeSenderAgentIds',
+    ],
+    ['clear-block-senders', 'clear-blocked-senders', 'clearBlockedWakeSenderAgentIds'],
+    'Blocked wake senders'
+  );
+  if (allowed !== undefined) {
+    patch.allowedWakeSenderAgentIds = allowed;
+    if (!patch.wakeAccessMode) {
+      patch.wakeAccessMode = 'allow_list';
+    }
+  }
+  if (blocked !== undefined) {
+    patch.blockedWakeSenderAgentIds = blocked;
+  }
+  return patch;
+}
+
+function applyWakeChangePatch(
+  agent: SupervisorAgentConfig,
+  patch: WakeChangeRequestPatch,
+  flags: SupervisorFlags,
+  config?: SupervisorConfig
+) {
+  if (patch.wakeEnabled !== undefined) {
+    agent.wake.enabled = patch.wakeEnabled;
+    if (patch.wakeEnabled) {
+      agent.wake.accessMode = 'allow_list';
+    }
+  }
+  if (patch.wakeAccessMode === 'open') {
+    requireOpenWakeConfirmation(flags, config);
+    agent.wake.accessMode = 'open';
+  } else if (patch.wakeAccessMode === 'allow_list') {
+    agent.wake.accessMode = 'allow_list';
+  }
+  if (patch.allowedWakeSenderAgentIds !== undefined) {
+    agent.wake.allowedWakeSenderAgentIds = patch.allowedWakeSenderAgentIds;
+    if (agent.wake.accessMode !== 'open') {
+      agent.wake.accessMode = 'allow_list';
+    }
+  }
+  if (patch.blockedWakeSenderAgentIds !== undefined) {
+    agent.wake.blockedWakeSenderAgentIds = patch.blockedWakeSenderAgentIds;
+  }
 }
 
 function commandOk(flags: SupervisorFlags, payload: Record<string, unknown>) {
@@ -182,14 +407,31 @@ async function findOnPath(command: string) {
 }
 
 function agentStatus(agent: SupervisorAgentConfig) {
+  const wakeEnabled = agent.enabled && agent.wake.enabled === true;
+  const allowedWakeSenderAgentIds = normalizeWakeSenderAgentIds(
+    agent.wake.allowedWakeSenderAgentIds,
+    'Allowed wake senders'
+  );
+  const blockedWakeSenderAgentIds = normalizeWakeSenderAgentIds(
+    agent.wake.blockedWakeSenderAgentIds,
+    'Blocked wake senders'
+  );
   return {
     name: agent.name,
     handle: agent.handle,
+    agentTalkAgentId: null,
+    agentTalkHandle: null,
     agentId: null,
     kind: agent.kind,
+    controlProfile: normalizeControlProfile(agent.controlProfile),
+    credentialScope: normalizeControlProfile(agent.controlProfile) === 'plugin_managed'
+      ? 'plugin_runtime'
+      : 'autonomous',
+    registrationState: 'unknown',
     enabled: agent.enabled,
-    wakeable: agent.enabled,
-    availability: agent.enabled ? 'configured' : 'disabled',
+    wakeEnabled: agent.wake.enabled === true,
+    wakeable: wakeEnabled,
+    availability: agent.enabled ? (wakeEnabled ? 'wakeable' : 'wake_off') : 'disabled',
     pendingWakes: 0,
     runningJobs: 0,
     lastWakeAt: null,
@@ -198,6 +440,41 @@ function agentStatus(agent: SupervisorAgentConfig) {
     failureCount: '0',
     connectorTimeoutMs: agent.connectorTimeoutMs,
     maxConcurrentWakeJobs: agent.maxConcurrentWakeJobs,
+    busyCheck: {
+      configured: Boolean(agent.connector?.busyCommand?.trim()),
+      timeoutMs: agent.connector?.busyCommandTimeoutMs ?? null,
+    },
+    wakeAccess: {
+      mode: wakeAccessMode(agent.wake),
+      allowedWakeSenderAgentIds,
+      blockedWakeSenderAgentIds,
+    },
+    desiredWake: {
+      enabled: agent.wake.enabled === true,
+      accessMode: wakeAccessMode(agent.wake),
+      allowedWakeSenderAgentIds,
+      blockedWakeSenderAgentIds,
+      maxConcurrentWakeJobs: agent.maxConcurrentWakeJobs,
+      latencyMs: agent.wake.latencyMs,
+    },
+    effectiveWake: null,
+    drift: null,
+  };
+}
+
+async function agentStatusWithState(agent: SupervisorAgentConfig) {
+  const status = agentStatus(agent);
+  const stateDir = path.resolve(expandHome(agent.stateDir));
+  const state = await loadAgentState(stateDir);
+  const agentTalkAgentId = state.agentId ?? null;
+  const agentTalkHandle = state.handle ?? null;
+  return {
+    ...status,
+    agentTalkAgentId,
+    agentTalkHandle,
+    agentId: agentTalkAgentId,
+    registrationState: state.registrationState ?? (agentTalkAgentId ? 'registered' : 'not_registered'),
+    lastProfileSyncAt: state.lastProfileSyncAt ?? null,
   };
 }
 
@@ -516,30 +793,75 @@ async function commandAddAgent(flags: SupervisorFlags) {
   const maxConcurrentWakeJobs = getIntFlag(flags, ['max-concurrent', 'maxConcurrentWakeJobs'], 1);
   const openclawAgentId = getStringFlag(flags, ['openclaw-agent-id', 'openclawAgentId']);
   const sendReplyText = getBooleanFlag(flags, ['send-reply-text', 'sendReplyText']);
-  const connector =
-    openclawAgentId && kind === 'openclaw'
-      ? { openclawAgentId, sendReplyText: sendReplyText || undefined }
-      : sendReplyText
-        ? { sendReplyText }
-        : undefined;
+  const busyCommand = getStringFlag(flags, ['busy-command', 'busyCommand']);
+  const busyCommandTimeoutMs = getIntFlag(
+    flags,
+    ['busy-command-timeout-ms', 'busyCommandTimeoutMs'],
+    5_000
+  );
+  const controlProfile = normalizeControlProfile(
+    getStringFlag(flags, ['control-profile', 'controlProfile', 'profile-mode', 'profileMode'])
+  );
+  const accessMode = getWakeAccessModeFlag(flags) ?? 'allow_list';
+  if (accessMode === 'open') {
+    requireOpenWakeConfirmation(flags, config);
+  }
+  const connector: SupervisorAgentConfig['connector'] = {};
+  if (openclawAgentId && kind === 'openclaw') {
+    connector.openclawAgentId = openclawAgentId;
+  }
+  if (sendReplyText) {
+    connector.sendReplyText = true;
+  }
+  if (busyCommand?.trim()) {
+    connector.busyCommand = busyCommand;
+    connector.busyCommandTimeoutMs = busyCommandTimeoutMs;
+  }
   const agent: SupervisorAgentConfig = {
     name,
     handle,
     kind,
+    controlProfile,
     stateDir,
     repoPath: getStringFlag(flags, ['repo', 'repo-path', 'repoPath'])
       ? path.resolve(expandHome(getStringFlag(flags, ['repo', 'repo-path', 'repoPath'])!))
       : undefined,
     command: getStringFlag(flags, ['command']),
-    connector,
+    connector: Object.keys(connector).length ? connector : undefined,
     enabled: !getBooleanFlag(flags, ['disabled']),
     autoInit: !getBooleanFlag(flags, ['no-auto-init']),
     maxConcurrentWakeJobs,
     connectorTimeoutMs: timeoutMs,
     wake: {
+      enabled: getBooleanFlag(flags, ['wake-enabled', 'wakeEnabled']),
+      accessMode,
       latencyMs: getIntFlag(flags, ['latency-ms', 'latencyMs'], 1000),
       statusText: getStringFlag(flags, ['status-text', 'statusText']) ?? `${name} ready`,
       reasons: ['direct_message', 'mention'],
+      allowedWakeSenderAgentIds: getWakeSenderAgentIdsFlag(
+        flags,
+        [
+          'allow-senders',
+          'allowed-senders',
+          'allowed-wake-senders',
+          'allow-wake-from',
+          'allowedWakeSenderAgentIds',
+        ],
+        ['clear-allow-senders', 'clear-allowed-senders', 'clearAllowedWakeSenderAgentIds'],
+        'Allowed wake senders'
+      ) ?? [],
+      blockedWakeSenderAgentIds: getWakeSenderAgentIdsFlag(
+        flags,
+        [
+          'block-senders',
+          'blocked-senders',
+          'blocked-wake-senders',
+          'block-wake-from',
+          'blockedWakeSenderAgentIds',
+        ],
+        ['clear-block-senders', 'clear-blocked-senders', 'clearBlockedWakeSenderAgentIds'],
+        'Blocked wake senders'
+      ) ?? [],
     },
   };
 
@@ -574,6 +896,182 @@ async function commandRemoveAgent(positionals: string[], flags: SupervisorFlags)
   });
 }
 
+async function commandSetAgentEnabled(positionals: string[], flags: SupervisorFlags, enabled: boolean) {
+  const name = normalizeAgentName(getStringFlag(flags, ['name']) ?? positionals[1] ?? '');
+  const config = await loadSupervisorConfig();
+  const agent = requireAgent(config, name);
+  agent.enabled = enabled;
+  if (!enabled) {
+    agent.wake.enabled = false;
+  }
+  await saveSupervisorConfig(config);
+  commandOk(flags, {
+    agent: agentStatus(agent),
+    message: `${enabled ? 'enabled' : 'disabled'} supervisor agent ${name}`,
+  });
+}
+
+async function commandSetWakeEnabled(positionals: string[], flags: SupervisorFlags, enabled: boolean) {
+  const name = normalizeAgentName(getStringFlag(flags, ['name']) ?? positionals[1] ?? '');
+  const config = await loadSupervisorConfig();
+  const agent = requireAgent(config, name);
+  agent.wake.enabled = enabled;
+  if (enabled) {
+    const requestedMode = getWakeAccessModeFlag(flags);
+    if (!requestedMode) {
+      agent.wake.accessMode = 'allow_list';
+    }
+    config.defaultWakePolicy = {
+      ...config.defaultWakePolicy,
+      wakeOnDirectMessage: getOptionalBooleanFlag(flags, ['direct']) ?? true,
+      wakeOnMention: getOptionalBooleanFlag(flags, ['mention']) ?? true,
+      wakeOnGroupMessage: getOptionalBooleanFlag(flags, ['group']) ?? false,
+      acceptsNewConversations: getOptionalBooleanFlag(flags, ['new-conversations', 'acceptsNewConversations']) ?? true,
+    };
+  }
+  applyWakeAccessFlags(agent, flags, config);
+  await saveSupervisorConfig(config);
+  commandOk(flags, {
+    agent: agentStatus(agent),
+    defaultWakePolicy: config.defaultWakePolicy,
+    message: `${enabled ? 'enabled' : 'disabled'} wake for supervisor agent ${name}`,
+  });
+}
+
+async function commandSetWakeAccess(positionals: string[], flags: SupervisorFlags) {
+  const name = normalizeAgentName(getStringFlag(flags, ['name']) ?? positionals[1] ?? '');
+  const config = await loadSupervisorConfig();
+  const agent = requireAgent(config, name);
+  applyWakeAccessFlags(agent, flags, config);
+  await saveSupervisorConfig(config);
+  commandOk(flags, {
+    agent: agentStatus(agent),
+    message: `updated wake access for supervisor agent ${name}`,
+  });
+}
+
+async function commandRequestWakeChange(positionals: string[], flags: SupervisorFlags) {
+  const name = normalizeAgentName(getStringFlag(flags, ['name']) ?? positionals[1] ?? '');
+  const request = await createWakeChangeRequest({
+    agentName: name,
+    requestedBy: getStringFlag(flags, ['requested-by', 'requestedBy']) ?? 'agent-runtime',
+    reason: getStringFlag(flags, ['reason']),
+    desired: wakeChangePatchFromFlags(flags),
+  });
+  commandOk(flags, {
+    request,
+    message: `recorded wake change request ${request.id} for supervisor agent ${name}`,
+  });
+}
+
+async function commandWakeChangeRequests(flags: SupervisorFlags) {
+  const rawStatus = getStringFlag(flags, ['status']) ?? 'pending';
+  const normalizedStatus = rawStatus === 'all'
+    ? 'all'
+    : rawStatus === 'pending' || rawStatus === 'approved' || rawStatus === 'denied'
+      ? rawStatus
+      : undefined;
+  if (!normalizedStatus) {
+    throw new Error('status must be pending, approved, denied, or all');
+  }
+  const requests = await listWakeChangeRequests({
+    agentName: getStringFlag(flags, ['agent', 'name']),
+    status: normalizedStatus as WakeChangeRequestStatus | 'all',
+  });
+  if (getBooleanFlag(flags, ['json'])) {
+    writeJson({ ok: true, requests });
+    return;
+  }
+  if (requests.length === 0) {
+    writeStdout('No wake change requests.');
+    return;
+  }
+  for (const request of requests) {
+    writeStdout(`${request.status} ${request.id} ${request.agentName} ${JSON.stringify(request.desired)}`);
+  }
+}
+
+async function commandApproveWakeChangeRequest(positionals: string[], flags: SupervisorFlags) {
+  const id = getStringFlag(flags, ['id']) ?? positionals[1] ?? '';
+  if (!id) {
+    throw new Error('approve-request requires a request id');
+  }
+  const requests = await listWakeChangeRequests({ status: 'pending' });
+  const pending = requests.find(request => request.id === id);
+  if (!pending) {
+    throw new Error(`Unknown pending wake change request '${id}'`);
+  }
+  const config = await loadSupervisorConfig();
+  const agent = requireAgent(config, pending.agentName);
+  applyWakeChangePatch(agent, pending.desired, flags, config);
+  await saveSupervisorConfig(config);
+  const request = await resolveWakeChangeRequest({
+    id,
+    status: 'approved',
+    resolvedBy: getStringFlag(flags, ['resolved-by', 'resolvedBy']) ?? 'supervisor-admin',
+    resolutionNote: getStringFlag(flags, ['note']),
+  });
+  commandOk(flags, {
+    request,
+    agent: agentStatus(agent),
+    message: `approved wake change request ${id}`,
+  });
+}
+
+async function commandDenyWakeChangeRequest(positionals: string[], flags: SupervisorFlags) {
+  const id = getStringFlag(flags, ['id']) ?? positionals[1] ?? '';
+  if (!id) {
+    throw new Error('deny-request requires a request id');
+  }
+  const request = await resolveWakeChangeRequest({
+    id,
+    status: 'denied',
+    resolvedBy: getStringFlag(flags, ['resolved-by', 'resolvedBy']) ?? 'supervisor-admin',
+    resolutionNote: getStringFlag(flags, ['note']),
+  });
+  commandOk(flags, {
+    request,
+    message: `denied wake change request ${id}`,
+  });
+}
+
+async function commandOpenWakeApproval(positionals: string[], flags: SupervisorFlags) {
+  const action = getStringFlag(flags, ['action']) ?? positionals[1] ?? 'status';
+  const config = await loadSupervisorConfigOrDefault();
+  if (action === 'status') {
+    const status = openWakeApprovalStatus(config);
+    commandOk(flags, {
+      openWakeApproval: status,
+      message: `open wake approval mode: ${status.mode}`,
+    });
+    return;
+  }
+  if (action === 'set-passphrase' || action === 'set-password' || action === 'set') {
+    const passphrase =
+      getStringFlag(flags, ['passphrase', 'password']) ?? getOpenWakeApprovalPassphrase(flags);
+    if (!passphrase) {
+      throw new Error('set-passphrase requires --passphrase or AGENTTALK_OPEN_WAKE_APPROVAL_PASSPHRASE');
+    }
+    setOpenWakeApprovalPassphrase(config, passphrase);
+    await saveSupervisorConfig(config);
+    commandOk(flags, {
+      openWakeApproval: openWakeApprovalStatus(config),
+      message: 'open wake approval passphrase configured',
+    });
+    return;
+  }
+  if (action === 'clear' || action === 'off' || action === 'disable') {
+    clearOpenWakeApprovalPassphrase(config);
+    await saveSupervisorConfig(config);
+    commandOk(flags, {
+      openWakeApproval: openWakeApprovalStatus(config),
+      message: 'open wake approval passphrase cleared',
+    });
+    return;
+  }
+  throw new Error('open-wake-approval action must be status, set-passphrase, or clear');
+}
+
 async function commandList(flags: SupervisorFlags) {
   const config = await loadSupervisorConfigOrDefault();
   const agents = config.agents.map(agent => redactConfig({ ...config, agents: [agent] }).agents[0]);
@@ -591,13 +1089,23 @@ async function commandList(flags: SupervisorFlags) {
 }
 
 async function commandStatus(flags: SupervisorFlags) {
+  if (getBooleanFlag(flags, ['live'])) {
+    const live = await inspectSupervisorLiveStatus();
+    if (getBooleanFlag(flags, ['json'])) {
+      writeJson(live);
+      return;
+    }
+    writeStdout(`supervisor live status inspected: ${live.agents.length} agent(s)`);
+    return;
+  }
   const config = await loadSupervisorConfigOrDefault();
+  const agents = await Promise.all(config.agents.map(agentStatusWithState));
   const payload = {
     running: false,
     configPath: '[redacted]',
     host: config.host,
     databaseName: config.databaseName,
-    agents: config.agents.map(agentStatus),
+    agents,
   };
   if (getBooleanFlag(flags, ['json'])) {
     writeJson({ ok: true, ...payload });
@@ -985,10 +1493,20 @@ function printHelp() {
 Usage:
   agenttalk supervisor init [--force] [--json]
   agenttalk supervisor init --wizard [--dry-run] [--json]
-  agenttalk supervisor add-agent --kind noop --name support --handle support-agent [--send-reply-text] [--json]
+  agenttalk supervisor add-agent --kind noop --name support --handle support-agent [--wake-access allow-list|open] [--allow-senders agent-id[,agent-id]] [--block-senders agent-id[,agent-id]] [--send-reply-text] [--json]
   agenttalk supervisor remove-agent <name> [--json]
+  agenttalk supervisor enable-agent <name> [--json]
+  agenttalk supervisor disable-agent <name> [--json]
+  agenttalk supervisor wake-on <name> [--direct true|false] [--mention true|false] [--wake-access allow-list|open] [--allow-senders agent-id[,agent-id]] [--block-senders agent-id[,agent-id]] [--json]
+  agenttalk supervisor wake-off <name> [--json]
+  agenttalk supervisor wake-access <name> [--wake-access allow-list|open] [--i-understand-open-wake-risk] [--open-wake-approval-passphrase text] [--allow-senders agent-id[,agent-id]|--clear-allow-senders] [--block-senders agent-id[,agent-id]|--clear-block-senders] [--json]
+  agenttalk supervisor request-wake-change <name> [--wake-enabled true|false] [--wake-access allow-list|open] [--allow-senders agent-id[,agent-id]] [--block-senders agent-id[,agent-id]] [--reason text] [--json]
+  agenttalk supervisor requests [--agent name] [--status pending|approved|denied|all] [--json]
+  agenttalk supervisor approve-request <id> [--i-understand-open-wake-risk] [--open-wake-approval-passphrase text] [--json]
+  agenttalk supervisor deny-request <id> [--note text] [--json]
+  agenttalk supervisor open-wake-approval status|set-passphrase|clear [--passphrase text] [--json]
   agenttalk supervisor list [--json]
-  agenttalk supervisor status [--json]
+  agenttalk supervisor status [--live] [--json]
   agenttalk supervisor doctor [--json]
   agenttalk supervisor test-wake <name> [--json]
   agenttalk supervisor run [--once] [--duration-ms 30000] [--json]
@@ -1015,6 +1533,46 @@ export async function runSupervisorCommand(positionals: string[], flags: Supervi
   }
   if (subcommand === 'remove-agent' || subcommand === 'remove') {
     await commandRemoveAgent(positionals, flags);
+    return;
+  }
+  if (subcommand === 'enable-agent' || subcommand === 'agent-on') {
+    await commandSetAgentEnabled(positionals, flags, true);
+    return;
+  }
+  if (subcommand === 'disable-agent' || subcommand === 'agent-off') {
+    await commandSetAgentEnabled(positionals, flags, false);
+    return;
+  }
+  if (subcommand === 'wake-on' || subcommand === 'enable-wake') {
+    await commandSetWakeEnabled(positionals, flags, true);
+    return;
+  }
+  if (subcommand === 'wake-off' || subcommand === 'disable-wake') {
+    await commandSetWakeEnabled(positionals, flags, false);
+    return;
+  }
+  if (subcommand === 'wake-access' || subcommand === 'wake-policy') {
+    await commandSetWakeAccess(positionals, flags);
+    return;
+  }
+  if (subcommand === 'request-wake-change' || subcommand === 'wake-request') {
+    await commandRequestWakeChange(positionals, flags);
+    return;
+  }
+  if (subcommand === 'requests' || subcommand === 'wake-requests') {
+    await commandWakeChangeRequests(flags);
+    return;
+  }
+  if (subcommand === 'approve-request' || subcommand === 'approve-wake-request') {
+    await commandApproveWakeChangeRequest(positionals, flags);
+    return;
+  }
+  if (subcommand === 'deny-request' || subcommand === 'deny-wake-request') {
+    await commandDenyWakeChangeRequest(positionals, flags);
+    return;
+  }
+  if (subcommand === 'open-wake-approval' || subcommand === 'open-wake-gate') {
+    await commandOpenWakeApproval(positionals, flags);
     return;
   }
   if (subcommand === 'list') {

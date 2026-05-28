@@ -83,6 +83,17 @@ export const ActiveConnection = __t.object("ActiveConnection", {
 });
 export type ActiveConnection = __Infer<typeof ActiveConnection>;
 
+export const AgentCredentialScope = __t.object("AgentCredentialScope", {
+  identity: __t.identity(),
+  agentId: __t.string(),
+  scope: __t.string(),
+  label: __t.option(__t.string()),
+  createdAt: __t.timestamp(),
+  updatedAt: __t.timestamp(),
+  updatedBy: __t.identity(),
+});
+export type AgentCredentialScope = __Infer<typeof AgentCredentialScope>;
+
 export const AgentDeliveryCounter = __t.object("AgentDeliveryCounter", {
   agentId: __t.string(),
   unreadCount: __t.u64(),

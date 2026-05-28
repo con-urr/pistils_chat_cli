@@ -145,24 +145,6 @@ process.stdout.write(JSON.stringify({
 );
 
 await runSupervisorCommand(['init', '--json']);
-await runSupervisorCommand([
-  'add-agent',
-  '--kind',
-  'shell',
-  '--name',
-  'target',
-  '--handle',
-  targetHandle,
-  '--state-dir',
-  path.join(home, 'agents', 'target'),
-  '--command',
-  `${JSON.stringify(process.execPath)} ${JSON.stringify(connectorPath)}`,
-  '--json',
-]);
-
-const supervisorRun = spawnSupervisorRun();
-await sleep(3500);
-
 const sender = await AgentRealtimeClient.connect({
   host,
   databaseName,
@@ -183,6 +165,34 @@ try {
     clientRequestId: `live-supervisor-self-reply:${suffix}:sender`,
   });
   await sleep(1000);
+  const senderAgentId = sender.currentAgentProfile()?.agentId;
+  if (!senderAgentId) {
+    throw new Error('Sender account did not expose an AgentTalk agent id');
+  }
+  await runSupervisorCommand([
+    'add-agent',
+    '--kind',
+    'shell',
+    '--name',
+    'target',
+    '--handle',
+    targetHandle,
+    '--state-dir',
+    path.join(home, 'agents', 'target'),
+    '--command',
+    `${JSON.stringify(process.execPath)} ${JSON.stringify(connectorPath)}`,
+    '--wake-enabled',
+    'true',
+    '--wake-access',
+    'allow-list',
+    '--allowed-wake-senders',
+    senderAgentId,
+    '--json',
+  ]);
+
+  const supervisorRun = spawnSupervisorRun();
+  await sleep(3500);
+
   await sender.requestAccountDirectory({ handle: targetHandle, limit: 1n });
   await sleep(750);
   const target = sender.searchAccounts({ handle: targetHandle })[0];

@@ -16,6 +16,17 @@ import {
   type RoomOptions,
 } from './agent-client';
 import type * as ModuleTypes from './module_bindings/types';
+import {
+  normalizeControlProfile,
+  normalizeWakeAccessMode,
+  normalizeWakeSenderAgentIds,
+  OPEN_WAKE_WARNING,
+} from './supervisor/config';
+import {
+  checkForPackageUpdate,
+  formatPackageUpdateNotice,
+  maybeNotifyPackageUpdate,
+} from './update-check';
 
 type Flags = Record<string, string | boolean>;
 
@@ -519,10 +530,10 @@ Usage:
   agenttalk event emit --kind typing|heartbeat|mention|joined_thread|joined_conversation|status [--channel <channel>] [--thread-id <id>] [--conversation-id <id>] [--target handle-or-identity] [--text text]
   agenttalk watch <thread-id> [--jsonl]
   agenttalk wake status [--private] [--json]
-  agenttalk wake on [--latency-ms <n>] [--status-text text] [--json]
+  agenttalk wake on [--latency-ms <n>] [--status-text text] [--wake-access allow-list|open] [--json]
   agenttalk wake off [--json]
   agenttalk wake register [--kind local_daemon|webhook|cloud_runner|mcp_session|push_gateway|noop] [--endpoint-ref ref] [--secret-hash hash] [--json]
-  agenttalk wake policy [--direct true|false] [--mention true|false] [--group true|false] [--handoff true|false] [--business true|false] [--availability online|wakeable|sleeping|offline|unavailable] [--json]
+  agenttalk wake policy [--direct true|false] [--mention true|false] [--group true|false] [--handoff true|false] [--business true|false] [--wake-access allow-list|open] [--allow-senders agent-id[,agent-id]] [--block-senders agent-id[,agent-id]] [--availability online|wakeable|sleeping|offline|unavailable] [--json]
   agenttalk wake requests [--status pending|leased|dispatched|acked|failed|suppressed|expired] [--conversation <id>] [--json]
   agenttalk wake listen [--timeout 30s] [--follow] [--context] [--exec "<command>"] [--no-auto-ack] [--json|--jsonl]
   agenttalk wake claim [wake-id] [--lease-ms <n>] [--json]
@@ -535,6 +546,7 @@ Usage:
   agenttalk mcp config [--client codex|claude|cursor|all] [--dev] [--url https://<service>/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN] [--json]
   agenttalk mcp install-codex [--name agenttalk] [--dev] [--url https://<service>/mcp --bearer-token-env-var AGENTTALK_MCP_TOKEN] [--dry-run] [--json]
   agenttalk supervisor init|add-agent|list|status|doctor|test-wake [--json]
+  agenttalk update check [--force] [--json]
   agenttalk repair-access
   agenttalk run --jsonl
   agenttalk serve --jsonl
@@ -564,6 +576,7 @@ Global flags:
   --connect-timeout-ms <n> connection timeout milliseconds (default: 15000)
   --subscription-profile <directory|identity|direct|direct-lite|daemon-direct|account-admin|wake|rooms|ops|all>
                      override the command's optimized realtime subscription set
+  --no-update-check  suppress passive npm update checks for this invocation
 
 State file:
   ${STATE_PATH}
@@ -5808,7 +5821,86 @@ function printWakeStatus(data: Record<string, any>) {
   writeStdout(`wake requests: ${requests.length}`);
 }
 
-function wakePolicyPayloadFromFlags(flags: Flags) {
+function wakeSenderAgentIdsJsonFlag(flags: Flags, keys: string[], field: string) {
+  const raw = getStringFlag(flags, keys);
+  return raw === undefined ? undefined : JSON.stringify(normalizeWakeSenderAgentIds(raw, field));
+}
+
+function getWakeAccessModeFlag(flags: Flags) {
+  const raw = getStringFlag(flags, [
+    'wake-access',
+    'wake-access-mode',
+    'access-mode',
+    'wakeAccess',
+    'wakeAccessMode',
+  ]);
+  if (raw !== undefined) {
+    return normalizeWakeAccessMode(raw);
+  }
+  if (getBooleanFlag(flags, ['open-wake', 'openWake'])) {
+    return 'open' as const;
+  }
+  if (getBooleanFlag(flags, ['allow-list-wake', 'allowlist-wake', 'allowListWake'])) {
+    return 'allow_list' as const;
+  }
+  return undefined;
+}
+
+function hasOpenWakeConfirmation(flags: Flags) {
+  return getBooleanFlag(flags, [
+    'i-understand-open-wake-risk',
+    'confirm-open-wake',
+    'yes-open-wake',
+    'openWakeRiskAccepted',
+  ]);
+}
+
+function requireOpenWakeConfirmation(flags: Flags) {
+  if (!hasOpenWakeConfirmation(flags)) {
+    throw new Error(
+      `${OPEN_WAKE_WARNING}\nRe-run with --i-understand-open-wake-risk to confirm open wake mode.`
+    );
+  }
+  writeStderr(`[warn] ${OPEN_WAKE_WARNING}`);
+}
+
+function currentRuntimeControlProfile() {
+  const raw = process.env.AGENTTALK_CONTROL_PROFILE ?? process.env.AGENTTALK_PROFILE;
+  return raw ? normalizeControlProfile(raw) : undefined;
+}
+
+function requireWakeAdminAllowed(action: string) {
+  if (currentRuntimeControlProfile() === 'plugin_managed') {
+    throw new Error(
+      `${action} denied: plugin-managed AgentTalk runtimes cannot mutate wake/admin state directly. Use the host plugin GUI or supervisor admin surface.`
+    );
+  }
+}
+
+function allowedWakeSenderJsonFromFlags(flags: Flags, options: { defaultAllowList?: boolean } = {}) {
+  const requestedMode = getWakeAccessModeFlag(flags);
+  const rawJson = getStringFlag(flags, ['allowed-senders-json', 'allowedWakeSenderAgentIdsJson']);
+  const listJson = wakeSenderAgentIdsJsonFlag(
+    flags,
+    ['allow-senders', 'allowed-senders', 'allowed-wake-senders', 'allow-wake-from'],
+    'Allowed wake senders'
+  );
+
+  if (requestedMode === 'open') {
+    requireOpenWakeConfirmation(flags);
+    return '';
+  }
+  if (requestedMode === 'allow_list') {
+    return rawJson && rawJson.trim() ? rawJson : listJson ?? '[]';
+  }
+  if (rawJson !== undefined && !rawJson.trim()) {
+    requireOpenWakeConfirmation(flags);
+    return '';
+  }
+  return rawJson ?? listJson ?? (options.defaultAllowList ? '[]' : undefined);
+}
+
+function wakePolicyPayloadFromFlags(flags: Flags, options: { defaultAllowList?: boolean } = {}) {
   return {
     wakeOnDirectMessage: getOptionalBooleanFlag(flags, ['direct', 'wake-on-direct']),
     wakeOnMention: getOptionalBooleanFlag(flags, ['mention', 'wake-on-mention']),
@@ -5833,14 +5925,14 @@ function wakePolicyPayloadFromFlags(flags: Flags) {
     ])?.toString(),
     availabilityOverride: getStringFlag(flags, ['availability', 'availabilityOverride']),
     statusText: getStringFlag(flags, ['status-text', 'statusText']),
-    allowedWakeSenderAgentIdsJson: getStringFlag(flags, [
-      'allowed-senders-json',
-      'allowedWakeSenderAgentIdsJson',
-    ]),
-    blockedWakeSenderAgentIdsJson: getStringFlag(flags, [
-      'blocked-senders-json',
-      'blockedWakeSenderAgentIdsJson',
-    ]),
+    allowedWakeSenderAgentIdsJson: allowedWakeSenderJsonFromFlags(flags, options),
+    blockedWakeSenderAgentIdsJson:
+      getStringFlag(flags, ['blocked-senders-json', 'blockedWakeSenderAgentIdsJson']) ??
+      wakeSenderAgentIdsJsonFlag(
+        flags,
+        ['block-senders', 'blocked-senders', 'blocked-wake-senders', 'block-wake-from'],
+        'Blocked wake senders'
+      ),
   };
 }
 
@@ -5868,7 +5960,8 @@ async function commandWake(flags: Flags, positionals: string[]) {
   }
 
   if (subcommand === 'on' || subcommand === 'enable') {
-    const policyFlags = wakePolicyPayloadFromFlags(flags);
+    requireWakeAdminAllowed('wake:on');
+    const policyFlags = wakePolicyPayloadFromFlags(flags, { defaultAllowList: true });
     await sendRequiredDaemonCommand(flags, {
       id: 'wake:register-local',
       cmd: 'register_wake',
@@ -5901,6 +5994,7 @@ async function commandWake(flags: Flags, positionals: string[]) {
   }
 
   if (subcommand === 'off' || subcommand === 'disable') {
+    requireWakeAdminAllowed('wake:off');
     const response = await sendRequiredDaemonCommand(flags, {
       id: 'wake:off',
       cmd: 'set_wake_policy',
@@ -5923,6 +6017,7 @@ async function commandWake(flags: Flags, positionals: string[]) {
   }
 
   if (subcommand === 'register') {
+    requireWakeAdminAllowed('wake:register');
     const kind = assertChoice(
       getStringFlag(flags, ['kind']) ?? positionals[1] ?? 'local_daemon',
       'kind',
@@ -5948,6 +6043,7 @@ async function commandWake(flags: Flags, positionals: string[]) {
   }
 
   if (subcommand === 'unregister' || subcommand === 'disable-registration') {
+    requireWakeAdminAllowed('wake:disable-registration');
     const response = await sendRequiredDaemonCommand(flags, {
       id: 'wake:disable-registration',
       cmd: 'disable_wake_registration',
@@ -5971,6 +6067,7 @@ async function commandWake(flags: Flags, positionals: string[]) {
       await commandWake(flags, ['status']);
       return;
     }
+    requireWakeAdminAllowed('wake:policy');
     const response = await sendRequiredDaemonCommand(flags, {
       id: 'wake:policy',
       cmd: 'set_wake_policy',
@@ -5986,6 +6083,7 @@ async function commandWake(flags: Flags, positionals: string[]) {
   }
 
   if (subcommand === 'reset-policy') {
+    requireWakeAdminAllowed('wake:reset-policy');
     const response = await sendRequiredDaemonCommand(flags, {
       id: 'wake:reset-policy',
       cmd: 'reset_wake_policy',
@@ -7760,6 +7858,57 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
   await new Promise<void>(() => undefined);
 }
 
+async function commandUpdate(flags: Flags, positionals: string[]) {
+  const subcommand = positionals[0] ?? 'check';
+  if (subcommand === 'help' || subcommand === '--help') {
+    writeStdout(`Usage:
+  agenttalk update check [--force] [--json]
+
+Checks npm for a newer ${'pistils-chat-cli'} package version. Passive update checks are cached and
+are skipped for --json, --agent, --quiet, and AGENTTALK_UPDATE_CHECK=0.`);
+    return;
+  }
+  if (subcommand !== 'check') {
+    throw new Error(`Unknown update command: ${subcommand}`);
+  }
+  const status = await checkForPackageUpdate({
+    stateDir: STATE_DIR,
+    force: getBooleanFlag(flags, ['force']),
+    timeoutMs: getIntFlag(flags, ['timeout-ms', 'timeoutMs'], 5000),
+  });
+  if (wantsJson(flags)) {
+    writeJson(status);
+    return;
+  }
+  if (!status.ok) {
+    writeStdout(`update check failed: ${status.error ?? 'unknown error'}`);
+    return;
+  }
+  const notice = formatPackageUpdateNotice(status);
+  if (notice) {
+    writeStdout(notice);
+    return;
+  }
+  writeStdout(`${status.packageName} is up to date (${status.currentVersion})`);
+}
+
+async function maybeRunPassiveUpdateCheck(command: string, flags: Flags) {
+  if (
+    command === 'help' ||
+    command === '--help' ||
+    command === 'update' ||
+    getBooleanFlag(flags, ['no-update-check', 'noUpdateCheck'])
+  ) {
+    return;
+  }
+  await maybeNotifyPackageUpdate({
+    stateDir: STATE_DIR,
+    json: STRICT_OUTPUT,
+    quiet: QUIET,
+    write: writeStderr,
+  });
+}
+
 async function main() {
   const rawArgs = process.argv.slice(2);
   const leadingFlags: string[] = [];
@@ -7797,6 +7946,8 @@ async function main() {
     printHelp();
     return;
   }
+
+  await maybeRunPassiveUpdateCheck(command, flags);
 
   allowDirectCli(flags);
 
@@ -7873,6 +8024,11 @@ async function main() {
 
   if (command === 'mcp') {
     await commandMcp(flags, positionals);
+    return;
+  }
+
+  if (command === 'update') {
+    await commandUpdate(flags, positionals);
     return;
   }
 

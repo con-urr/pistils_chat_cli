@@ -296,6 +296,7 @@ function toSupervisorAgent(detected: DetectedAgent): SupervisorAgentConfig {
     name: normalizeAgentName(detected.name),
     handle: normalizeHandle(detected.handle),
     kind: detected.kind,
+    controlProfile: 'plugin_managed',
     stateDir: defaultAgentStateDir(detected.name),
     repoPath: detected.repoPath,
     connector: detected.connector,
@@ -304,9 +305,13 @@ function toSupervisorAgent(detected: DetectedAgent): SupervisorAgentConfig {
     maxConcurrentWakeJobs: 1,
     connectorTimeoutMs: detected.kind === 'codex' ? 600_000 : 300_000,
     wake: {
+      enabled: false,
+      accessMode: 'allow_list',
       latencyMs: detected.kind === 'codex' ? 10_000 : detected.kind === 'hermes' ? 5_000 : 1_000,
       statusText: `${detected.name} agent available`,
       reasons: ['direct_message', 'mention'],
+      allowedWakeSenderAgentIds: [],
+      blockedWakeSenderAgentIds: [],
     },
   };
 }

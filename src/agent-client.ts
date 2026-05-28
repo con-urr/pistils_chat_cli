@@ -40,6 +40,7 @@ export type CreateAccountInput = {
 };
 
 export type AccountType = 'free' | 'group' | 'pro' | 'operator';
+export type AgentCredentialScope = 'plugin_runtime' | 'autonomous' | 'admin';
 
 export type AccountDirectoryRequest = {
   query?: string;
@@ -296,6 +297,7 @@ const WAKE_SUBSCRIPTIONS = [
   'SELECT * FROM visible_own_wake_request',
   'SELECT * FROM visible_dispatcher_wake_request',
   'SELECT * FROM visible_wake_attempt',
+  'SELECT * FROM visible_requested_conversation_message',
   'SELECT * FROM visible_deployment_wake_policy',
   'SELECT * FROM visible_client_request_receipt',
   'SELECT * FROM visible_retention_policy',
@@ -1017,15 +1019,40 @@ export class AgentRealtimeClient {
     identity,
     agentId,
     deviceLabel,
+    credentialScope,
+    credentialLabel,
   }: {
     identity: Identity;
     agentId: string;
     deviceLabel?: string;
+    credentialScope?: AgentCredentialScope;
+    credentialLabel?: string;
   }) {
     await this.conn.reducers.bindAgentIdentity({
       identity,
       agentId,
       deviceLabel,
+      credentialScope,
+      credentialLabel,
+    });
+  }
+
+  async setAgentCredentialScope({
+    identity,
+    agentId,
+    credentialScope,
+    credentialLabel,
+  }: {
+    identity: Identity;
+    agentId: string;
+    credentialScope: AgentCredentialScope;
+    credentialLabel?: string;
+  }) {
+    await this.conn.reducers.setAgentCredentialScope({
+      identity,
+      agentId,
+      credentialScope,
+      credentialLabel,
     });
   }
 
@@ -2228,6 +2255,34 @@ export class AgentRealtimeClient {
     return this.listRequestedConversationMessages(conversationId);
   }
 
+  async waitForRequestedConversationMessages({
+    conversationId,
+    minSequence,
+    maxSequence,
+    timeoutMs = 5000,
+  }: {
+    conversationId: bigint;
+    minSequence: bigint;
+    maxSequence: bigint;
+    timeoutMs?: number;
+  }) {
+    const deadline = Date.now() + timeoutMs;
+    let latest: ModuleTypes.ConversationMessage[] = [];
+    const expectedCount = Number(maxSequence - minSequence + 1n);
+    while (Date.now() <= deadline) {
+      latest = this.listRequestedConversationMessages(conversationId)
+        .filter(row => row.sequence >= minSequence && row.sequence <= maxSequence);
+      if (
+        latest.length >= expectedCount ||
+        latest.some(row => row.sequence === maxSequence)
+      ) {
+        return latest;
+      }
+      await sleep(100);
+    }
+    return latest;
+  }
+
   onConversationMessageInsert(
     callback: (row: ModuleTypes.ConversationMessage) => void
   ) {
@@ -2443,9 +2498,11 @@ export class AgentTalkWakeClient {
       afterSequence,
       limit: BigInt(Math.min(Math.max(span, 1), 100)),
     });
-    return this.realtime
-      .listRequestedConversationMessages(wake.conversationId)
-      .filter(row => row.sequence >= wake.minSequence && row.sequence <= wake.maxSequence);
+    return this.realtime.waitForRequestedConversationMessages({
+      conversationId: wake.conversationId,
+      minSequence: wake.minSequence,
+      maxSequence: wake.maxSequence,
+    });
   }
 
   async ackWake(wakeId: string, attemptId?: string) {

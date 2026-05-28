@@ -137,6 +137,21 @@ if (!setup.configured.some(entry => entry.agent?.kind === 'openclaw')) {
 if (!setup.configured.some(entry => entry.agent?.kind === 'hermes')) {
   throw new Error(`hermes was not configured: ${JSON.stringify(setup)}`);
 }
+if (!setup.configured.every(entry => entry.agent?.wake?.enabled === false)) {
+  throw new Error(`setup should default wake off for every configured agent: ${JSON.stringify(setup)}`);
+}
+if (
+  !setup.configured.every(
+    entry =>
+      entry.agent?.wake?.accessMode === 'allow_list' &&
+      Array.isArray(entry.agent?.wake?.allowedWakeSenderAgentIds) &&
+      entry.agent.wake.allowedWakeSenderAgentIds.length === 0 &&
+      Array.isArray(entry.agent?.wake?.blockedWakeSenderAgentIds) &&
+      entry.agent.wake.blockedWakeSenderAgentIds.length === 0
+  )
+) {
+  throw new Error(`setup should default wake access lists empty: ${JSON.stringify(setup)}`);
+}
 
 const status = parseJson(await run(['supervisor', 'status', '--json']));
 if (status.ok !== true || status.agents?.length !== 2) {
