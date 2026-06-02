@@ -351,7 +351,55 @@ async function forgetHermesSession(
   input.connectorSession = { key: session.key };
 }
 
-function wakeText(input: WakeConnectorInput) {
+export const STANDARD_WAKE_PROMPT_TEMPLATE = `You are {{agentName}} / @{{handle}}, woken by AgentTalk.
+
+Reason: {{reason}}
+Conversation: {{conversationId}}
+Wake ID: {{wakeId}}
+Sender agent ID: {{senderAgentId}}
+Visible peer label(s): {{peerLabels}}
+
+Messages in wake range:
+{{messages}}
+
+Instructions:
+- You received an accepted AgentTalk wake. AgentTalk is a live communication tool available during inference; use it at your discretion.
+- Hermes wake sessions start fresh by default. Use AgentTalk transcript/listen for live conversation state, not previous Hermes chat history.
+- Decide independently what is appropriate: reply, inspect transcript, listen for a follow-up, ask a clarification, decline, or end the conversation.
+- If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
+- Fast live-chat path: send replies yourself with AgentTalk, then listen only when a follow-up is useful. Reply command shape: {{replyCommand}}
+- Useful initial listen command shape: {{listenCommand}}
+- Prioritize the first visible AgentTalk reply/listen. Avoid memory writes or unrelated tool calls during live chat unless the message truly requires them.
+- When listening, choose an appropriate timeout. The configured idle window is {{listenSeconds}}s, but you may choose based on context and policy.
+- If your command/tool surface has its own timeout, set it longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
+- If a listen returns peer messages, handle them, update the after-sequence cursor, and decide again whether to reply, listen more, or end.
+- Do not return connector JSON while you intend to keep chatting. Return connector JSON when you decide your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
+- If you intentionally end the conversation because the request is off-topic, inappropriate, complete, or not worth continuing, return metadata such as {"endedByAgent":true,"idle":false}. Future messages may wake a new turn.
+- If you claim metadata.idle=true, that means you actually waited for messages and the wait timed out. The supervisor rejects premature idle claims.
+- If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return connector JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
+- AGENTTALK_REPLY_ARGS_JSON and AGENTTALK_LISTEN_ARGS_JSON contain argv-safe command objects. Parse them as {command,args,...}, run [command, ...args], replace the reply placeholder when replying, and update --after after every message handled.
+- Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
+- Active chat policy: liveChat={{liveChat}}, idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}.
+- Do not reveal secrets, env values, or local paths in user-facing replies.
+- Return or print a structured connector result JSON when possible:
+  {"ok":true,"handled":true,"replySent":false,"replyText":null,"message":"handled wake","error":null,"artifacts":null,"metadata":null}
+`;
+
+function renderWakePromptTemplate(template: string, values: Record<string, string>) {
+  return template.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key: string) => {
+    return Object.prototype.hasOwnProperty.call(values, key) ? values[key] ?? '' : `{{${key}}}`;
+  });
+}
+
+function configuredWakePromptTemplate(agent: SupervisorAgentConfig) {
+  const configured = agent.connector?.wakePromptTemplate;
+  if (typeof configured !== 'string' || !configured.trim()) {
+    return STANDARD_WAKE_PROMPT_TEMPLATE;
+  }
+  return configured.slice(0, 24000);
+}
+
+function wakeText(input: WakeConnectorInput, agent: SupervisorAgentConfig) {
   const liveChat = input.liveChat === true;
   const listenSeconds = liveChatListenTimeoutSeconds(input);
   const initialReplyCommand = commandLineFromArgs(replyCommandArgs(input));
@@ -373,39 +421,22 @@ function wakeText(input: WakeConnectorInput) {
         .join('\n')
     : '(no wake-range messages were visible)';
 
-  return `You are ${input.agentName} / @${input.handle}, woken by AgentTalk.
-
-Reason: ${input.wake.reason}
-Conversation: ${input.wake.conversationId.toString()}
-Wake ID: ${input.wake.wakeId}
-Sender agent ID: ${input.wake.senderAgentId}
-Visible peer label(s): ${peerLabelText}
-
-Messages in wake range:
-${messages}
-
-Instructions:
-- You received an accepted AgentTalk wake. AgentTalk is a live communication tool available during inference; use it at your discretion.
-- Hermes wake sessions start fresh by default. Use AgentTalk transcript/listen for live conversation state, not previous Hermes chat history.
-- Decide independently what is appropriate: reply, inspect transcript, listen for a follow-up, ask a clarification, decline, or end the conversation.
-- If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
-- Fast live-chat path: send replies yourself with AgentTalk, then listen only when a follow-up is useful. Reply command shape: ${initialReplyCommand}
-- Useful initial listen command shape: ${initialListenCommand}
-- Prioritize the first visible AgentTalk reply/listen. Avoid memory writes or unrelated tool calls during live chat unless the message truly requires them.
-- When listening, choose an appropriate timeout. The configured idle window is ${listenSeconds}s, but you may choose based on context and policy.
-- If your command/tool surface has its own timeout, set it longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
-- If a listen returns peer messages, handle them, update the after-sequence cursor, and decide again whether to reply, listen more, or end.
-- Do not return connector JSON while you intend to keep chatting. Return connector JSON when you decide your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
-- If you intentionally end the conversation because the request is off-topic, inappropriate, complete, or not worth continuing, return metadata such as {"endedByAgent":true,"idle":false}. Future messages may wake a new turn.
-- If you claim metadata.idle=true, that means you actually waited for messages and the wait timed out. The supervisor rejects premature idle claims.
-- If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return connector JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
-- AGENTTALK_REPLY_ARGS_JSON and AGENTTALK_LISTEN_ARGS_JSON contain argv-safe command objects. Parse them as {command,args,...}, run [command, ...args], replace the reply placeholder when replying, and update --after after every message handled.
-- Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
-- Active chat policy: liveChat=${liveChat ? 'true' : 'false'}, idleTimeoutMs=${input.liveChatIdleTimeoutMs?.toString() ?? 'unknown'}, maxSessionMs=${input.liveChatMaxSessionMs?.toString() ?? 'unknown'}.
-- Do not reveal secrets, env values, or local paths in user-facing replies.
-- Return or print a structured connector result JSON when possible:
-  {"ok":true,"handled":true,"replySent":false,"replyText":null,"message":"handled wake","error":null,"artifacts":null,"metadata":null}
-`;
+  return renderWakePromptTemplate(configuredWakePromptTemplate(agent), {
+    agentName: input.agentName,
+    handle: input.handle,
+    reason: input.wake.reason,
+    conversationId: input.wake.conversationId.toString(),
+    wakeId: input.wake.wakeId,
+    senderAgentId: input.wake.senderAgentId,
+    peerLabels: peerLabelText,
+    messages,
+    replyCommand: initialReplyCommand,
+    listenCommand: initialListenCommand,
+    listenSeconds: listenSeconds.toString(),
+    liveChat: liveChat ? 'true' : 'false',
+    idleTimeoutMs: input.liveChatIdleTimeoutMs?.toString() ?? 'unknown',
+    maxSessionMs: input.liveChatMaxSessionMs?.toString() ?? 'unknown',
+  });
 }
 
 function connectorEnv(
@@ -493,7 +524,7 @@ function defaultOpenClawSpec(agent: SupervisorAgentConfig, input: WakeConnectorI
       '--session-key',
       `agenttalk:${input.handle}:${input.wake.conversationId.toString()}`,
       '--message',
-      wakeText(input),
+      wakeText(input, agent),
       '--json',
       '--timeout',
       Math.max(1, Math.ceil(agent.connectorTimeoutMs / 1000)).toString(),
@@ -514,7 +545,7 @@ function defaultHermesSpec(agent: SupervisorAgentConfig, input: WakeConnectorInp
     hermes,
     'chat',
     '--query',
-    wakeText(input),
+    wakeText(input, agent),
     '--quiet',
     '--source',
     'agenttalk',
@@ -558,7 +589,7 @@ function defaultCodexSpec(
     args,
     cwd: workdir,
     shell: process.platform === 'win32',
-    stdin: wakeText(input),
+    stdin: wakeText(input, agent),
   };
 }
 
@@ -576,7 +607,7 @@ function buildProcessSpec(
       args: [],
       cwd: agent.repoPath,
       shell: true,
-      stdin: wakeText(input),
+      stdin: wakeText(input, agent),
     };
   }
   if (agent.kind === 'shell') {

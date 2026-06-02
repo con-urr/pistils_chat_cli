@@ -50,12 +50,74 @@ const DIRECTORY_SYNC_DELAY_MS = 250;
 let QUIET = false;
 let STRICT_OUTPUT = false;
 
+const CLI_JSON_SCHEMA_VERSION = 'agenttalk.cli.v1';
+
+type CliJsonWarning = {
+  code: string;
+  message: string;
+  severity: 'info' | 'warning';
+  field?: string;
+};
+
 function writeStdout(line: string) {
   writeSync(1, line + '\n');
 }
 
 function writeJson(payload: unknown, pretty = true) {
   writeSync(1, JSON.stringify(payload, null, pretty ? 2 : undefined) + '\n');
+}
+
+function normalizeCliWarnings(...sets: Array<unknown>): CliJsonWarning[] {
+  const warnings: CliJsonWarning[] = [];
+  const seen = new Set<string>();
+  for (const set of sets) {
+    if (!Array.isArray(set)) {
+      continue;
+    }
+    for (const item of set) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+      const row = item as Partial<CliJsonWarning>;
+      if (typeof row.code !== 'string' || typeof row.message !== 'string') {
+        continue;
+      }
+      const severity = row.severity === 'warning' ? 'warning' : 'info';
+      const warning: CliJsonWarning = {
+        code: row.code,
+        message: row.message,
+        severity,
+        ...(typeof row.field === 'string' && row.field ? { field: row.field } : {}),
+      };
+      const key = `${warning.code}:${warning.field ?? ''}:${warning.message}`;
+      if (!seen.has(key)) {
+        warnings.push(warning);
+        seen.add(key);
+      }
+    }
+  }
+  return warnings;
+}
+
+function stableCliJson(
+  command: string,
+  payload: Record<string, unknown>,
+  warnings: CliJsonWarning[] = []
+) {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command,
+    ...payload,
+    warnings: normalizeCliWarnings(payload.warnings, warnings),
+  };
+}
+
+function writeCommandJson(
+  command: string,
+  payload: Record<string, unknown>,
+  warnings: CliJsonWarning[] = []
+) {
+  writeJson(stableCliJson(command, payload, warnings));
 }
 
 function writeStderr(line: string) {
@@ -491,6 +553,7 @@ Usage:
   agenttalk group start --with <handle-or-identity,...> [--title text] [--message text] [--json]
   agenttalk inbox [--wait 30s] [--max 5] [--min 1] [--json|--jsonl]
   agenttalk listen --conversation <id> [--after <sequence>] [--max 1] [--min 1] [--follow] [--timeout 60s] [--json|--jsonl]
+  agenttalk wait --conversation <id> [--after <sequence>] [--max 1] [--min 1] [--follow] [--timeout 60s] [--json|--jsonl]
   agenttalk listen --thread <id> [--max 5] [--timeout 60s] [--json|--jsonl]
   agenttalk transcript --conversation <id> [--limit 50] [--after <sequence>|--before <sequence>] [--json]
   agenttalk transcript --thread <id> [--limit 50] [--after-id <id>|--before-id <id>] [--json]
@@ -558,7 +621,7 @@ Usage:
 
 Open beta supported daemon-first commands:
   init, whoami, doctor, daemon start/status/stop/doctor
-  find, chat, reply, group start, inbox, listen --conversation, transcript --conversation
+  find, chat, reply, group start, inbox, listen/wait --conversation, transcript --conversation
   conversation list/start/group/add/send/messages, wake status/on/off/register/policy/listen/claim/ack/fail, setup, hermes, mcp, supervisor
 
 Experimental/dev surfaces:
@@ -1870,16 +1933,45 @@ function buildConversationMessageResult({
   const nextSequence = maxConversationSequence(messages);
   const resolvedConversationId =
     conversationId?.toString() ?? inferSingleConversationId(messages);
-  const nextAfterSequence = nextSequence > 0n ? nextSequence.toString() : null;
+  const lastSequence = nextSequence > 0n ? nextSequence.toString() : null;
+  const nextAfterSequence = lastSequence ?? afterSequence?.toString() ?? null;
   const nextPayload = resolvedConversationId
     ? conversationNextPayload(resolvedConversationId, nextAfterSequence)
     : {};
+  const warnings: CliJsonWarning[] = [];
+  if (waitTimedOut && messages.length === 0) {
+    warnings.push({
+      code: 'listen_idle_window_elapsed',
+      severity: 'info',
+      field: 'waitTimedOut',
+      message:
+        'The requested listen window elapsed without new messages. This is idle for that wait only; keep the cursor if you listen again.',
+    });
+  }
+  if (messages.length === 0 && afterSequence !== undefined) {
+    warnings.push({
+      code: 'cursor_not_advanced',
+      severity: 'info',
+      field: 'nextAfterSequence',
+      message:
+        'No returned message advanced the cursor. nextAfterSequence intentionally preserves the supplied afterSequence.',
+    });
+  }
+  if (messages.length > 0 && afterSequence === undefined) {
+    warnings.push({
+      code: 'listen_without_after_sequence',
+      severity: 'warning',
+      field: 'afterSequence',
+      message:
+        'No afterSequence was supplied, so retained messages may be returned. Use nextAfterSequence for the next listen.',
+    });
+  }
 
   return {
     ok: true,
     conversationId: resolvedConversationId,
     afterSequence: afterSequence?.toString() ?? null,
-    lastSequence: nextAfterSequence,
+    lastSequence,
     nextAfterSequence,
     source: messageResultSource(snapshotUnique.length, liveUnique.length),
     returnedBecause,
@@ -1891,6 +1983,7 @@ function buildConversationMessageResult({
     messages,
     snapshot: snapshotUnique,
     live: liveUnique,
+    warnings,
     ...nextPayload,
     ...(next ? { next } : {}),
   };
@@ -2128,7 +2221,7 @@ async function commandChat(flags: Flags, positionals: string[], state: Agenttalk
       ...conversationNextPayload(conversationId, lastSequence),
     }, daemonResponse);
     if (wantsJson(flags)) {
-      writeJson(payload);
+      writeCommandJson('chat', payload);
       return;
     }
     writeStdout(
@@ -2179,6 +2272,8 @@ async function commandChat(flags: Flags, positionals: string[], state: Agenttalk
       .listConversations()
       .find(row => row.id === openReceipt.conversationId);
 
+    const receiptDto = toReceiptDto(sendReceipt);
+    const lastSequence = receiptDto.sequence;
     const payload = {
       ok: true,
       transport: 'direct-disabled',
@@ -2188,12 +2283,14 @@ async function commandChat(flags: Flags, positionals: string[], state: Agenttalk
       target: targetAccount ? toAccountDto(targetAccount) : targetIdentity.toHexString(),
       sent: message,
       clientRequestId: sendRequestId,
-      receipt: toReceiptDto(sendReceipt),
-      next: conversationNextCommands(openReceipt.conversationId.toString()),
+      receipt: receiptDto,
+      lastSequence,
+      nextAfterSequence: lastSequence,
+      ...conversationNextPayload(openReceipt.conversationId.toString(), lastSequence),
     };
 
     if (wantsJson(flags)) {
-      writeJson(payload);
+      writeCommandJson('chat', payload);
       return;
     }
 
@@ -2240,7 +2337,7 @@ async function commandReply(flags: Flags, positionals: string[], state: Agenttal
       ...conversationNextPayload(receiptConversationId, lastSequence),
     }, daemonResponse);
     if (wantsJson(flags)) {
-      writeJson(payload);
+      writeCommandJson('reply', payload);
       return;
     }
     writeStdout(
@@ -2265,19 +2362,24 @@ async function commandReply(flags: Flags, positionals: string[], state: Agenttal
     const conversation = client
       .listConversations()
       .find(row => row.id === conversationId);
+    const receiptDto = toReceiptDto(receipt);
+    const lastSequence = receiptDto.sequence;
     const payload = {
       ok: true,
       transport: 'direct-disabled',
       daemon: false,
       conversation: conversation ? toConversationDto(conversation) : null,
+      conversationId: conversationId.toString(),
       sent: message,
       clientRequestId: requestId,
-      receipt: toReceiptDto(receipt),
-      next: conversationNextCommands(conversationId.toString()),
+      receipt: receiptDto,
+      lastSequence,
+      nextAfterSequence: lastSequence,
+      ...conversationNextPayload(conversationId.toString(), lastSequence),
     };
 
     if (wantsJson(flags)) {
-      writeJson(payload);
+      writeCommandJson('reply', payload);
       return;
     }
 
@@ -2752,7 +2854,7 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
         return;
       }
       if (wantsJson(flags)) {
-        writeJson(daemonTransportPayload({ result: daemonResponse, ...payload }, daemonResponse));
+        writeCommandJson('inbox', daemonTransportPayload({ result: daemonResponse, ...payload }, daemonResponse));
         return;
       }
       writeStdout(`timed out after ${waitMs}ms`);
@@ -2822,7 +2924,7 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
       return;
     }
     if (wantsJson(flags)) {
-      writeJson(daemonTransportPayload(payload, daemonResponse));
+      writeCommandJson('inbox', daemonTransportPayload(payload, daemonResponse));
       return;
     }
     writeStdout(JSON.stringify(daemonResponse.data));
@@ -2862,7 +2964,7 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
         }
         emitJsonLine({ event: 'done', timedOut: false, count: recent.length });
       } else if (wantsJson(flags)) {
-        writeJson(blockedDirectTransportPayload(buildConversationMessageResult({
+        writeCommandJson('inbox', blockedDirectTransportPayload(buildConversationMessageResult({
             snapshot: recent,
             live: [],
             max,
@@ -2912,7 +3014,7 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
       }
 
       if (wantsJson(flags)) {
-        writeJson(blockedDirectTransportPayload(payload));
+        writeCommandJson('inbox', blockedDirectTransportPayload(payload));
         return;
       }
 
@@ -2981,7 +3083,7 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
     });
 
     if (wantsJson(flags)) {
-      writeJson(blockedDirectTransportPayload(payload));
+      writeCommandJson('inbox', blockedDirectTransportPayload(payload));
       return;
     }
 
@@ -2996,7 +3098,12 @@ async function commandInbox(flags: Flags, state: AgenttalkState) {
   }
 }
 
-async function commandListen(flags: Flags, positionals: string[], state: AgenttalkState) {
+async function commandListen(
+  flags: Flags,
+  positionals: string[],
+  state: AgenttalkState,
+  commandName = 'listen'
+) {
   const conversationRaw =
     getStringFlag(flags, ['conversation', 'conversation-id']) ??
     (positionals[0] === 'conversation' ? positionals[1] : undefined);
@@ -3063,7 +3170,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
           return;
         }
         if (wantsJson(flags)) {
-          writeJson(daemonTransportPayload(payload, daemonResponse));
+          writeCommandJson(commandName, daemonTransportPayload(payload, daemonResponse));
           return;
         }
         writeStdout(`timed out after ${timeoutMs}ms`);
@@ -3113,7 +3220,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
         return;
       }
       if (wantsJson(flags)) {
-        writeJson(daemonTransportPayload(payload, daemonResponse));
+        writeCommandJson(commandName, daemonTransportPayload(payload, daemonResponse));
         return;
       }
       writeStdout(JSON.stringify(daemonResponse.data));
@@ -3196,7 +3303,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
             count: payload.count,
           });
         } else if (wantsJson(flags)) {
-          writeJson(blockedDirectTransportPayload(payload));
+          writeCommandJson(commandName, blockedDirectTransportPayload(payload));
         } else {
           for (const message of payload.messages) {
             writeStdout(formatConversationMessage(message));
@@ -3227,7 +3334,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
             count: payload.count,
           });
         } else if (wantsJson(flags)) {
-          writeJson(blockedDirectTransportPayload(payload));
+          writeCommandJson(commandName, blockedDirectTransportPayload(payload));
         } else {
           for (const message of payload.messages) {
             writeStdout(formatConversationMessage(message));
@@ -3284,7 +3391,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
           count: payload.count,
         });
       } else if (wantsJson(flags)) {
-        writeJson(blockedDirectTransportPayload(payload));
+        writeCommandJson(commandName, blockedDirectTransportPayload(payload));
       } else {
         for (const message of payload.messages) {
           writeStdout(formatConversationMessage(message));
@@ -3348,7 +3455,7 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
       }
       emitJsonLine({ event: 'done', timedOut: waited.timedOut, count: messages.length });
     } else if (wantsJson(flags)) {
-      writeJson(blockedDirectTransportPayload({ ok: true, snapshot, messages, timedOut: waited.timedOut }));
+      writeCommandJson(commandName, blockedDirectTransportPayload({ ok: true, snapshot, messages, timedOut: waited.timedOut }));
     } else {
       for (const message of snapshot) {
         writeStdout(`snapshot ${formatHumanMessage(message)}`);
@@ -3423,7 +3530,7 @@ async function commandTranscript(
         hotRetentionHours: 12,
       }, daemonResponse);
       if (wantsJson(flags)) {
-        writeJson(payload);
+        writeCommandJson('transcript', payload);
         return;
       }
       for (const message of messages) {
@@ -3460,8 +3567,10 @@ async function commandTranscript(
         .map(toConversationMessageDto);
       const firstSequence = messages[0]?.sequence ?? null;
       const lastSequence = messages[messages.length - 1]?.sequence ?? null;
+      const nextAfterSequence = lastSequence ?? afterSequence?.toString() ?? null;
       const payload = {
         ok: true,
+        conversationId: conversationId.toString(),
         conversation: conversation ? toConversationDto(conversation) : null,
         messages,
         page: {
@@ -3470,12 +3579,16 @@ async function commandTranscript(
           afterSequence: afterSequence?.toString() ?? null,
           beforeSequence: beforeSequence?.toString() ?? null,
           previousBeforeSequence: firstSequence,
-          nextAfterSequence: lastSequence,
+          lastSequence,
+          nextAfterSequence,
         },
+        lastSequence,
+        nextAfterSequence,
+        ...conversationNextPayload(conversationId.toString(), nextAfterSequence),
       };
 
       if (wantsJson(flags)) {
-        writeJson(blockedDirectTransportPayload(payload));
+        writeCommandJson('transcript', blockedDirectTransportPayload(payload));
         return;
       }
 
@@ -4458,7 +4571,7 @@ async function commandConversation(
       });
       const conversations = ((daemonResponse?.data as any)?.conversations ?? []) as Array<any>;
       if (wantsJson(flags)) {
-        writeJson(daemonTransportPayload({ conversations }));
+        writeCommandJson('conversation.list', daemonTransportPayload({ conversations }, daemonResponse));
         return;
       }
       for (const conversation of conversations) {
@@ -4491,7 +4604,7 @@ async function commandConversation(
           : receipt?.sequence !== undefined && receipt?.sequence !== null
             ? String(receipt.sequence)
             : null;
-      writeJson(daemonTransportPayload({
+      writeCommandJson('conversation.start', daemonTransportPayload({
         ...data,
         lastSequence,
         nextAfterSequence: lastSequence,
@@ -4527,7 +4640,7 @@ async function commandConversation(
           : receipt?.sequence !== undefined && receipt?.sequence !== null
             ? String(receipt.sequence)
             : null;
-      writeJson(daemonTransportPayload({
+      writeCommandJson('conversation.group', daemonTransportPayload({
         ...data,
         lastSequence,
         nextAfterSequence: lastSequence,
@@ -4549,7 +4662,10 @@ async function commandConversation(
         member: accountRef,
         role: getStringFlag(flags, ['role']) ?? 'member',
       });
-      writeJson(daemonTransportPayload((daemonResponse?.data ?? {}) as Record<string, unknown>));
+      writeCommandJson(
+        'conversation.add',
+        daemonTransportPayload((daemonResponse?.data ?? {}) as Record<string, unknown>, daemonResponse)
+      );
       return;
     }
 
@@ -4570,7 +4686,7 @@ async function commandConversation(
       });
       const receipt = (daemonResponse?.data as any)?.receipt ?? null;
       const lastSequence = receipt?.sequence ? String(receipt.sequence) : null;
-      writeJson(daemonTransportPayload({
+      writeCommandJson('conversation.send', daemonTransportPayload({
         conversationId: conversationIdRaw,
         text: message,
         result: daemonResponse?.data,
@@ -4622,7 +4738,7 @@ async function commandConversation(
         ...conversationNextPayload(conversationIdRaw, lastSequence),
       }, daemonResponse);
       if (wantsJson(flags)) {
-        writeJson(payload);
+        writeCommandJson('conversation.messages', payload);
         return;
       }
       for (const message of messages) {
@@ -4648,7 +4764,7 @@ async function commandConversation(
       }));
 
       if (wantsJson(flags)) {
-        writeJson(blockedDirectTransportPayload({ ok: true, conversations }));
+        writeCommandJson('conversation.list', blockedDirectTransportPayload({ ok: true, conversations }));
         return;
       }
 
@@ -4677,7 +4793,7 @@ async function commandConversation(
       await sleep(250);
 
       const created = findCreatedConversation(client, beforeIds, title || undefined);
-      writeJson(blockedDirectTransportPayload({
+      writeCommandJson('conversation.start', blockedDirectTransportPayload({
         ok: true,
         conversation: created ? toConversationDto(created) : null,
         members: created
@@ -4724,7 +4840,7 @@ async function commandConversation(
               'send_conversation_message'
             )
           : undefined;
-      writeJson(blockedDirectTransportPayload({
+      writeCommandJson('conversation.group', blockedDirectTransportPayload({
         ok: true,
         conversation: created ? toConversationDto(created) : null,
         members: created
@@ -4754,7 +4870,7 @@ async function commandConversation(
       await client.addConversationMember(conversationId, memberIdentity, role);
       await sleep(250);
 
-      writeJson(blockedDirectTransportPayload({
+      writeCommandJson('conversation.add', blockedDirectTransportPayload({
         ok: true,
         conversationId: conversationId.toString(),
         memberIdentity: memberIdentity.toHexString(),
@@ -4785,11 +4901,16 @@ async function commandConversation(
         'send_conversation_message'
       );
 
-      writeJson(blockedDirectTransportPayload({
+      const receiptDto = toReceiptDto(receipt);
+      const lastSequence = receiptDto.sequence;
+      writeCommandJson('conversation.send', blockedDirectTransportPayload({
         ok: true,
         conversationId: conversationId.toString(),
         text: message,
-        receipt: toReceiptDto(receipt),
+        receipt: receiptDto,
+        lastSequence,
+        nextAfterSequence: lastSequence,
+        ...conversationNextPayload(conversationId.toString(), lastSequence),
       }));
       return;
     }
@@ -4826,8 +4947,10 @@ async function commandConversation(
       }
 
       if (wantsJson(flags)) {
-        writeJson(blockedDirectTransportPayload({
+        const lastSequence = messages[messages.length - 1]?.sequence ?? afterSequence?.toString() ?? null;
+        writeCommandJson('conversation.messages', blockedDirectTransportPayload({
           ok: true,
+          conversationId: conversationId.toString(),
           messages,
           page: {
             limit,
@@ -4835,8 +4958,12 @@ async function commandConversation(
             afterSequence: afterSequence?.toString() ?? null,
             beforeSequence: beforeSequence?.toString() ?? null,
             previousBeforeSequence: messages[0]?.sequence ?? null,
-            nextAfterSequence: messages[messages.length - 1]?.sequence ?? null,
+            lastSequence,
+            nextAfterSequence: lastSequence,
           },
+          lastSequence,
+          nextAfterSequence: lastSequence,
+          ...conversationNextPayload(conversationId.toString(), lastSequence),
         }));
         return;
       }
@@ -4857,7 +4984,10 @@ async function commandConversation(
 
       const conversationId = parseRequiredBigInt(conversationIdRaw, 'conversation-id');
       await client.leaveConversation(conversationId);
-      writeJson(blockedDirectTransportPayload({ ok: true, conversationId: conversationId.toString() }));
+      writeCommandJson(
+        'conversation.leave',
+        blockedDirectTransportPayload({ ok: true, conversationId: conversationId.toString() })
+      );
       return;
     }
 
@@ -7992,8 +8122,8 @@ async function main() {
     return;
   }
 
-  if (command === 'listen') {
-    await commandListen(flags, positionals, state);
+  if (command === 'listen' || command === 'wait') {
+    await commandListen(flags, positionals, state, command);
     return;
   }
 

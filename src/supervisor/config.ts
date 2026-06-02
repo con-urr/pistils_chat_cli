@@ -56,6 +56,7 @@ export type SupervisorAgentConfig = {
     startupTimeoutMs?: number;
     busyCommand?: string;
     busyCommandTimeoutMs?: number;
+    wakePromptTemplate?: string;
   };
   enabled: boolean;
   autoInit: boolean;

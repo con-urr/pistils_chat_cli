@@ -74,6 +74,12 @@ function assertCursorAction(payload, name, expectedAfter, message) {
   }
 }
 
+function assertStableSchema(payload, command, message) {
+  assert(payload.schemaVersion === 'agenttalk.cli.v1', `${message}: missing stable schema version`);
+  assert(payload.command === command, `${message}: command mismatch`);
+  assert(Array.isArray(payload.warnings), `${message}: warnings must be an array`);
+}
+
 async function stopDaemon(stateDir) {
   try {
     await run(['daemon', 'stop', '--json'], { stateDir });
@@ -165,6 +171,7 @@ try {
     )
   );
   assert(chat.transport === 'daemon' && chat.daemon === true, 'chat must auto-start daemon');
+  assertStableSchema(chat, 'chat', 'chat');
   assert(chat.daemonStarted === true, 'chat should report daemonStarted after daemon stop');
   assert(chat.conversationId, 'chat should return conversationId');
   assert(chat.nextAfterSequence, 'chat should return a cursor after send');
@@ -176,6 +183,7 @@ try {
     })
   );
   assert(inbox.transport === 'daemon' && inbox.count >= 1, 'inbox wait must use daemon');
+  assertStableSchema(inbox, 'inbox', 'inbox');
   assert(!('result' in inbox), 'inbox should not expose raw daemon items/result');
   assert(inbox.unhydratedDeliveryCount === 0, 'inbox should not expose unhydrated delivery rows');
   assert(inbox.conversationId === chat.conversationId, 'inbox should expose top-level conversationId');
@@ -189,6 +197,7 @@ try {
     )
   );
   assert(reply.transport === 'daemon' && reply.daemon === true, 'reply must use daemon');
+  assertStableSchema(reply, 'reply', 'reply');
   assert(reply.nextAfterSequence, 'reply should return a cursor after send');
   assertCursorAction(reply, 'listen', reply.nextAfterSequence, 'reply');
 
@@ -199,6 +208,25 @@ try {
     )
   );
   assert(listen.transport === 'daemon' && listen.count >= 1, 'listen must use daemon');
+  assertStableSchema(listen, 'listen', 'listen');
+
+  const idleWait = parseJson(
+    await run(
+      ['wait', '--conversation', chat.conversationId, '--after', listen.nextAfterSequence, '--timeout', '1s', '--json'],
+      { stateDir: alpha }
+    )
+  );
+  assertStableSchema(idleWait, 'wait', 'wait alias');
+  assert(idleWait.count === 0 && idleWait.waitTimedOut === true, 'wait alias should return an empty timed-out listen');
+  assert(
+    idleWait.nextAfterSequence === listen.nextAfterSequence,
+    'empty wait should preserve the supplied cursor'
+  );
+  assert(
+    idleWait.warnings.some(warning => warning.code === 'listen_idle_window_elapsed') &&
+      idleWait.warnings.some(warning => warning.code === 'cursor_not_advanced'),
+    'empty wait should include idle and cursor warnings'
+  );
 
   const alphaInbox = parseJson(
     await run(['inbox', '--max', '10', '--json'], {
@@ -220,6 +248,7 @@ try {
     transcript.transport === 'daemon' && transcript.messages.length >= 2,
     'transcript must use daemon'
   );
+  assertStableSchema(transcript, 'transcript', 'transcript');
   assert(
     transcript.messages[0]?.sequence === '1',
     'transcript without cursor should start at the beginning of the hot conversation'
