@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, writeSync, promises as fs } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeSync, promises as fs } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
@@ -346,7 +346,8 @@ async function pingDaemon(timeoutMs = 750) {
 }
 
 function agenttalkdEntrypoint() {
-  const currentFile = path.resolve(process.argv[1] ?? 'agenttalk.js');
+  const argvFile = path.resolve(process.argv[1] ?? 'agenttalk.js');
+  const currentFile = existsSync(argvFile) ? realpathSync(argvFile) : argvFile;
   const dir = path.dirname(currentFile);
   const isTypeScript = currentFile.endsWith('.ts');
   if (isTypeScript) {
