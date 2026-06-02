@@ -952,8 +952,15 @@ function claimableDirectDeliveries(runtime: RuntimeAgent) {
     return [];
   }
 
-  return runtime.realtime
-    .listInboxDeliveries({ state: 'unread' })
+  const byKey = new Map<string, ModuleTypes.ConversationDelivery>();
+  for (const delivery of [
+    ...runtime.realtime.listRequestedInboxDeliveries({ state: 'unread' }),
+    ...runtime.realtime.listInboxDeliveries({ state: 'unread' }),
+  ]) {
+    byKey.set(directDeliveryKey(delivery), delivery);
+  }
+
+  return Array.from(byKey.values())
     .filter(row => row.recipientAgentId === runtime.agentId)
     .filter(row => row.senderAgentId !== runtime.agentId)
     .filter(row => !activeSession(runtime, row.conversationId))
@@ -965,6 +972,18 @@ function claimableDirectDeliveries(runtime: RuntimeAgent) {
       );
     })
     .sort(deliverySort);
+}
+
+async function refreshClaimableDirectDeliveries(runtime: RuntimeAgent) {
+  if (!directWakeEnabled(runtime.config)) {
+    return [];
+  }
+  await runtime.realtime.requestInboxDeliveries({
+    state: 'unread',
+    limit: 250n,
+  });
+  await sleep(150);
+  return claimableDirectDeliveries(runtime);
 }
 
 async function tickAgent(config: SupervisorConfig, runtime: RuntimeAgent) {
@@ -980,7 +999,7 @@ async function tickAgent(config: SupervisorConfig, runtime: RuntimeAgent) {
       continue;
     }
 
-    const delivery = claimableDirectDeliveries(runtime)[0];
+    const delivery = (await refreshClaimableDirectDeliveries(runtime))[0];
     if (!delivery) {
       return;
     }
