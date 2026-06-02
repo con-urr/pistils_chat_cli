@@ -85,6 +85,11 @@ const supervisorAgentPatchSchema = z
       .object({
         openclawAgentId: z.string().min(1).optional(),
         sendReplyText: z.boolean().optional(),
+        hermesSkills: z.array(z.string().min(1)).optional(),
+        liveChat: z.boolean().optional(),
+        liveChatIdleTimeoutMs: z.number().int().positive().optional(),
+        liveChatMaxSessionMs: z.number().int().positive().optional(),
+        startupTimeoutMs: z.number().int().positive().optional(),
         busyCommand: z.string().min(1).optional(),
         busyCommandTimeoutMs: z.number().int().positive().optional(),
       })

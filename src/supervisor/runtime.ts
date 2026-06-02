@@ -16,7 +16,14 @@ import {
   wakeAccessMode,
   wakeSenderAgentIdsJson,
 } from './config';
-import { executeWakeConnector, type WakeConnectorResult } from './connectors';
+import {
+  connectorRunTimeoutMs,
+  executeWakeConnector,
+  hermesLiveChatEnabled,
+  hermesLiveChatIdleTimeoutMs,
+  hermesLiveChatMaxSessionMs,
+  type WakeConnectorResult,
+} from './connectors';
 import { stringifyJsonSafe, toJsonSafe } from './json';
 import { loadAgentState, saveAgentState } from './state';
 
@@ -28,17 +35,32 @@ type RuntimeAgent = {
   connectorStateDir: string;
   registrationId: string;
   inFlightWakeIds: Set<string>;
+  inFlightDirectDeliveryKeys: Set<string>;
+  seenDirectDeliveryKeys: Set<string>;
+  activeConversationSessions: Map<string, ActiveConversationSession>;
   jobs: Set<Promise<void>>;
   stats: {
     claimed: number;
     acked: number;
     failed: number;
     skipped: number;
+    directDispatched: number;
     lastWakeAt?: string;
+    lastDirectAt?: string;
     lastSuccessAt?: string;
     lastFailureAt?: string;
     failureCount: number;
   };
+};
+
+type ActiveConversationSession = {
+  conversationId: string;
+  wakeId: string;
+  attemptId: string;
+  startedAt: string;
+  hardExpiresAt: string;
+  idleTimeoutMs: number;
+  maxSessionMs: number;
 };
 
 type WakeDispatchLock = {
@@ -69,6 +91,20 @@ function wakeSort(left: ModuleTypes.WakeRequestView, right: ModuleTypes.WakeRequ
   return timestampMs(left.createdAt) - timestampMs(right.createdAt);
 }
 
+function deliverySort(
+  left: ModuleTypes.ConversationDelivery,
+  right: ModuleTypes.ConversationDelivery
+) {
+  const sent = timestampMs(left.sent) - timestampMs(right.sent);
+  if (sent !== 0) {
+    return sent;
+  }
+  if (left.sequence === right.sequence) {
+    return 0;
+  }
+  return left.sequence < right.sequence ? -1 : 1;
+}
+
 function supervisorRegistrationId(agentId: string) {
   return `${agentId}:agenttalk-supervisor`;
 }
@@ -80,6 +116,107 @@ function safePathSegment(value: string) {
 function shortClientRequestId(prefix: string, value: string) {
   const digest = createHash('sha256').update(value).digest('hex').slice(0, 24);
   return `${prefix}:${digest}`;
+}
+
+function directDeliveryKey(delivery: ModuleTypes.ConversationDelivery) {
+  return `${delivery.conversationId.toString()}:${delivery.messageId.toString()}:${delivery.sequence.toString()}`;
+}
+
+function directWakeEnabled(agent: SupervisorAgentConfig) {
+  const wakeReasons = new Set(agent.wake.reasons ?? []);
+  return (
+    agent.enabled &&
+    agent.wake.enabled === true &&
+    (wakeReasons.has('direct_message') || wakeReasons.has('direct'))
+  );
+}
+
+function wakeFromDirectDelivery(
+  delivery: ModuleTypes.ConversationDelivery
+): ModuleTypes.WakeRequestView {
+  const key = directDeliveryKey(delivery);
+  const wakeId = `local-direct:${key}`;
+  return {
+    wakeId,
+    wakeKey: wakeId,
+    recipientAgentId: delivery.recipientAgentId,
+    recipientIdentity: delivery.recipientIdentity,
+    senderAgentId: delivery.senderAgentId,
+    conversationId: delivery.conversationId,
+    minSequence: delivery.sequence,
+    maxSequence: delivery.sequence,
+    reason: 'direct_message',
+    status: 'pending',
+    priority: 'normal',
+    attemptCount: 0n,
+    nextAttemptAt: delivery.sent,
+    leaseUntil: undefined,
+    createdAt: delivery.sent,
+    updatedAt: delivery.updatedAt,
+    expiresAt: delivery.expiresAt,
+    suppressedReason: undefined,
+    metadataJson: stringifyJsonSafe({
+      source: 'agenttalk-supervisor-direct-inbox',
+      deliveryKey: delivery.key,
+      messageId: delivery.messageId.toString(),
+      sequence: delivery.sequence.toString(),
+    }, false).trim(),
+  };
+}
+
+function conversationSessionKey(conversationId: bigint) {
+  return conversationId.toString();
+}
+
+function activeSession(runtime: RuntimeAgent, conversationId: bigint) {
+  const key = conversationSessionKey(conversationId);
+  const session = runtime.activeConversationSessions.get(key);
+  if (!session) {
+    return undefined;
+  }
+  if (Date.parse(session.hardExpiresAt) <= Date.now()) {
+    runtime.activeConversationSessions.delete(key);
+    return undefined;
+  }
+  return session;
+}
+
+function startActiveConversationSession(
+  runtime: RuntimeAgent,
+  wake: ModuleTypes.WakeRequestView,
+  attemptId: string
+) {
+  if (!hermesLiveChatEnabled(runtime.config)) {
+    return undefined;
+  }
+  const now = Date.now();
+  const maxSessionMs = hermesLiveChatMaxSessionMs(runtime.config);
+  const hardTimeoutMs = connectorRunTimeoutMs(runtime.config);
+  const session: ActiveConversationSession = {
+    conversationId: wake.conversationId.toString(),
+    wakeId: wake.wakeId,
+    attemptId,
+    startedAt: new Date(now).toISOString(),
+    hardExpiresAt: new Date(now + hardTimeoutMs).toISOString(),
+    idleTimeoutMs: hermesLiveChatIdleTimeoutMs(runtime.config),
+    maxSessionMs,
+  };
+  runtime.activeConversationSessions.set(session.conversationId, session);
+  return session;
+}
+
+function endActiveConversationSession(
+  runtime: RuntimeAgent,
+  wake: ModuleTypes.WakeRequestView,
+  attemptId: string
+) {
+  const key = wake.conversationId.toString();
+  const session = runtime.activeConversationSessions.get(key);
+  if (session?.wakeId === wake.wakeId && session.attemptId === attemptId) {
+    runtime.activeConversationSessions.delete(key);
+    return session;
+  }
+  return undefined;
 }
 
 function lockPidIsAlive(pid: unknown) {
@@ -143,7 +280,7 @@ async function acquireWakeDispatchLock(
   const existingStarted = typeof existing.startedAt === 'string'
     ? Date.parse(existing.startedAt)
     : 0;
-  const staleMs = Math.max(runtime.config.connectorTimeoutMs + 120_000, 300_000);
+  const staleMs = Math.max(connectorRunTimeoutMs(runtime.config) + 120_000, 300_000);
   const stale =
     !lockPidIsAlive(existing.pid) ||
     !Number.isFinite(existingStarted) ||
@@ -376,12 +513,16 @@ async function prepareAgent(config: SupervisorConfig, agent: SupervisorAgentConf
       connectorStateDir,
       registrationId,
       inFlightWakeIds: new Set<string>(),
+      inFlightDirectDeliveryKeys: new Set<string>(),
+      seenDirectDeliveryKeys: new Set<string>(),
+      activeConversationSessions: new Map<string, ActiveConversationSession>(),
       jobs: new Set<Promise<void>>(),
       stats: {
         claimed: 0,
         acked: 0,
         failed: 0,
         skipped: 0,
+        directDispatched: 0,
         failureCount: 0,
       },
     };
@@ -425,7 +566,7 @@ async function dispatchWake(
     await runtime.realtime.claimWakeRequest({
       wakeId: wake.wakeId,
       registrationId: runtime.registrationId,
-      leaseMs: BigInt(agent.connectorTimeoutMs + 60_000),
+      leaseMs: BigInt(connectorRunTimeoutMs(agent) + 60_000),
       metadataJson: JSON.stringify({
         supervisor: true,
         agentName: agent.name,
@@ -476,27 +617,49 @@ async function dispatchWake(
       JSON.stringify({ supervisor: true, agentName: agent.name })
     );
     try {
+      const session = startActiveConversationSession(runtime, claimedWake, attemptId);
+      if (session) {
+        await appendLog(config, agent, {
+          event: 'active_session_started',
+          wakeId: claimedWake.wakeId,
+          attemptId,
+          conversationId: claimedWake.conversationId.toString(),
+          idleTimeoutMs: session.idleTimeoutMs,
+          maxSessionMs: session.maxSessionMs,
+          hardExpiresAt: session.hardExpiresAt,
+        });
+      }
       const contextMessages = await runtime.wakeClient.fetchWakeContext(claimedWake);
       const payload = createWakeDispatchPayload(claimedWake);
       const runDir = path.join(config.runDir, safePathSegment(wake.wakeId), safePathSegment(attemptId));
       const result = await executeWakeConnector(
-        config,
-        agent,
-        {
-          agentName: agent.name,
-          handle: agent.handle,
-          agentId: runtime.agentId,
-          stateDir: runtime.connectorStateDir,
-          repoPath: agent.repoPath,
-          wake: claimedWake,
-          attemptId,
-          contextMessages,
-          payload,
-        },
-        runDir
-      );
+          config,
+          agent,
+          {
+            agentName: agent.name,
+            handle: agent.handle,
+            agentId: runtime.agentId,
+            stateDir: runtime.connectorStateDir,
+            repoPath: agent.repoPath,
+            wake: claimedWake,
+            attemptId,
+            contextMessages,
+            payload,
+          },
+          runDir
+        );
 
       const finalResult = await maybeSendConnectorReply(runtime, claimedWake, attemptId, result);
+      const endedSession = endActiveConversationSession(runtime, claimedWake, attemptId);
+      if (endedSession) {
+        await appendLog(config, agent, {
+          event: 'active_session_ended',
+          wakeId: claimedWake.wakeId,
+          attemptId,
+          conversationId: claimedWake.conversationId.toString(),
+          result: toJsonSafe(finalResult),
+        });
+      }
       if (finalResult.ok && finalResult.handled) {
         await runtime.wakeClient.ackWake(
           wake.wakeId,
@@ -515,6 +678,7 @@ async function dispatchWake(
 
       await failWake(config, runtime, wake.wakeId, attemptId, finalResult);
     } finally {
+      endActiveConversationSession(runtime, claimedWake, attemptId);
       await dispatchLock.release();
     }
   } catch (error) {
@@ -529,6 +693,154 @@ async function dispatchWake(
       event: 'wake_failed',
       wakeId: wake.wakeId,
       attemptId,
+      error: message,
+    });
+  }
+}
+
+async function dispatchDirectDelivery(
+  config: SupervisorConfig,
+  runtime: RuntimeAgent,
+  delivery: ModuleTypes.ConversationDelivery
+) {
+  const agent = runtime.config;
+  const deliveryKey = directDeliveryKey(delivery);
+  const wake = wakeFromDirectDelivery(delivery);
+  const attemptId = `${wake.wakeId}:attempt-1`;
+  runtime.stats.lastDirectAt = new Date().toISOString();
+
+  try {
+    const localDenial = localWakeDenial(runtime, wake);
+    if (localDenial) {
+      runtime.stats.skipped += 1;
+      await appendLog(config, agent, {
+        event: 'direct_delivery_skipped',
+        wakeId: wake.wakeId,
+        attemptId,
+        deliveryKey,
+        conversationId: delivery.conversationId.toString(),
+        sequence: delivery.sequence.toString(),
+        senderAgentId: delivery.senderAgentId,
+        message: localDenial,
+      });
+      return;
+    }
+
+    const dispatchLock = await acquireWakeDispatchLock(runtime, wake, attemptId);
+    if ('busy' in dispatchLock) {
+      runtime.stats.skipped += 1;
+      await appendLog(config, agent, {
+        event: 'direct_delivery_skipped',
+        wakeId: wake.wakeId,
+        attemptId,
+        deliveryKey,
+        conversationId: delivery.conversationId.toString(),
+        sequence: delivery.sequence.toString(),
+        senderAgentId: delivery.senderAgentId,
+        message: dispatchLock.busy,
+      });
+      return;
+    }
+
+    try {
+      const session = startActiveConversationSession(runtime, wake, attemptId);
+      if (session) {
+        await appendLog(config, agent, {
+          event: 'active_session_started',
+          wakeId: wake.wakeId,
+          attemptId,
+          deliveryKey,
+          conversationId: delivery.conversationId.toString(),
+          sequence: delivery.sequence.toString(),
+          senderAgentId: delivery.senderAgentId,
+          idleTimeoutMs: session.idleTimeoutMs,
+          maxSessionMs: session.maxSessionMs,
+          hardExpiresAt: session.hardExpiresAt,
+        });
+      }
+      const contextMessages = await runtime.wakeClient.fetchWakeContext(wake);
+      const payload = createWakeDispatchPayload(wake);
+      const runDir = path.join(config.runDir, safePathSegment(wake.wakeId), safePathSegment(attemptId));
+      const result = await executeWakeConnector(
+        config,
+        agent,
+        {
+          agentName: agent.name,
+          handle: agent.handle,
+          agentId: runtime.agentId,
+          stateDir: runtime.connectorStateDir,
+          repoPath: agent.repoPath,
+          wake,
+          attemptId,
+          contextMessages,
+          payload,
+        },
+        runDir
+      );
+
+      const finalResult = await maybeSendConnectorReply(runtime, wake, attemptId, result);
+      const endedSession = endActiveConversationSession(runtime, wake, attemptId);
+      if (endedSession) {
+        await appendLog(config, agent, {
+          event: 'active_session_ended',
+          wakeId: wake.wakeId,
+          attemptId,
+          deliveryKey,
+          conversationId: delivery.conversationId.toString(),
+          sequence: delivery.sequence.toString(),
+          senderAgentId: delivery.senderAgentId,
+          result: toJsonSafe(finalResult),
+        });
+      }
+      if (finalResult.ok && finalResult.handled) {
+        await runtime.realtime.markConversationRead(delivery.conversationId, delivery.sequence);
+        runtime.stats.directDispatched += 1;
+        runtime.stats.lastSuccessAt = new Date().toISOString();
+        await appendLog(config, agent, {
+          event: 'direct_delivery_acked',
+          wakeId: wake.wakeId,
+          attemptId,
+          deliveryKey,
+          conversationId: delivery.conversationId.toString(),
+          sequence: delivery.sequence.toString(),
+          senderAgentId: delivery.senderAgentId,
+          result: toJsonSafe(finalResult),
+        });
+        return;
+      }
+
+      const error = finalResult.error ?? finalResult.message ?? 'connector returned an unhandled result';
+      runtime.stats.failed += 1;
+      runtime.stats.failureCount += 1;
+      runtime.stats.lastFailureAt = new Date().toISOString();
+      await appendLog(config, agent, {
+        event: 'direct_delivery_failed',
+        wakeId: wake.wakeId,
+        attemptId,
+        deliveryKey,
+        conversationId: delivery.conversationId.toString(),
+        sequence: delivery.sequence.toString(),
+        senderAgentId: delivery.senderAgentId,
+        result: toJsonSafe(finalResult),
+        error,
+      });
+    } finally {
+      endActiveConversationSession(runtime, wake, attemptId);
+      await dispatchLock.release();
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    runtime.stats.failed += 1;
+    runtime.stats.failureCount += 1;
+    runtime.stats.lastFailureAt = new Date().toISOString();
+    await appendLog(config, agent, {
+      event: 'direct_delivery_failed',
+      wakeId: wake.wakeId,
+      attemptId,
+      deliveryKey,
+      conversationId: delivery.conversationId.toString(),
+      sequence: delivery.sequence.toString(),
+      senderAgentId: delivery.senderAgentId,
       error: message,
     });
   }
@@ -635,15 +947,48 @@ function claimableWakes(runtime: RuntimeAgent) {
     .sort(wakeSort);
 }
 
+function claimableDirectDeliveries(runtime: RuntimeAgent) {
+  if (!directWakeEnabled(runtime.config)) {
+    return [];
+  }
+
+  return runtime.realtime
+    .listInboxDeliveries({ state: 'unread' })
+    .filter(row => row.recipientAgentId === runtime.agentId)
+    .filter(row => row.senderAgentId !== runtime.agentId)
+    .filter(row => !activeSession(runtime, row.conversationId))
+    .filter(row => {
+      const key = directDeliveryKey(row);
+      return (
+        !runtime.inFlightDirectDeliveryKeys.has(key) &&
+        !runtime.seenDirectDeliveryKeys.has(key)
+      );
+    })
+    .sort(deliverySort);
+}
+
 async function tickAgent(config: SupervisorConfig, runtime: RuntimeAgent) {
   while (runtime.jobs.size < runtime.config.maxConcurrentWakeJobs) {
     const wake = claimableWakes(runtime)[0];
-    if (!wake) {
+    if (wake) {
+      runtime.inFlightWakeIds.add(wake.wakeId);
+      const job = dispatchWake(config, runtime, wake).finally(() => {
+        runtime.inFlightWakeIds.delete(wake.wakeId);
+        runtime.jobs.delete(job);
+      });
+      runtime.jobs.add(job);
+      continue;
+    }
+
+    const delivery = claimableDirectDeliveries(runtime)[0];
+    if (!delivery) {
       return;
     }
-    runtime.inFlightWakeIds.add(wake.wakeId);
-    const job = dispatchWake(config, runtime, wake).finally(() => {
-      runtime.inFlightWakeIds.delete(wake.wakeId);
+    const deliveryKey = directDeliveryKey(delivery);
+    runtime.inFlightDirectDeliveryKeys.add(deliveryKey);
+    runtime.seenDirectDeliveryKeys.add(deliveryKey);
+    const job = dispatchDirectDelivery(config, runtime, delivery).finally(() => {
+      runtime.inFlightDirectDeliveryKeys.delete(deliveryKey);
       runtime.jobs.delete(job);
     });
     runtime.jobs.add(job);
@@ -736,13 +1081,17 @@ function runtimeStatus(runtime: RuntimeAgent) {
     },
     drift,
     pendingWakes: claimableWakes(runtime).length,
+    pendingDirectDeliveries: claimableDirectDeliveries(runtime).length,
+    activeConversationSessions: Array.from(runtime.activeConversationSessions.values()),
     runningJobs: runtime.jobs.size,
     lastWakeAt: runtime.stats.lastWakeAt ?? null,
+    lastDirectAt: runtime.stats.lastDirectAt ?? null,
     lastSuccessAt: runtime.stats.lastSuccessAt ?? null,
     lastFailureAt: runtime.stats.lastFailureAt ?? null,
     failureCount: runtime.stats.failureCount.toString(),
     claimed: runtime.stats.claimed,
     acked: runtime.stats.acked,
+    directDispatched: runtime.stats.directDispatched,
     failed: runtime.stats.failed,
   };
 }

@@ -47,6 +47,11 @@ export type SupervisorAgentConfig = {
   connector?: {
     openclawAgentId?: string;
     sendReplyText?: boolean;
+    hermesSkills?: string[];
+    liveChat?: boolean;
+    liveChatIdleTimeoutMs?: number;
+    liveChatMaxSessionMs?: number;
+    startupTimeoutMs?: number;
     busyCommand?: string;
     busyCommandTimeoutMs?: number;
   };

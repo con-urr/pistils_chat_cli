@@ -16,6 +16,11 @@ export type WakeConnectorInput = {
   attemptId: string;
   contextMessages: ModuleTypes.ConversationMessage[];
   payload: WakeDispatchPayload;
+  agentKind?: SupervisorAgentConfig['kind'];
+  liveChat?: boolean;
+  liveChatIdleTimeoutMs?: number;
+  liveChatMaxSessionMs?: number;
+  startupTimeoutMs?: number;
   connectorSession?: {
     key: string;
     hermesSessionId?: string;
@@ -51,6 +56,45 @@ type ProcessResult = {
 };
 
 const MAX_CAPTURE_BYTES = 1024 * 1024;
+const DEFAULT_HERMES_LIVE_CHAT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_HERMES_LIVE_CHAT_MAX_SESSION_MS = 60 * 60 * 1000;
+const DEFAULT_HERMES_STARTUP_TIMEOUT_MS = 60 * 1000;
+
+function normalizePositiveMs(value: unknown, fallback: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+export function hermesLiveChatEnabled(agent: SupervisorAgentConfig) {
+  return agent.kind === 'hermes' && agent.connector?.liveChat !== false;
+}
+
+export function hermesLiveChatIdleTimeoutMs(agent: SupervisorAgentConfig) {
+  return normalizePositiveMs(
+    agent.connector?.liveChatIdleTimeoutMs,
+    DEFAULT_HERMES_LIVE_CHAT_IDLE_TIMEOUT_MS
+  );
+}
+
+export function hermesLiveChatMaxSessionMs(agent: SupervisorAgentConfig) {
+  return normalizePositiveMs(
+    agent.connector?.liveChatMaxSessionMs,
+    Math.max(DEFAULT_HERMES_LIVE_CHAT_MAX_SESSION_MS, agent.connectorTimeoutMs)
+  );
+}
+
+export function hermesStartupTimeoutMs(agent: SupervisorAgentConfig) {
+  return normalizePositiveMs(agent.connector?.startupTimeoutMs, DEFAULT_HERMES_STARTUP_TIMEOUT_MS);
+}
+
+export function connectorRunTimeoutMs(agent: SupervisorAgentConfig) {
+  if (!hermesLiveChatEnabled(agent)) {
+    return agent.connectorTimeoutMs;
+  }
+  return Math.max(agent.connectorTimeoutMs, hermesLiveChatMaxSessionMs(agent));
+}
 
 type HermesSessionRecord = {
   sessionId: string;
@@ -101,6 +145,35 @@ function disabledEnvValue(value: string | undefined) {
   return Boolean(value && ['0', 'false', 'off', 'none', 'disabled'].includes(value.toLowerCase()));
 }
 
+function normalizeStringList(value: string | string[] | undefined | null) {
+  if (!value) {
+    return [] as string[];
+  }
+  const items = Array.isArray(value) ? value : value.split(/[,\s]+/);
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const trimmed = item.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    normalized.push(trimmed);
+    seen.add(trimmed);
+  }
+  return normalized;
+}
+
+function hermesPreloadSkills(agent: SupervisorAgentConfig) {
+  const override = process.env.AGENTTALK_HERMES_SKILLS;
+  if (disabledEnvValue(override)) {
+    return [] as string[];
+  }
+  if (override) {
+    return normalizeStringList(override);
+  }
+  return normalizeStringList(agent.connector?.hermesSkills);
+}
+
 function agenttalkCliPath() {
   return path.resolve(__dirname, '..', 'agenttalk.js');
 }
@@ -118,7 +191,7 @@ function replyCommandArgs(input: WakeConnectorInput) {
     'reply',
     input.wake.conversationId.toString(),
     '--message',
-    '<message>',
+    '{{replyText}}',
     '--json',
   ];
 }
@@ -223,6 +296,7 @@ async function forgetHermesSession(
 }
 
 function wakeText(input: WakeConnectorInput) {
+  const liveChat = input.liveChat === true;
   const messages = input.contextMessages.length
     ? input.contextMessages
         .map(message => {
@@ -242,11 +316,16 @@ Messages in wake range:
 ${messages}
 
 Instructions:
+- AgentTalk is your live communication tool. Treat this wake as a peer asking to talk, not as a one-shot callback.
+- Stay in inference for this AgentTalk conversation. Use AgentTalk commands as tools at your own discretion, the same way you would use a terminal or browser while pursuing a task.
 - Decide whether you need to reply.
 - If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
-- If replying yourself, send through AgentTalk with AGENTTALK_REPLY_COMMAND or AGENTTALK_REPLY_ARGS_JSON.
-- If the host runtime cannot access that reply command, return replyText with the message you want sent and replySent false; the local supervisor may send it when connector.sendReplyText is enabled.
+- For live chat, send an immediate AgentTalk reply yourself, then listen for follow-up messages in Conversation ${input.wake.conversationId.toString()} after sequence ${input.wake.maxSequence.toString()}. Continue the chat until the peer explicitly says goodbye/done, there is substantial idle time, or your hard session budget is nearly exhausted.
+- Do not return connector JSON while you intend to keep chatting. Return connector JSON only when the chat is complete, substantially idle, synthetic, or unsafe to continue.
+- If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return structured JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
+- If you send through AGENTTALK_REPLY_ARGS_JSON, parse it as a JSON object with command, args, and messagePlaceholder; build argv as [command, ...args], replace every exact messagePlaceholder occurrence with your reply text, preserve the required environment variables, then set replySent based on the command result.
 - Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
+- Active chat policy: liveChat=${liveChat ? 'true' : 'false'}, idleTimeoutMs=${input.liveChatIdleTimeoutMs?.toString() ?? 'unknown'}, maxSessionMs=${input.liveChatMaxSessionMs?.toString() ?? 'unknown'}.
 - Do not reveal secrets, env values, or local paths in user-facing replies.
 - Return or print a structured connector result JSON when possible:
   {"ok":true,"handled":true,"replySent":false,"replyText":null,"message":"handled wake","error":null,"artifacts":null,"metadata":null}
@@ -290,10 +369,14 @@ function connectorEnv(
     AGENTTALK_REPLY_ARGS_JSON: JSON.stringify({
       command: replyArgs[0],
       args: replyArgs.slice(1),
-      messagePlaceholder: '<message>',
+      messagePlaceholder: '{{replyText}}',
       conversationId: input.wake.conversationId.toString(),
       requiredEnv: ['AGENTTALK_STATE_DIR', 'SPACETIMEDB_HOST', 'SPACETIMEDB_DB_NAME'],
     }),
+    AGENTTALK_ACTIVE_CHAT: input.liveChat ? 'true' : 'false',
+    AGENTTALK_ACTIVE_CHAT_IDLE_TIMEOUT_MS: input.liveChatIdleTimeoutMs?.toString() ?? '',
+    AGENTTALK_ACTIVE_CHAT_MAX_SESSION_MS: input.liveChatMaxSessionMs?.toString() ?? '',
+    AGENTTALK_STARTUP_TIMEOUT_MS: input.startupTimeoutMs?.toString() ?? '',
     AGENTTALK_WAKE_INPUT_JSON: paths.inputPath,
     AGENTTALK_WAKE_CONTEXT_JSON: paths.contextJson,
     AGENTTALK_WAKE_PAYLOAD_JSON: paths.payloadJson,
@@ -303,7 +386,7 @@ function connectorEnv(
       Math.max(1, Math.ceil(agent.connectorTimeoutMs / 1000)).toString(),
     HERMES_TIMEOUT_SECONDS:
       process.env.HERMES_TIMEOUT_SECONDS ??
-      Math.max(1, Math.ceil(agent.connectorTimeoutMs / 1000)).toString(),
+      Math.max(1, Math.ceil(connectorRunTimeoutMs(agent) / 1000)).toString(),
     AGENTTALK_CODEX_WORKDIR: process.env.AGENTTALK_CODEX_WORKDIR ?? agent.repoPath ?? process.cwd(),
     AGENTTALK_CODEX_SANDBOX: process.env.AGENTTALK_CODEX_SANDBOX ?? 'read-only',
   };
@@ -352,6 +435,9 @@ function defaultHermesSpec(agent: SupervisorAgentConfig, input: WakeConnectorInp
     'agenttalk',
     '--pass-session-id',
   ];
+  for (const skill of hermesPreloadSkills(agent)) {
+    args.push('--skills', skill);
+  }
   if (input.connectorSession?.hermesSessionId) {
     args.push('--resume', input.connectorSession.hermesSessionId);
   }
@@ -612,6 +698,24 @@ function normalizeConnectorResult(
     }
   }
 
+  if (agent.kind === 'hermes') {
+    const replyText = processResult.stdout.trim();
+    if (replyText) {
+      return {
+        ok: true,
+        handled: true,
+        replySent: false,
+        replyText: truncateText(replyText),
+        message: 'Hermes completed with plain reply text',
+        metadata: {
+          connector: agent.kind,
+          parsed: false,
+          durationMs: processResult.durationMs,
+        },
+      };
+    }
+  }
+
   return {
     ok: true,
     handled: true,
@@ -822,7 +926,14 @@ export async function executeWakeConnector(
   await fs.mkdir(runDir, { recursive: true });
   await fs.chmod(runDir, 0o700).catch(() => undefined);
 
-  const connectorInput: WakeConnectorInput = { ...input };
+  const connectorInput: WakeConnectorInput = {
+    ...input,
+    agentKind: agent.kind,
+    liveChat: hermesLiveChatEnabled(agent),
+    liveChatIdleTimeoutMs: hermesLiveChatIdleTimeoutMs(agent),
+    liveChatMaxSessionMs: hermesLiveChatMaxSessionMs(agent),
+    startupTimeoutMs: hermesStartupTimeoutMs(agent),
+  };
   const hermesSession = agent.kind === 'hermes' && !agent.command?.trim()
     ? await prepareHermesSession(connectorInput)
     : undefined;
@@ -876,7 +987,7 @@ export async function executeWakeConnector(
       processResult = await runProcess(
         spec,
         connectorEnv(config, agent, connectorInput, { inputPath, contextJson, payloadJson }),
-        agent.connectorTimeoutMs
+        connectorRunTimeoutMs(agent)
       );
       if (
         hermesSession &&
@@ -891,7 +1002,7 @@ export async function executeWakeConnector(
           processResult = await runProcess(
             spec,
             connectorEnv(config, agent, connectorInput, { inputPath, contextJson, payloadJson }),
-            agent.connectorTimeoutMs
+            connectorRunTimeoutMs(agent)
           );
         }
       }
