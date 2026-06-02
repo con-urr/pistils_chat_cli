@@ -906,15 +906,46 @@ class AgenttalkDaemon {
     afterSequence: bigint | undefined,
     limit: number
   ) {
+    const requestLimit = Math.min(Math.max(limit, 10), 100);
     await this.client.requestConversationMessages({
       conversationId,
       afterSequence,
-      limit: BigInt(Math.min(Math.max(limit, 1), 100)),
+      limit: BigInt(requestLimit),
     });
     await sleep(150);
     return this.client
       .listRequestedConversationMessages(conversationId)
       .filter(row => (afterSequence !== undefined ? row.sequence > afterSequence : true))
+      .sort((left, right) =>
+        left.sequence < right.sequence ? -1 : left.sequence > right.sequence ? 1 : 0
+      );
+  }
+
+  private async requestedInboxDeliveriesAfter(
+    conversationId: bigint | undefined,
+    afterSequence: bigint | undefined,
+    limit: number
+  ) {
+    const requestLimit = Math.min(Math.max(limit, 10), 100);
+    await this.client.requestInboxDeliveries({
+      conversationId,
+      afterSequence,
+      limit: BigInt(requestLimit),
+    });
+    await sleep(150);
+
+    const byKey = new Map<string, ModuleTypes.ConversationDelivery>();
+    for (const delivery of [
+      ...this.client.listRequestedInboxDeliveries({ conversationId }),
+      ...this.client.listInboxDeliveries({ conversationId }),
+    ]) {
+      if (afterSequence !== undefined && delivery.sequence <= afterSequence) {
+        continue;
+      }
+      byKey.set(this.deliveryMessageKey(delivery), delivery);
+    }
+
+    return Array.from(byKey.values())
       .sort((left, right) =>
         left.sequence < right.sequence ? -1 : left.sequence > right.sequence ? 1 : 0
       )
@@ -1841,12 +1872,49 @@ class AgenttalkDaemon {
         );
         const limit = payloadNumber(payload, ['max', 'limit'], 1, 100);
 
+        const snapshotDeliveries = await this.requestedInboxDeliveriesAfter(
+          conversationId,
+          afterSequence,
+          limit
+        );
+        if (snapshotDeliveries.length > 0) {
+          const hydratedMessages = this.shouldHydrate(payload)
+            ? await this.hydrateDeliveryMessages(snapshotDeliveries)
+            : new Map<string, ReturnType<typeof conversationMessageDto>>();
+          const messages = snapshotDeliveries
+            .map(delivery => hydratedMessages.get(this.deliveryMessageKey(delivery)) ?? null)
+            .filter((message): message is ReturnType<typeof conversationMessageDto> =>
+              Boolean(message)
+            );
+          const readThrough = snapshotDeliveries.reduce(
+            (max, row) => (row.sequence > max ? row.sequence : max),
+            snapshotDeliveries[0].sequence
+          );
+          await this.client.markConversationRead(snapshotDeliveries[0].conversationId, readThrough);
+          for (const delivery of snapshotDeliveries) {
+            this.rememberConversationSequence(delivery.conversationId, delivery.sequence);
+          }
+          return {
+            id,
+            ok: true,
+            data: {
+              source: 'snapshot_delivery',
+              delivery: deliveryDto(snapshotDeliveries[0]),
+              deliveries: snapshotDeliveries.map(deliveryDto),
+              message: messages[0] ?? null,
+              messages,
+            },
+          };
+        }
+
         if (conversationId) {
-          const snapshot = await this.requestedConversationMessagesAfter(
+          const snapshot = (await this.requestedConversationMessagesAfter(
             conversationId,
             afterSequence,
             limit
-          );
+          ))
+            .filter(row => row.authorIdentity.toHexString() !== this.client.identityHex)
+            .slice(0, limit);
           if (snapshot.length > 0) {
             const readThrough = snapshot.reduce(
               (max, row) => (row.sequence > max ? row.sequence : max),
