@@ -421,15 +421,18 @@ async function startDaemonProcess() {
   const entrypoint = agenttalkdEntrypoint();
   spawnDaemonEntrypoint(entrypoint);
 
-  for (let i = 0; i < 20; i += 1) {
-    await sleep(250);
+  const readyTimeoutMs = 20_000;
+  const pollMs = 250;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < readyTimeoutMs) {
+    await sleep(pollMs);
     const response = await pingDaemon();
     if (response) {
       return { started: true, response };
     }
   }
 
-  throw new Error('agenttalkd did not become ready within 5s');
+  throw new Error(`agenttalkd did not become ready within ${Math.ceil(readyTimeoutMs / 1000)}s`);
 }
 
 async function acquireStateLock(timeoutMs = 15000) {
