@@ -71,6 +71,10 @@ export function hermesLiveChatEnabled(agent: SupervisorAgentConfig) {
   return agent.kind === 'hermes' && agent.connector?.liveChat !== false;
 }
 
+export function hermesSessionReuseEnabled(agent: SupervisorAgentConfig) {
+  return agent.kind === 'hermes' && agent.connector?.reuseHermesSession === true;
+}
+
 export function hermesLiveChatIdleTimeoutMs(agent: SupervisorAgentConfig) {
   return normalizePositiveMs(
     agent.connector?.liveChatIdleTimeoutMs,
@@ -302,6 +306,28 @@ async function recordHermesSession(
   return sessionId;
 }
 
+function withHermesRunMetadata(
+  result: WakeConnectorResult,
+  input: WakeConnectorInput,
+  processResult: ProcessResult,
+  session: { key: string; sessionId?: string } | undefined,
+  storedSessionId: string | undefined
+) {
+  const parsedSessionId = parseHermesSessionId(processResult.stderr);
+  return {
+    ...result,
+    metadata: {
+      connectorMetadata: result.metadata,
+      hermesSessionKey: session?.key ?? hermesConversationKey(input),
+      hermesSessionId: storedSessionId ?? parsedSessionId ?? session?.sessionId ?? null,
+      hermesSessionReuseEnabled: Boolean(session),
+      hermesSessionReused: Boolean(session?.sessionId),
+      hermesSessionStored: Boolean(session && storedSessionId),
+      durationMs: processResult.durationMs,
+    },
+  };
+}
+
 async function forgetHermesSession(
   input: WakeConnectorInput,
   session: { filePath: string; key: string }
@@ -317,6 +343,7 @@ async function forgetHermesSession(
 function wakeText(input: WakeConnectorInput) {
   const liveChat = input.liveChat === true;
   const listenSeconds = liveChatListenTimeoutSeconds(input);
+  const initialReplyCommand = commandLineFromArgs(replyCommandArgs(input));
   const initialListenCommand = commandLineFromArgs(listenCommandArgs(input));
   const peerLabels = Array.from(
     new Set(
@@ -347,20 +374,20 @@ Messages in wake range:
 ${messages}
 
 Instructions:
-- You received a message on the AgentTalk network from the sender above. This Hermes agent is configured to wake for accepted AgentTalk senders.
-- AgentTalk is a communication tool available during inference. Use AgentTalk commands at your discretion, the same way you would use a terminal or browser while pursuing a task.
-- Decide what, if anything, is appropriate: reply, inspect transcript, listen for a follow-up, ask a clarification, decline, or end the conversation.
+- You received an accepted AgentTalk wake. AgentTalk is a live communication tool available during inference; use it at your discretion.
+- Hermes wake sessions start fresh by default. Use AgentTalk transcript/listen for live conversation state, not previous Hermes chat history.
+- Decide independently what is appropriate: reply, inspect transcript, listen for a follow-up, ask a clarification, decline, or end the conversation.
 - If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
-- If you choose to continue the live conversation, use AgentTalk yourself. A useful initial listen command shape is: ${initialListenCommand}
-- When you listen, use an appropriate timeout for the situation. The configured idle window is ${listenSeconds}s, but you may choose a shorter or longer listen based on context and policy.
-- If your command/tool surface has its own timeout, set that tool timeout longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
+- Fast live-chat path: send replies yourself with AgentTalk, then listen only when a follow-up is useful. Reply command shape: ${initialReplyCommand}
+- Useful initial listen command shape: ${initialListenCommand}
+- When listening, choose an appropriate timeout. The configured idle window is ${listenSeconds}s, but you may choose based on context and policy.
+- If your command/tool surface has its own timeout, set it longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
 - If a listen returns peer messages, handle them, update the after-sequence cursor, and decide again whether to reply, listen more, or end.
 - Do not return connector JSON while you intend to keep chatting. Return connector JSON when you decide your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
 - If you intentionally end the conversation because the request is off-topic, inappropriate, complete, or not worth continuing, return metadata such as {"endedByAgent":true,"idle":false}. Future messages may wake a new turn.
-- If you claim metadata.idle=true, that means you actually waited for messages and the wait timed out. The supervisor measures connector duration and rejects premature idle claims.
-- If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return structured JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
-- If you send through AGENTTALK_REPLY_ARGS_JSON, parse it as a JSON object with command, args, and messagePlaceholder; build argv as [command, ...args], replace every exact messagePlaceholder occurrence with your reply text, preserve the required environment variables, then set replySent based on the command result.
-- If you listen through AGENTTALK_LISTEN_ARGS_JSON, parse it as a JSON object with command and args; build argv as [command, ...args], preserve the required environment variables, and update the --after cursor after every message you handle.
+- If you claim metadata.idle=true, that means you actually waited for messages and the wait timed out. The supervisor rejects premature idle claims.
+- If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return connector JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
+- AGENTTALK_REPLY_ARGS_JSON and AGENTTALK_LISTEN_ARGS_JSON contain argv-safe command objects. Parse them as {command,args,...}, run [command, ...args], replace the reply placeholder when replying, and update --after after every message handled.
 - Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
 - Active chat policy: liveChat=${liveChat ? 'true' : 'false'}, idleTimeoutMs=${input.liveChatIdleTimeoutMs?.toString() ?? 'unknown'}, maxSessionMs=${input.liveChatMaxSessionMs?.toString() ?? 'unknown'}.
 - Do not reveal secrets, env values, or local paths in user-facing replies.
@@ -1029,7 +1056,7 @@ export async function executeWakeConnector(
     liveChatMaxSessionMs: hermesLiveChatMaxSessionMs(agent),
     startupTimeoutMs: hermesStartupTimeoutMs(agent),
   };
-  const hermesSession = agent.kind === 'hermes' && !agent.command?.trim()
+  const hermesSession = agent.kind === 'hermes' && !agent.command?.trim() && hermesSessionReuseEnabled(agent)
     ? await prepareHermesSession(connectorInput)
     : undefined;
   if (hermesSession) {
@@ -1107,16 +1134,11 @@ export async function executeWakeConnector(
       normalizeConnectorResult(agent, processResult),
       processResult
     );
-    if (hermesSession && processResult) {
-      const sessionId = await recordHermesSession(connectorInput, hermesSession, processResult);
-      result = {
-        ...result,
-        metadata: {
-          connectorMetadata: result.metadata,
-          hermesSessionKey: hermesSession.key,
-          hermesSessionId: sessionId ?? connectorInput.connectorSession?.hermesSessionId ?? null,
-        },
-      };
+    if (agent.kind === 'hermes' && !agent.command?.trim() && processResult) {
+      const sessionId = hermesSession
+        ? await recordHermesSession(connectorInput, hermesSession, processResult)
+        : undefined;
+      result = withHermesRunMetadata(result, connectorInput, processResult, hermesSession, sessionId);
     }
   } catch (error) {
     result = {

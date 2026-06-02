@@ -89,12 +89,12 @@ async function installFakeHermesRepo() {
       "const sourceIndex = args.indexOf('--source');",
       "if (sourceIndex === -1 || args[sourceIndex + 1] !== 'agenttalk') { process.stderr.write('missing agenttalk source'); process.exit(5); }",
       "const resumeIndex = args.indexOf('--resume');",
-      "const sessionId = resumeIndex === -1 ? 'fake-hermes-session-0' : args[resumeIndex + 1];",
       "const stateDir = process.env.AGENTTALK_STATE_DIR;",
       "if (!stateDir) { process.stderr.write('missing AGENTTALK_STATE_DIR'); process.exit(6); }",
       "const callsPath = path.join(stateDir, 'fake-hermes-calls.json');",
       "let calls = [];",
       "try { calls = JSON.parse(fs.readFileSync(callsPath, 'utf8')); } catch {}",
+      "const sessionId = resumeIndex === -1 ? 'fake-hermes-session-' + calls.length : args[resumeIndex + 1];",
       "calls.push({ hasResume: resumeIndex !== -1, resumeSessionId: resumeIndex === -1 ? null : args[resumeIndex + 1], sessionId, conversationId: process.env.AGENTTALK_CONVERSATION_ID });",
       "fs.writeFileSync(callsPath, JSON.stringify(calls, null, 2));",
       "process.stdout.write(JSON.stringify({ ok: true, handled: true, replySent: false, message: 'fake hermes default handled wake', metadata: { fakeHermes: true, sessionId } }));",
@@ -264,7 +264,9 @@ if (
   firstHermesWake.ok !== true ||
   secondHermesWake.ok !== true ||
   firstHermesWake.result?.metadata?.hermesSessionId !== 'fake-hermes-session-0' ||
-  secondHermesWake.result?.metadata?.hermesSessionId !== 'fake-hermes-session-0'
+  secondHermesWake.result?.metadata?.hermesSessionId !== 'fake-hermes-session-1' ||
+  firstHermesWake.result?.metadata?.hermesSessionReuseEnabled !== false ||
+  secondHermesWake.result?.metadata?.hermesSessionReuseEnabled !== false
 ) {
   throw new Error(`unexpected default hermes results: ${JSON.stringify({ firstHermesWake, secondHermesWake })}`);
 }
@@ -272,10 +274,48 @@ const hermesCalls = JSON.parse(await fs.readFile(path.join(hermesDefaultStateDir
 if (
   hermesCalls.length !== 2 ||
   hermesCalls[0].hasResume !== false ||
-  hermesCalls[1].hasResume !== true ||
-  hermesCalls[1].resumeSessionId !== 'fake-hermes-session-0'
+  hermesCalls[1].hasResume !== false
 ) {
-  throw new Error(`default hermes connector should resume the first wake session: ${JSON.stringify(hermesCalls)}`);
+  throw new Error(`default hermes connector should start fresh wake sessions: ${JSON.stringify(hermesCalls)}`);
+}
+
+const hermesReuseStateDir = path.join(home, 'agents', 'hermes-reuse-agent');
+await run([
+  'add-agent',
+  '--kind',
+  'hermes',
+  '--name',
+  'hermes-reuse-agent',
+  '--handle',
+  'hermes-reuse-agent',
+  '--repo',
+  fakeHermesRepo,
+  '--state-dir',
+  hermesReuseStateDir,
+  '--reuse-hermes-session',
+  'true',
+  '--json',
+]);
+const firstReuseWake = parseJson(await run(['test-wake', 'hermes-reuse-agent', '--json']));
+const secondReuseWake = parseJson(await run(['test-wake', 'hermes-reuse-agent', '--json']));
+if (
+  firstReuseWake.ok !== true ||
+  secondReuseWake.ok !== true ||
+  firstReuseWake.result?.metadata?.hermesSessionId !== 'fake-hermes-session-0' ||
+  secondReuseWake.result?.metadata?.hermesSessionId !== 'fake-hermes-session-0' ||
+  firstReuseWake.result?.metadata?.hermesSessionReuseEnabled !== true ||
+  secondReuseWake.result?.metadata?.hermesSessionReused !== true
+) {
+  throw new Error(`unexpected opt-in hermes reuse results: ${JSON.stringify({ firstReuseWake, secondReuseWake })}`);
+}
+const hermesReuseCalls = JSON.parse(await fs.readFile(path.join(hermesReuseStateDir, 'fake-hermes-calls.json'), 'utf8'));
+if (
+  hermesReuseCalls.length !== 2 ||
+  hermesReuseCalls[0].hasResume !== false ||
+  hermesReuseCalls[1].hasResume !== true ||
+  hermesReuseCalls[1].resumeSessionId !== 'fake-hermes-session-0'
+) {
+  throw new Error(`opt-in hermes connector should resume the first wake session: ${JSON.stringify(hermesReuseCalls)}`);
 }
 
 console.log(JSON.stringify({ ok: true, results }));
