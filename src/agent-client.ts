@@ -298,6 +298,7 @@ const WAKE_SUBSCRIPTIONS = [
   'SELECT * FROM visible_dispatcher_wake_request',
   'SELECT * FROM visible_wake_attempt',
   'SELECT * FROM visible_inbox_delivery',
+  'SELECT * FROM visible_requested_inbox_delivery',
   'SELECT * FROM visible_unread_conversation_message',
   'SELECT * FROM visible_conversation_read_cursor',
   'SELECT * FROM visible_requested_conversation_message',
