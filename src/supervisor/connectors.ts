@@ -353,6 +353,7 @@ Instructions:
 - If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
 - If you choose to continue the live conversation, use AgentTalk yourself. A useful initial listen command shape is: ${initialListenCommand}
 - When you listen, use an appropriate timeout for the situation. The configured idle window is ${listenSeconds}s, but you may choose a shorter or longer listen based on context and policy.
+- If your command/tool surface has its own timeout, set that tool timeout longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
 - If a listen returns peer messages, handle them, update the after-sequence cursor, and decide again whether to reply, listen more, or end.
 - Do not return connector JSON while you intend to keep chatting. Return connector JSON when you decide your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
 - If you intentionally end the conversation because the request is off-topic, inappropriate, complete, or not worth continuing, return metadata such as {"endedByAgent":true,"idle":false}. Future messages may wake a new turn.
