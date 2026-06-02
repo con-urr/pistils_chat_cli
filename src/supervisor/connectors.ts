@@ -345,6 +345,7 @@ Instructions:
 - Initial live-chat listen command shape: ${initialListenCommand}
 - Required active-chat loop when liveChat=true: reply, listen for up to ${listenSeconds}s, handle any peer messages returned by listen, update the after-sequence cursor, and listen again. Do not call the session idle just because there is no immediate message; only call it idle after an AgentTalk listen command blocks until timeout with no peer messages.
 - Do not return connector JSON while you intend to keep chatting. Return connector JSON only when the chat is complete, substantially idle, synthetic, or unsafe to continue.
+- The supervisor measures connector duration. If you claim idle before the configured idle window has elapsed, the result is invalid; run the AgentTalk listen command until it times out before returning idle.
 - If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return structured JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
 - If you send through AGENTTALK_REPLY_ARGS_JSON, parse it as a JSON object with command, args, and messagePlaceholder; build argv as [command, ...args], replace every exact messagePlaceholder occurrence with your reply text, preserve the required environment variables, then set replySent based on the command result.
 - If you listen through AGENTTALK_LISTEN_ARGS_JSON, parse it as a JSON object with command and args; build argv as [command, ...args], preserve the required environment variables, and update the --after cursor after every message you handle.
@@ -950,6 +951,53 @@ async function runConnectorBusyCheck(
   }
 }
 
+function metadataFlag(metadata: unknown, key: string) {
+  return Boolean(
+    metadata &&
+    typeof metadata === 'object' &&
+    key in metadata &&
+    (metadata as Record<string, unknown>)[key] === true
+  );
+}
+
+function enforceHermesLiveChatIdleWindow(
+  agent: SupervisorAgentConfig,
+  result: WakeConnectorResult,
+  processResult: ProcessResult | undefined
+) {
+  if (
+    !processResult ||
+    !hermesLiveChatEnabled(agent) ||
+    !result.ok ||
+    !result.handled ||
+    !metadataFlag(result.metadata, 'idle') ||
+    metadataFlag(result.metadata, 'closedByPeer')
+  ) {
+    return result;
+  }
+  const idleTimeoutMs = hermesLiveChatIdleTimeoutMs(agent);
+  if (processResult.durationMs + 1000 >= idleTimeoutMs) {
+    return result;
+  }
+  const message =
+    `Hermes connector claimed live-chat idle after ${processResult.durationMs}ms, ` +
+    `before configured idleTimeoutMs=${idleTimeoutMs}. Run AGENTTALK_LISTEN_ARGS_JSON ` +
+    'until it times out before returning idle.';
+  return {
+    ...result,
+    ok: false,
+    handled: false,
+    message,
+    error: message,
+    metadata: {
+      original: result.metadata,
+      earlyIdle: true,
+      durationMs: processResult.durationMs,
+      idleTimeoutMs,
+    },
+  };
+}
+
 export async function executeWakeConnector(
   config: SupervisorConfig,
   agent: SupervisorAgentConfig,
@@ -1040,7 +1088,11 @@ export async function executeWakeConnector(
         }
       }
     }
-    result = normalizeConnectorResult(agent, processResult);
+    result = enforceHermesLiveChatIdleWindow(
+      agent,
+      normalizeConnectorResult(agent, processResult),
+      processResult
+    );
     if (hermesSession && processResult) {
       const sessionId = await recordHermesSession(connectorInput, hermesSession, processResult);
       result = {
