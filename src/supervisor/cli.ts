@@ -793,6 +793,7 @@ async function commandAddAgent(flags: SupervisorFlags) {
   const maxConcurrentWakeJobs = getIntFlag(flags, ['max-concurrent', 'maxConcurrentWakeJobs'], 1);
   const openclawAgentId = getStringFlag(flags, ['openclaw-agent-id', 'openclawAgentId']);
   const sendReplyText = getBooleanFlag(flags, ['send-reply-text', 'sendReplyText']);
+  const hermesToolsets = getStringFlag(flags, ['hermes-toolsets', 'hermesToolsets']);
   const reuseHermesSession = getOptionalBooleanFlag(flags, [
     'reuse-hermes-session',
     'reuseHermesSession',
@@ -816,6 +817,9 @@ async function commandAddAgent(flags: SupervisorFlags) {
   }
   if (sendReplyText) {
     connector.sendReplyText = true;
+  }
+  if (hermesToolsets?.trim() && kind === 'hermes') {
+    connector.hermesToolsets = hermesToolsets.split(/[,\s]+/).filter(Boolean);
   }
   if (reuseHermesSession !== undefined && kind === 'hermes') {
     connector.reuseHermesSession = reuseHermesSession;
@@ -1500,7 +1504,7 @@ function printHelp() {
 Usage:
   agenttalk supervisor init [--force] [--json]
   agenttalk supervisor init --wizard [--dry-run] [--json]
-  agenttalk supervisor add-agent --kind noop --name support --handle support-agent [--wake-access allow-list|open] [--allow-senders agent-id[,agent-id]] [--block-senders agent-id[,agent-id]] [--send-reply-text] [--reuse-hermes-session true|false] [--json]
+  agenttalk supervisor add-agent --kind noop --name support --handle support-agent [--wake-access allow-list|open] [--allow-senders agent-id[,agent-id]] [--block-senders agent-id[,agent-id]] [--send-reply-text] [--hermes-toolsets terminal,memory] [--reuse-hermes-session true|false] [--json]
   agenttalk supervisor remove-agent <name> [--json]
   agenttalk supervisor enable-agent <name> [--json]
   agenttalk supervisor disable-agent <name> [--json]

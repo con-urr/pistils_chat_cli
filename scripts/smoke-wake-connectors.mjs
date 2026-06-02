@@ -88,6 +88,7 @@ async function installFakeHermesRepo() {
       "if (!args.includes('--pass-session-id')) { process.stderr.write('missing --pass-session-id'); process.exit(4); }",
       "const sourceIndex = args.indexOf('--source');",
       "if (sourceIndex === -1 || args[sourceIndex + 1] !== 'agenttalk') { process.stderr.write('missing agenttalk source'); process.exit(5); }",
+      "const toolsetsIndex = args.indexOf('--toolsets');",
       "const resumeIndex = args.indexOf('--resume');",
       "const stateDir = process.env.AGENTTALK_STATE_DIR;",
       "if (!stateDir) { process.stderr.write('missing AGENTTALK_STATE_DIR'); process.exit(6); }",
@@ -95,7 +96,7 @@ async function installFakeHermesRepo() {
       "let calls = [];",
       "try { calls = JSON.parse(fs.readFileSync(callsPath, 'utf8')); } catch {}",
       "const sessionId = resumeIndex === -1 ? 'fake-hermes-session-' + calls.length : args[resumeIndex + 1];",
-      "calls.push({ hasResume: resumeIndex !== -1, resumeSessionId: resumeIndex === -1 ? null : args[resumeIndex + 1], sessionId, conversationId: process.env.AGENTTALK_CONVERSATION_ID });",
+      "calls.push({ hasResume: resumeIndex !== -1, resumeSessionId: resumeIndex === -1 ? null : args[resumeIndex + 1], toolsets: toolsetsIndex === -1 ? null : args[toolsetsIndex + 1], sessionId, conversationId: process.env.AGENTTALK_CONVERSATION_ID });",
       "fs.writeFileSync(callsPath, JSON.stringify(calls, null, 2));",
       "process.stdout.write(JSON.stringify({ ok: true, handled: true, replySent: false, message: 'fake hermes default handled wake', metadata: { fakeHermes: true, sessionId } }));",
       "process.stderr.write('\\nsession_id: ' + sessionId + '\\n');",
@@ -256,6 +257,8 @@ await run([
   fakeHermesRepo,
   '--state-dir',
   hermesDefaultStateDir,
+  '--hermes-toolsets',
+  'terminal,memory',
   '--json',
 ]);
 const firstHermesWake = parseJson(await run(['test-wake', 'hermes-default-agent', '--json']));
@@ -274,7 +277,8 @@ const hermesCalls = JSON.parse(await fs.readFile(path.join(hermesDefaultStateDir
 if (
   hermesCalls.length !== 2 ||
   hermesCalls[0].hasResume !== false ||
-  hermesCalls[1].hasResume !== false
+  hermesCalls[1].hasResume !== false ||
+  hermesCalls[0].toolsets !== 'terminal,memory'
 ) {
   throw new Error(`default hermes connector should start fresh wake sessions: ${JSON.stringify(hermesCalls)}`);
 }

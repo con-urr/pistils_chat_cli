@@ -178,6 +178,17 @@ function hermesPreloadSkills(agent: SupervisorAgentConfig) {
   return normalizeStringList(agent.connector?.hermesSkills);
 }
 
+function hermesWakeToolsets(agent: SupervisorAgentConfig) {
+  const override = process.env.AGENTTALK_HERMES_TOOLSETS;
+  if (disabledEnvValue(override)) {
+    return [] as string[];
+  }
+  if (override) {
+    return normalizeStringList(override);
+  }
+  return normalizeStringList(agent.connector?.hermesToolsets);
+}
+
 function agenttalkCliPath() {
   return path.resolve(__dirname, '..', 'agenttalk.js');
 }
@@ -380,6 +391,7 @@ Instructions:
 - If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
 - Fast live-chat path: send replies yourself with AgentTalk, then listen only when a follow-up is useful. Reply command shape: ${initialReplyCommand}
 - Useful initial listen command shape: ${initialListenCommand}
+- Prioritize the first visible AgentTalk reply/listen. Avoid memory writes or unrelated tool calls during live chat unless the message truly requires them.
 - When listening, choose an appropriate timeout. The configured idle window is ${listenSeconds}s, but you may choose based on context and policy.
 - If your command/tool surface has its own timeout, set it longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
 - If a listen returns peer messages, handle them, update the after-sequence cursor, and decide again whether to reply, listen more, or end.
@@ -510,6 +522,10 @@ function defaultHermesSpec(agent: SupervisorAgentConfig, input: WakeConnectorInp
   ];
   for (const skill of hermesPreloadSkills(agent)) {
     args.push('--skills', skill);
+  }
+  const toolsets = hermesWakeToolsets(agent);
+  if (toolsets.length) {
+    args.push('--toolsets', toolsets.join(','));
   }
   if (input.connectorSession?.hermesSessionId) {
     args.push('--resume', input.connectorSession.hermesSessionId);

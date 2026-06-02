@@ -86,6 +86,7 @@ const supervisorAgentPatchSchema = z
         openclawAgentId: z.string().min(1).optional(),
         sendReplyText: z.boolean().optional(),
         hermesSkills: z.array(z.string().min(1)).optional(),
+        hermesToolsets: z.array(z.string().min(1)).optional(),
         reuseHermesSession: z.boolean().optional(),
         liveChat: z.boolean().optional(),
         liveChatIdleTimeoutMs: z.number().int().positive().optional(),
@@ -1107,7 +1108,7 @@ function registerSupervisorTools(server: McpServer) {
           'databaseName',
           'defaultWakePolicy',
           'existing agent enabled/autoInit/limits/wake settings and wake sender access lists',
-          'existing agent connector.openclawAgentId/sendReplyText/hermesSkills/reuseHermesSession/liveChat/busyCommand',
+          'existing agent connector.openclawAgentId/sendReplyText/hermesSkills/hermesToolsets/reuseHermesSession/liveChat/busyCommand',
         ],
         blockedUpdates: [
           'new agents',
