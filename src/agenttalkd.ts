@@ -875,8 +875,12 @@ class AgenttalkDaemon {
         afterSequence: minSequence > 0n ? minSequence - 1n : undefined,
         limit,
       });
-      await sleep(250);
-      const requested = this.client.listRequestedConversationMessages(conversationId);
+      const requested = await this.client.waitForRequestedConversationMessages({
+        conversationId,
+        minSequence,
+        maxSequence,
+        timeoutMs: 2500,
+      });
       for (const delivery of rows) {
         const message = requested.find(
           row =>
@@ -895,6 +899,26 @@ class AgenttalkDaemon {
   private async hydrateDeliveryMessage(delivery: ModuleTypes.ConversationDelivery) {
     const messages = await this.hydrateDeliveryMessages([delivery]);
     return messages.get(this.deliveryMessageKey(delivery)) ?? null;
+  }
+
+  private async requestedConversationMessagesAfter(
+    conversationId: bigint,
+    afterSequence: bigint | undefined,
+    limit: number
+  ) {
+    await this.client.requestConversationMessages({
+      conversationId,
+      afterSequence,
+      limit: BigInt(Math.min(Math.max(limit, 1), 100)),
+    });
+    await sleep(150);
+    return this.client
+      .listRequestedConversationMessages(conversationId)
+      .filter(row => (afterSequence !== undefined ? row.sequence > afterSequence : true))
+      .sort((left, right) =>
+        left.sequence < right.sequence ? -1 : left.sequence > right.sequence ? 1 : 0
+      )
+      .slice(0, limit);
   }
 
   private async wakeSnapshot(
@@ -1809,21 +1833,63 @@ class AgenttalkDaemon {
           payload.afterSequence !== undefined || payload.after_sequence !== undefined
             ? BigInt(String(payload.afterSequence ?? payload.after_sequence))
             : undefined;
-        const timeoutMs = Math.min(Number(payload.timeoutMs ?? payload.timeout_ms ?? 30000), 120000);
+        const timeoutMs = payloadNumber(
+          payload,
+          ['timeoutMs', 'timeout_ms'],
+          30000,
+          15 * 60 * 1000
+        );
+        const limit = payloadNumber(payload, ['max', 'limit'], 1, 100);
+
+        if (conversationId) {
+          const snapshot = await this.requestedConversationMessagesAfter(
+            conversationId,
+            afterSequence,
+            limit
+          );
+          if (snapshot.length > 0) {
+            const readThrough = snapshot.reduce(
+              (max, row) => (row.sequence > max ? row.sequence : max),
+              snapshot[0].sequence
+            );
+            await this.client.markConversationRead(conversationId, readThrough);
+            for (const message of snapshot) {
+              this.rememberConversationSequence(message.conversationId, message.sequence);
+            }
+            const messages = snapshot.map(conversationMessageDto);
+            return {
+              id,
+              ok: true,
+              data: {
+                source: 'snapshot',
+                delivery: null,
+                message: messages[0] ?? null,
+                messages,
+              },
+            };
+          }
+        }
+
         const delivery = await this.client.waitForInboxDelivery({
           conversationId,
           afterSequence,
           timeoutMs,
         });
+        const message = this.shouldHydrate(payload)
+          ? await this.hydrateDeliveryMessage(delivery)
+          : null;
+        if (message) {
+          await this.client.markConversationRead(delivery.conversationId, delivery.sequence);
+        }
         this.rememberConversationSequence(delivery.conversationId, delivery.sequence);
         return {
           id,
           ok: true,
           data: {
+            source: 'delivery',
             delivery: deliveryDto(delivery),
-            message: this.shouldHydrate(payload)
-              ? await this.hydrateDeliveryMessage(delivery)
-              : null,
+            message,
+            messages: message ? [message] : [],
           },
         };
       }

@@ -3065,8 +3065,15 @@ async function commandListen(flags: Flags, positionals: string[], state: Agentta
         writeStdout(`timed out after ${timeoutMs}ms`);
         return;
       }
-      const daemonMessage = (daemonResponse.data as { message?: ConversationMessageDto | null })?.message ?? null;
-      const daemonMessages = daemonMessage ? [daemonMessage] : [];
+      const daemonData = daemonResponse.data as {
+        message?: ConversationMessageDto | null;
+        messages?: ConversationMessageDto[];
+      };
+      const daemonMessages = Array.isArray(daemonData?.messages)
+        ? daemonData.messages
+        : daemonData?.message
+          ? [daemonData.message]
+          : [];
       const payload = {
         result: daemonResponse.data,
         ...buildConversationMessageResult({
