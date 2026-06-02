@@ -164,6 +164,43 @@ function wakeFromDirectDelivery(
   };
 }
 
+function bigintFromUnknown(value: unknown) {
+  if (typeof value === 'bigint') {
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return BigInt(Math.trunc(value));
+  }
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      return BigInt(value.trim());
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function directReadThroughSequence(
+  delivery: ModuleTypes.ConversationDelivery,
+  result: WakeConnectorResult
+) {
+  const metadata = result.metadata && typeof result.metadata === 'object'
+    ? result.metadata as Record<string, unknown>
+    : {};
+  const connectorMetadata =
+    metadata.connectorMetadata && typeof metadata.connectorMetadata === 'object'
+      ? metadata.connectorMetadata as Record<string, unknown>
+      : {};
+  const lastHandled =
+    bigintFromUnknown(connectorMetadata.lastHandledSequence) ??
+    bigintFromUnknown(metadata.lastHandledSequence);
+  if (lastHandled && lastHandled > delivery.sequence) {
+    return lastHandled;
+  }
+  return delivery.sequence;
+}
+
 function conversationSessionKey(conversationId: bigint) {
   return conversationId.toString();
 }
@@ -793,7 +830,8 @@ async function dispatchDirectDelivery(
         });
       }
       if (finalResult.ok && finalResult.handled) {
-        await runtime.realtime.markConversationRead(delivery.conversationId, delivery.sequence);
+        const readThroughSequence = directReadThroughSequence(delivery, finalResult);
+        await runtime.realtime.markConversationRead(delivery.conversationId, readThroughSequence);
         runtime.stats.directDispatched += 1;
         runtime.stats.lastSuccessAt = new Date().toISOString();
         await appendLog(config, agent, {
@@ -803,6 +841,7 @@ async function dispatchDirectDelivery(
           deliveryKey,
           conversationId: delivery.conversationId.toString(),
           sequence: delivery.sequence.toString(),
+          readThroughSequence: readThroughSequence.toString(),
           senderAgentId: delivery.senderAgentId,
           result: toJsonSafe(finalResult),
         });
