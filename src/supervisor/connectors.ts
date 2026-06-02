@@ -318,6 +318,14 @@ function wakeText(input: WakeConnectorInput) {
   const liveChat = input.liveChat === true;
   const listenSeconds = liveChatListenTimeoutSeconds(input);
   const initialListenCommand = commandLineFromArgs(listenCommandArgs(input));
+  const peerLabels = Array.from(
+    new Set(
+      input.contextMessages
+        .map(message => message.authorLabel)
+        .filter(label => label && label !== input.agentName && label !== input.handle)
+    )
+  );
+  const peerLabelText = peerLabels.length ? peerLabels.join(', ') : 'unknown from visible messages';
   const messages = input.contextMessages.length
     ? input.contextMessages
         .map(message => {
@@ -332,20 +340,23 @@ function wakeText(input: WakeConnectorInput) {
 Reason: ${input.wake.reason}
 Conversation: ${input.wake.conversationId.toString()}
 Wake ID: ${input.wake.wakeId}
+Sender agent ID: ${input.wake.senderAgentId}
+Visible peer label(s): ${peerLabelText}
 
 Messages in wake range:
 ${messages}
 
 Instructions:
-- AgentTalk is your live communication tool. Treat this wake as a peer asking to talk, not as a one-shot callback.
-- Stay in inference for this AgentTalk conversation. Use AgentTalk commands as tools at your own discretion, the same way you would use a terminal or browser while pursuing a task.
-- Decide whether you need to reply.
+- You received a message on the AgentTalk network from the sender above. This Hermes agent is configured to wake for accepted AgentTalk senders.
+- AgentTalk is a communication tool available during inference. Use AgentTalk commands at your discretion, the same way you would use a terminal or browser while pursuing a task.
+- Decide what, if anything, is appropriate: reply, inspect transcript, listen for a follow-up, ask a clarification, decline, or end the conversation.
 - If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
-- For live chat, send an immediate AgentTalk reply yourself, then actually run an AgentTalk listen command for follow-up messages in Conversation ${input.wake.conversationId.toString()} after sequence ${input.wake.maxSequence.toString()}. Continue the chat until the peer explicitly says goodbye/done, a listen command times out for the configured idle window, or your hard session budget is nearly exhausted.
-- Initial live-chat listen command shape: ${initialListenCommand}
-- Required active-chat loop when liveChat=true: reply, listen for up to ${listenSeconds}s, handle any peer messages returned by listen, update the after-sequence cursor, and listen again. Do not call the session idle just because there is no immediate message; only call it idle after an AgentTalk listen command blocks until timeout with no peer messages.
-- Do not return connector JSON while you intend to keep chatting. Return connector JSON only when the chat is complete, substantially idle, synthetic, or unsafe to continue.
-- The supervisor measures connector duration. If you claim idle before the configured idle window has elapsed, the result is invalid; run the AgentTalk listen command until it times out before returning idle.
+- If you choose to continue the live conversation, use AgentTalk yourself. A useful initial listen command shape is: ${initialListenCommand}
+- When you listen, use an appropriate timeout for the situation. The configured idle window is ${listenSeconds}s, but you may choose a shorter or longer listen based on context and policy.
+- If a listen returns peer messages, handle them, update the after-sequence cursor, and decide again whether to reply, listen more, or end.
+- Do not return connector JSON while you intend to keep chatting. Return connector JSON when you decide your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
+- If you intentionally end the conversation because the request is off-topic, inappropriate, complete, or not worth continuing, return metadata such as {"endedByAgent":true,"idle":false}. Future messages may wake a new turn.
+- If you claim metadata.idle=true, that means you actually waited for messages and the wait timed out. The supervisor measures connector duration and rejects premature idle claims.
 - If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return structured JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
 - If you send through AGENTTALK_REPLY_ARGS_JSON, parse it as a JSON object with command, args, and messagePlaceholder; build argv as [command, ...args], replace every exact messagePlaceholder occurrence with your reply text, preserve the required environment variables, then set replySent based on the command result.
 - If you listen through AGENTTALK_LISTEN_ARGS_JSON, parse it as a JSON object with command and args; build argv as [command, ...args], preserve the required environment variables, and update the --after cursor after every message you handle.
@@ -971,7 +982,9 @@ function enforceHermesLiveChatIdleWindow(
     !result.ok ||
     !result.handled ||
     !metadataFlag(result.metadata, 'idle') ||
-    metadataFlag(result.metadata, 'closedByPeer')
+    metadataFlag(result.metadata, 'closedByPeer') ||
+    metadataFlag(result.metadata, 'closedByAgent') ||
+    metadataFlag(result.metadata, 'endedByAgent')
   ) {
     return result;
   }
