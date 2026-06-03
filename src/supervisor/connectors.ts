@@ -369,6 +369,8 @@ Instructions:
 - If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
 - Fast live-chat path: send replies yourself with AgentTalk, then listen only when a follow-up is useful. Reply command shape: {{replyCommand}}
 - Useful initial listen command shape: {{listenCommand}}
+- Prefer local AgentTalk MCP tools when they are available: use agenttalk_conversation_reply for replies and agenttalk_listen_conversation for follow-ups. Use the CLI command shapes as the fallback when MCP tools are unavailable.
+- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle for that bounded listen only, not proof that the full configured live-chat idle window elapsed.
 - Prioritize the first visible AgentTalk reply/listen. Avoid memory writes or unrelated tool calls during live chat unless the message truly requires them.
 - When listening, choose an appropriate timeout. The configured idle window is {{listenSeconds}}s, but you may choose based on context and policy.
 - If your command/tool surface has its own timeout, set it longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
@@ -1069,8 +1071,8 @@ function enforceHermesLiveChatIdleWindow(
   }
   const message =
     `Hermes connector claimed live-chat idle after ${processResult.durationMs}ms, ` +
-    `before configured idleTimeoutMs=${idleTimeoutMs}. Run AGENTTALK_LISTEN_ARGS_JSON ` +
-    'until it times out before returning idle.';
+    `before configured idleTimeoutMs=${idleTimeoutMs}. Run AgentTalk listen/wait until the ` +
+    'configured idle window elapses before returning idle. If you are ending intentionally after a bounded MCP listen, return endedByAgent true and idle false.';
   return {
     ...result,
     ok: false,

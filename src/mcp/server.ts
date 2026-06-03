@@ -49,6 +49,8 @@ const DEFAULT_INBOX_WAIT_MS = 0;
 const MAX_INBOX_WAIT_MS = 30_000;
 const DEFAULT_LISTEN_WAIT_MS = 30_000;
 const MAX_LISTEN_WAIT_MS = 120_000;
+const DEFAULT_RECEIPT_WAIT_MS = 750;
+const MAX_RECEIPT_WAIT_MS = 5_000;
 
 const supervisorWakePolicyPatchSchema = z
   .object({
@@ -207,13 +209,30 @@ async function searchAccounts(
 async function receiptOrLatest(
   client: AgentRealtimeClient,
   clientRequestId: string,
-  action: string
+  action: string,
+  waitMs = DEFAULT_RECEIPT_WAIT_MS
 ) {
   try {
-    return await client.waitForReceipt(clientRequestId, 5000, action);
+    return {
+      receipt: await client.waitForReceipt(clientRequestId, waitMs, action),
+      receiptWaitMs: waitMs,
+      receiptTimedOut: false,
+    };
   } catch {
-    return client.listClientRequestReceipts(action, clientRequestId)[0] ?? null;
+    return {
+      receipt: client.listClientRequestReceipts(action, clientRequestId)[0] ?? null,
+      receiptWaitMs: waitMs,
+      receiptTimedOut: true,
+    };
   }
+}
+
+function receiptWaitMs(args: Record<string, unknown>) {
+  return clampTimeoutMs(
+    typeof args.receiptWaitMs === 'number' ? args.receiptWaitMs : undefined,
+    DEFAULT_RECEIPT_WAIT_MS,
+    MAX_RECEIPT_WAIT_MS
+  );
 }
 
 function wakeStatusData(client: AgentRealtimeClient, wakeId?: string) {
@@ -450,7 +469,8 @@ async function waitForConversationMessage(
   client: AgentRealtimeClient,
   conversationId: bigint,
   afterSequence: bigint | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  includeOwn: boolean
 ) {
   await client.requestConversationMessages({
     conversationId,
@@ -460,7 +480,12 @@ async function waitForConversationMessage(
   await sleep(DIRECTORY_SYNC_DELAY_MS);
   const existing = client
     .listConversationMessages(conversationId)
-    .find(row => (afterSequence ? row.sequence > afterSequence : true));
+    .find(row => {
+      if (!includeOwn && row.authorIdentity.toHexString() === client.identityHex) {
+        return false;
+      }
+      return afterSequence ? row.sequence > afterSequence : true;
+    });
   if (existing) {
     return existing;
   }
@@ -472,6 +497,9 @@ async function waitForConversationMessage(
     }, timeoutMs);
     const detach = client.onConversationMessageInsert(row => {
       if (row.conversationId !== conversationId) {
+        return;
+      }
+      if (!includeOwn && row.authorIdentity.toHexString() === client.identityHex) {
         return;
       }
       if (afterSequence && row.sequence <= afterSequence) {
@@ -589,6 +617,7 @@ function registerConversationTools(server: McpServer) {
       metadataJson: z.string().optional(),
       correlationId: z.string().optional(),
       clientRequestId: z.string().optional(),
+      receiptWaitMs: z.number().optional(),
     },
     async args =>
       withMcpClient('direct', async ({ client }) => {
@@ -605,11 +634,18 @@ function registerConversationTools(server: McpServer) {
           clientRequestId:
             typeof args.clientRequestId === 'string' ? args.clientRequestId : undefined,
         });
-        const receipt = await receiptOrLatest(client, requestId, 'direct:send');
+        const receiptResult = await receiptOrLatest(
+          client,
+          requestId,
+          'direct:send',
+          receiptWaitMs(args)
+        );
         return ok(
           {
             clientRequestId: requestId,
-            receipt: sanitizeForMcp(receipt),
+            receipt: sanitizeForMcp(receiptResult.receipt),
+            receiptWaitMs: receiptResult.receiptWaitMs,
+            receiptTimedOut: receiptResult.receiptTimedOut,
             target: sanitizeForMcp(targetAccount ?? targetIdentity?.toHexString() ?? target),
           },
           [
@@ -637,6 +673,7 @@ function registerConversationTools(server: McpServer) {
       artifactUrl: z.string().optional(),
       artifactMimeType: z.string().optional(),
       clientRequestId: z.string().optional(),
+      receiptWaitMs: z.number().optional(),
     },
     async args =>
       withMcpClient('direct', async ({ client }) => {
@@ -649,10 +686,17 @@ function registerConversationTools(server: McpServer) {
           String(args.message),
           richInput(args)
         );
-        const receipt = await receiptOrLatest(client, requestId, 'conversation:send');
+        const receiptResult = await receiptOrLatest(
+          client,
+          requestId,
+          'conversation:send',
+          receiptWaitMs(args)
+        );
         return ok({
           clientRequestId: requestId,
-          receipt: sanitizeForMcp(receipt),
+          receipt: sanitizeForMcp(receiptResult.receipt),
+          receiptWaitMs: receiptResult.receiptWaitMs,
+          receiptTimedOut: receiptResult.receiptTimedOut,
         });
       })
   );
@@ -756,6 +800,7 @@ function registerConversationTools(server: McpServer) {
       conversationId: z.union([z.string(), z.number()]),
       afterSequence: z.union([z.string(), z.number()]).optional(),
       timeoutMs: z.number().optional(),
+      includeOwn: z.boolean().optional(),
     },
     async args =>
       withMcpClient('direct', async ({ client }) => {
@@ -769,16 +814,40 @@ function registerConversationTools(server: McpServer) {
           DEFAULT_LISTEN_WAIT_MS,
           MAX_LISTEN_WAIT_MS
         );
+        const includeOwn = args.includeOwn === true;
         const message = await waitForConversationMessage(
           client,
           conversationId,
           afterSequence,
-          timeoutMs
+          timeoutMs,
+          includeOwn
         );
+        const timedOut = !message;
+        const nextAfterSequence = message?.sequence?.toString() ?? afterSequence?.toString() ?? null;
         return ok({
           timeoutMs,
+          conversationId: conversationId.toString(),
+          afterSequence: afterSequence?.toString() ?? null,
+          nextAfterSequence,
+          includeOwn,
           message: sanitizeForMcp(message),
-          timedOut: !message,
+          timedOut,
+          warnings: timedOut
+            ? [
+                {
+                  code: 'listen_idle_window_elapsed',
+                  message:
+                    'The requested MCP listen window elapsed without new peer messages. This is idle for that wait only.',
+                  timeoutMs,
+                },
+                {
+                  code: 'cursor_not_advanced',
+                  message:
+                    'Reuse nextAfterSequence with another listen if you choose to keep the conversation open.',
+                  afterSequence: nextAfterSequence,
+                },
+              ]
+            : [],
         });
       })
   );
