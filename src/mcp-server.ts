@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './node-compat';
 import { runAgentTalkMcpServer } from './mcp/server';
 
 async function main() {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './node-compat';
 import { parseSupervisorArgs, runSupervisorCommand } from './supervisor/cli';
 import { maybeNotifyPackageUpdate } from './update-check';
 
