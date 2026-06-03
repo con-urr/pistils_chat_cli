@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './node-compat';
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';

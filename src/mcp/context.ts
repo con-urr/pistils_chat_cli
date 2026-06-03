@@ -1,3 +1,4 @@
+import '../node-compat';
 import { promises as fs } from 'node:fs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';

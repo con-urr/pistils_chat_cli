@@ -1,3 +1,4 @@
+import './node-compat';
 import { Identity, type Timestamp } from 'spacetimedb';
 import { DbConnection } from './module_bindings';
 import type * as ModuleTypes from './module_bindings/types';
