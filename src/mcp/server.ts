@@ -52,6 +52,103 @@ const DEFAULT_LISTEN_WAIT_MS = 30_000;
 const MAX_LISTEN_WAIT_MS = 120_000;
 const DEFAULT_RECEIPT_WAIT_MS = 750;
 const MAX_RECEIPT_WAIT_MS = 5_000;
+const MIN_AGENTTALK_NODE_MAJOR = 22;
+
+function parseNodeMajor(version: string | undefined | null) {
+  const match = String(version ?? '').match(/^v?(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function nodeRuntimeInfo() {
+  const version = process.version;
+  const major = parseNodeMajor(version);
+  return {
+    command: process.execPath,
+    version,
+    major,
+    requiredMajor: MIN_AGENTTALK_NODE_MAJOR,
+    ok: typeof major === 'number' && major >= MIN_AGENTTALK_NODE_MAJOR,
+  };
+}
+
+function latencyLogPath() {
+  const configured = process.env.AGENTTALK_LATENCY_LOG;
+  return configured && configured.trim() ? configured : undefined;
+}
+
+function latencyArgSummary(args: Record<string, unknown>) {
+  const summary: Record<string, unknown> = {};
+  for (const key of [
+    'conversationId',
+    'afterSequence',
+    'beforeSequence',
+    'timeoutMs',
+    'receiptWaitMs',
+    'includeOwn',
+    'kind',
+    'target',
+    'clientRequestId',
+  ]) {
+    if (args[key] !== undefined) {
+      summary[key] = args[key];
+    }
+  }
+  if (typeof args.message === 'string') {
+    summary.messageLength = args.message.length;
+  }
+  return summary;
+}
+
+function latencyResultSummary(name: string, result: AgentTalkMcpResult<unknown>) {
+  if (!result.ok) {
+    return { ok: false, error: result.error, reason: result.reason };
+  }
+  const data = result.data && typeof result.data === 'object'
+    ? result.data as Record<string, unknown>
+    : {};
+  if (name === 'agenttalk_conversation_reply' || name === 'agenttalk_chat_start') {
+    return {
+      ok: true,
+      messageAccepted: Boolean(data.clientRequestId),
+      clientRequestId: data.clientRequestId,
+      receiptWaitMs: data.receiptWaitMs,
+      receiptTimedOut: data.receiptTimedOut,
+      receiptVisible: Boolean(data.receipt),
+    };
+  }
+  if (name === 'agenttalk_listen_conversation') {
+    const message = data.message && typeof data.message === 'object'
+      ? data.message as Record<string, unknown>
+      : undefined;
+    return {
+      ok: true,
+      timedOut: data.timedOut,
+      timeoutMs: data.timeoutMs,
+      nextAfterSequence: data.nextAfterSequence,
+      messageId: message?.id ?? message?.messageId ?? null,
+      messageSequence: message?.sequence ?? null,
+    };
+  }
+  if (name === 'agenttalk_conversation_messages') {
+    return {
+      ok: true,
+      count: Array.isArray(data.messages) ? data.messages.length : null,
+    };
+  }
+  return { ok: true };
+}
+
+async function appendLatencyLog(row: Record<string, unknown>) {
+  const file = latencyLogPath();
+  if (!file) {
+    return;
+  }
+  try {
+    await fs.appendFile(file, `${JSON.stringify(row)}\n`, 'utf8');
+  } catch {
+    // Latency logging must never affect the agent-facing MCP hot path.
+  }
+}
 
 const supervisorWakePolicyPatchSchema = z
   .object({
@@ -97,6 +194,7 @@ const supervisorAgentPatchSchema = z
         startupTimeoutMs: z.number().int().positive().optional(),
         busyCommand: z.string().min(1).optional(),
         busyCommandTimeoutMs: z.number().int().positive().optional(),
+        wakePromptTemplate: z.string().min(1).optional(),
       })
       .strict()
       .optional(),
@@ -149,10 +247,40 @@ function registerTool(
       inputSchema,
     },
     async (args: unknown): Promise<CallToolResult> => {
+      const startedMs = Date.now();
+      const startedAt = new Date(startedMs).toISOString();
+      const normalizedArgs = (args ?? {}) as Record<string, unknown>;
+      await appendLatencyLog({
+        event: 'mcp_tool_start',
+        tool: name,
+        at: startedAt,
+        args: latencyArgSummary(normalizedArgs),
+      });
       try {
-        const result = await handler((args ?? {}) as Record<string, unknown>);
+        const result = await handler(normalizedArgs);
+        const endedMs = Date.now();
+        await appendLatencyLog({
+          event: 'mcp_tool_end',
+          tool: name,
+          at: new Date(endedMs).toISOString(),
+          startedAt,
+          durationMs: endedMs - startedMs,
+          result: latencyResultSummary(name, result),
+        });
         return toolResult(result);
       } catch (error) {
+        const endedMs = Date.now();
+        await appendLatencyLog({
+          event: 'mcp_tool_end',
+          tool: name,
+          at: new Date(endedMs).toISOString(),
+          startedAt,
+          durationMs: endedMs - startedMs,
+          result: {
+            ok: false,
+            error: errorMessage(error),
+          },
+        });
         return toolResult(
           fail('tool_failed', errorMessage(error), {
             reason: 'exception',
@@ -547,6 +675,9 @@ function registerIdentityTools(server: McpServer) {
             statePath: statePath() ? '[redacted]' : null,
           },
           connected: true,
+          runtime: {
+            node: nodeRuntimeInfo(),
+          },
           identity: client.identityHex,
           account: sanitizeForMcp(currentAccount(client) ?? null),
         })
@@ -1178,7 +1309,7 @@ function registerSupervisorTools(server: McpServer) {
           'databaseName',
           'defaultWakePolicy',
           'existing agent enabled/autoInit/limits/wake settings and wake sender access lists',
-          'existing agent connector.openclawAgentId/sendReplyText/hermesSkills/hermesToolsets/reuseHermesSession/liveChat/busyCommand',
+          'existing agent connector.openclawAgentId/sendReplyText/hermesSkills/hermesToolsets/reuseHermesSession/liveChat/busyCommand/wakePromptTemplate',
         ],
         blockedUpdates: [
           'new agents',

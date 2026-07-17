@@ -52,13 +52,17 @@ type ProcessResult = {
   timedOut: boolean;
   stdout: string;
   stderr: string;
+  pid?: number;
+  startedAt: string;
+  endedAt: string;
   durationMs: number;
 };
 
 const MAX_CAPTURE_BYTES = 1024 * 1024;
-const DEFAULT_HERMES_LIVE_CHAT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_HERMES_LIVE_CHAT_MAX_SESSION_MS = 60 * 60 * 1000;
-const DEFAULT_HERMES_STARTUP_TIMEOUT_MS = 60 * 1000;
+const DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_LIVE_CHAT_MAX_SESSION_MS = 60 * 60 * 1000;
+const DEFAULT_STARTUP_TIMEOUT_MS = 60 * 1000;
+const DEFAULT_INITIAL_LISTEN_TIMEOUT_MS = 10 * 1000;
 
 function normalizePositiveMs(value: unknown, fallback: number) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
@@ -67,37 +71,40 @@ function normalizePositiveMs(value: unknown, fallback: number) {
   return Math.floor(value);
 }
 
-export function hermesLiveChatEnabled(agent: SupervisorAgentConfig) {
-  return agent.kind === 'hermes' && agent.connector?.liveChat !== false;
+export function connectorLiveChatEnabled(agent: SupervisorAgentConfig) {
+  if (agent.connector?.liveChat !== undefined) {
+    return agent.connector.liveChat === true;
+  }
+  return agent.kind === 'hermes';
 }
 
 export function hermesSessionReuseEnabled(agent: SupervisorAgentConfig) {
   return agent.kind === 'hermes' && agent.connector?.reuseHermesSession === true;
 }
 
-export function hermesLiveChatIdleTimeoutMs(agent: SupervisorAgentConfig) {
+export function connectorLiveChatIdleTimeoutMs(agent: SupervisorAgentConfig) {
   return normalizePositiveMs(
     agent.connector?.liveChatIdleTimeoutMs,
-    DEFAULT_HERMES_LIVE_CHAT_IDLE_TIMEOUT_MS
+    DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS
   );
 }
 
-export function hermesLiveChatMaxSessionMs(agent: SupervisorAgentConfig) {
+export function connectorLiveChatMaxSessionMs(agent: SupervisorAgentConfig) {
   return normalizePositiveMs(
     agent.connector?.liveChatMaxSessionMs,
-    Math.max(DEFAULT_HERMES_LIVE_CHAT_MAX_SESSION_MS, agent.connectorTimeoutMs)
+    Math.max(DEFAULT_LIVE_CHAT_MAX_SESSION_MS, agent.connectorTimeoutMs)
   );
 }
 
-export function hermesStartupTimeoutMs(agent: SupervisorAgentConfig) {
-  return normalizePositiveMs(agent.connector?.startupTimeoutMs, DEFAULT_HERMES_STARTUP_TIMEOUT_MS);
+export function connectorStartupTimeoutMs(agent: SupervisorAgentConfig) {
+  return normalizePositiveMs(agent.connector?.startupTimeoutMs, DEFAULT_STARTUP_TIMEOUT_MS);
 }
 
 export function connectorRunTimeoutMs(agent: SupervisorAgentConfig) {
-  if (!hermesLiveChatEnabled(agent)) {
+  if (!connectorLiveChatEnabled(agent)) {
     return agent.connectorTimeoutMs;
   }
-  return Math.max(agent.connectorTimeoutMs, hermesLiveChatMaxSessionMs(agent));
+  return Math.max(agent.connectorTimeoutMs, connectorLiveChatMaxSessionMs(agent));
 }
 
 type HermesSessionRecord = {
@@ -212,7 +219,15 @@ function replyCommandArgs(input: WakeConnectorInput) {
 }
 
 function liveChatListenTimeoutSeconds(input: WakeConnectorInput) {
-  return Math.max(1, Math.ceil((input.liveChatIdleTimeoutMs ?? DEFAULT_HERMES_LIVE_CHAT_IDLE_TIMEOUT_MS) / 1000));
+  const idleTimeoutMs = input.liveChatIdleTimeoutMs ?? DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS;
+  return Math.max(
+    1,
+    Math.ceil(Math.min(idleTimeoutMs, DEFAULT_INITIAL_LISTEN_TIMEOUT_MS) / 1000)
+  );
+}
+
+function liveChatIdleTimeoutSeconds(input: WakeConnectorInput) {
+  return Math.max(1, Math.ceil((input.liveChatIdleTimeoutMs ?? DEFAULT_LIVE_CHAT_IDLE_TIMEOUT_MS) / 1000));
 }
 
 function listenCommandArgs(input: WakeConnectorInput, afterSequence = input.wake.maxSequence) {
@@ -364,15 +379,16 @@ Messages in wake range:
 
 Instructions:
 - You received an accepted AgentTalk wake. AgentTalk is a live communication tool available during inference; use it at your discretion.
-- Hermes wake sessions start fresh by default. Use AgentTalk transcript/listen for live conversation state, not previous Hermes chat history.
+- Connector wake sessions start fresh by default unless the connector is configured to reuse a runtime session. Use AgentTalk transcript/listen for live conversation state, not previous chat history.
 - Decide independently what is appropriate: reply, inspect transcript, listen for a follow-up, ask a clarification, decline, or end the conversation.
 - If Wake ID starts with test-, this is a synthetic supervisor validation wake. Do not run the AgentTalk reply command; return a handled connector result with replySent false.
 - Fast live-chat path: send replies yourself with AgentTalk, then listen only when a follow-up is useful. Reply command shape: {{replyCommand}}
 - Useful initial listen command shape: {{listenCommand}}
 - Prefer local AgentTalk MCP tools when they are available: use agenttalk_conversation_reply for replies and agenttalk_listen_conversation for follow-ups. Use the CLI command shapes as the fallback when MCP tools are unavailable.
-- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle for that bounded listen only, not proof that the full configured live-chat idle window elapsed.
+- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. Do not pass receiptWaitMs above 750ms during live chat unless you are explicitly debugging reducer receipts.
+- MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle for that bounded listen only, not proof that the full configured live-chat idle window elapsed.
 - Prioritize the first visible AgentTalk reply/listen. Avoid memory writes or unrelated tool calls during live chat unless the message truly requires them.
-- When listening, choose an appropriate timeout. The configured idle window is {{listenSeconds}}s, but you may choose based on context and policy.
+- For casual chat, start with a short 8-12s listen window. The suggested initial listen timeout is {{initialListenSeconds}}s and the configured idle ceiling is {{idleSeconds}}s; choose longer only when the context warrants it.
 - If your command/tool surface has its own timeout, set it longer than the AgentTalk listen timeout. A tool timeout, killed process, or quick empty transcript is not AgentTalk idle.
 - If a listen returns peer messages, handle them, update the after-sequence cursor, and decide again whether to reply, listen more, or end.
 - Do not return connector JSON while you intend to keep chatting. Return connector JSON when you decide your AgentTalk work for this wake is complete, intentionally ended, idle, synthetic, or unsafe to continue.
@@ -381,11 +397,45 @@ Instructions:
 - If this is clearly a one-shot acknowledgement and there is no reason to keep listening, you may return connector JSON with replyText set to the exact message to send and replySent false. This is a fallback, not the normal live-chat path.
 - AGENTTALK_REPLY_ARGS_JSON and AGENTTALK_LISTEN_ARGS_JSON contain argv-safe command objects. Parse them as {command,args,...}, run [command, ...args], replace the reply placeholder when replying, and update --after after every message handled.
 - Keep AGENTTALK_STATE_DIR, SPACETIMEDB_HOST, and SPACETIMEDB_DB_NAME in the command environment.
-- Active chat policy: liveChat={{liveChat}}, idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}.
+- Active chat policy: liveChat={{liveChat}}, initialListenTimeoutMs={{initialListenTimeoutMs}}, idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}.
 - Do not reveal secrets, env values, or local paths in user-facing replies.
 - Return or print a structured connector result JSON when possible:
   {"ok":true,"handled":true,"replySent":false,"replyText":null,"message":"handled wake","error":null,"artifacts":null,"metadata":null}
 `;
+
+const LEGACY_RECEIPT_LISTEN_HINT =
+  '- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle for that bounded listen only, not proof that the full configured live-chat idle window elapsed.';
+const CURRENT_RECEIPT_LISTEN_HINT =
+  '- MCP reply results may return before a reducer receipt is visible; that is normal on the fast path. Do not pass receiptWaitMs above 750ms during live chat unless you are explicitly debugging reducer receipts.\n' +
+  '- MCP listen defaults to peer messages and returns cursor/idle warnings. A timed-out MCP listen is idle for that bounded listen only, not proof that the full configured live-chat idle window elapsed.';
+const LEGACY_LISTEN_TIMEOUT_HINT =
+  '- When listening, choose an appropriate timeout. The configured idle window is {{listenSeconds}}s, but you may choose based on context and policy.';
+const CURRENT_LISTEN_TIMEOUT_HINT =
+  '- For casual chat, start with a short 8-12s listen window. The suggested initial listen timeout is {{initialListenSeconds}}s and the configured idle ceiling is {{idleSeconds}}s; choose longer only when the context warrants it.';
+const LEGACY_ACTIVE_POLICY_HINT =
+  '- Active chat policy: liveChat={{liveChat}}, idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}.';
+const CURRENT_ACTIVE_POLICY_HINT =
+  '- Active chat policy: liveChat={{liveChat}}, initialListenTimeoutMs={{initialListenTimeoutMs}}, idleTimeoutMs={{idleTimeoutMs}}, maxSessionMs={{maxSessionMs}}.';
+
+function upgradeWakePromptRealtimeHints(template: string) {
+  const upgraded = template
+    .replace(LEGACY_RECEIPT_LISTEN_HINT, CURRENT_RECEIPT_LISTEN_HINT)
+    .replace(LEGACY_LISTEN_TIMEOUT_HINT, CURRENT_LISTEN_TIMEOUT_HINT)
+    .replace(LEGACY_ACTIVE_POLICY_HINT, CURRENT_ACTIVE_POLICY_HINT);
+  const defaultShaped =
+    upgraded.startsWith('You are {{agentName}} / @{{handle}}, woken by AgentTalk.') &&
+    upgraded.includes('Messages in wake range:') &&
+    upgraded.includes('AGENTTALK_REPLY_ARGS_JSON') &&
+    !upgraded.includes('Additional behavior:');
+  if (
+    defaultShaped &&
+    (!upgraded.includes('Active chat policy: liveChat={{liveChat}}, initialListenTimeoutMs={{initialListenTimeoutMs}}') ||
+      !upgraded.includes('Return or print a structured connector result JSON'))
+  ) {
+    return STANDARD_WAKE_PROMPT_TEMPLATE.trim();
+  }
+  return upgraded;
+}
 
 function renderWakePromptTemplate(template: string, values: Record<string, string>) {
   return template.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key: string) => {
@@ -398,12 +448,13 @@ function configuredWakePromptTemplate(agent: SupervisorAgentConfig) {
   if (typeof configured !== 'string' || !configured.trim()) {
     return STANDARD_WAKE_PROMPT_TEMPLATE;
   }
-  return configured.slice(0, 24000);
+  return upgradeWakePromptRealtimeHints(configured).slice(0, 24000);
 }
 
 function wakeText(input: WakeConnectorInput, agent: SupervisorAgentConfig) {
   const liveChat = input.liveChat === true;
   const listenSeconds = liveChatListenTimeoutSeconds(input);
+  const idleSeconds = liveChatIdleTimeoutSeconds(input);
   const initialReplyCommand = commandLineFromArgs(replyCommandArgs(input));
   const initialListenCommand = commandLineFromArgs(listenCommandArgs(input));
   const peerLabels = Array.from(
@@ -422,6 +473,12 @@ function wakeText(input: WakeConnectorInput, agent: SupervisorAgentConfig) {
         })
         .join('\n')
     : '(no wake-range messages were visible)';
+  const latestContextMessage = input.contextMessages[input.contextMessages.length - 1];
+  const latestMessage = latestContextMessage
+    ? latestContextMessage.text
+    : '(no latest peer message was visible)';
+  const latestAuthorLabel = latestContextMessage?.authorLabel || peerLabelText;
+  const latestSequence = latestContextMessage?.sequence?.toString() ?? 'unknown';
 
   return renderWakePromptTemplate(configuredWakePromptTemplate(agent), {
     agentName: input.agentName,
@@ -432,10 +489,16 @@ function wakeText(input: WakeConnectorInput, agent: SupervisorAgentConfig) {
     senderAgentId: input.wake.senderAgentId,
     peerLabels: peerLabelText,
     messages,
+    latestMessage,
+    latestAuthorLabel,
+    latestSequence,
     replyCommand: initialReplyCommand,
     listenCommand: initialListenCommand,
     listenSeconds: listenSeconds.toString(),
+    initialListenSeconds: listenSeconds.toString(),
+    idleSeconds: idleSeconds.toString(),
     liveChat: liveChat ? 'true' : 'false',
+    initialListenTimeoutMs: (listenSeconds * 1000).toString(),
     idleTimeoutMs: input.liveChatIdleTimeoutMs?.toString() ?? 'unknown',
     maxSessionMs: input.liveChatMaxSessionMs?.toString() ?? 'unknown',
   });
@@ -449,6 +512,7 @@ function connectorEnv(
     inputPath: string;
     contextJson: string;
     payloadJson: string;
+    latencyLogPath?: string;
   }
 ) {
   const openclawAgentId = process.env.OPENCLAW_AGENT_ID ?? agent.connector?.openclawAgentId ?? agent.name;
@@ -492,16 +556,18 @@ function connectorEnv(
       requiredEnv: ['AGENTTALK_STATE_DIR', 'SPACETIMEDB_HOST', 'SPACETIMEDB_DB_NAME'],
     }),
     AGENTTALK_ACTIVE_CHAT: input.liveChat ? 'true' : 'false',
+    AGENTTALK_INITIAL_LISTEN_TIMEOUT_MS: (liveChatListenTimeoutSeconds(input) * 1000).toString(),
     AGENTTALK_ACTIVE_CHAT_IDLE_TIMEOUT_MS: input.liveChatIdleTimeoutMs?.toString() ?? '',
     AGENTTALK_ACTIVE_CHAT_MAX_SESSION_MS: input.liveChatMaxSessionMs?.toString() ?? '',
     AGENTTALK_STARTUP_TIMEOUT_MS: input.startupTimeoutMs?.toString() ?? '',
     AGENTTALK_WAKE_INPUT_JSON: paths.inputPath,
     AGENTTALK_WAKE_CONTEXT_JSON: paths.contextJson,
     AGENTTALK_WAKE_PAYLOAD_JSON: paths.payloadJson,
+    AGENTTALK_LATENCY_LOG: paths.latencyLogPath ?? '',
     OPENCLAW_AGENT_ID: openclawAgentId,
     OPENCLAW_TIMEOUT_SECONDS:
       process.env.OPENCLAW_TIMEOUT_SECONDS ??
-      Math.max(1, Math.ceil(agent.connectorTimeoutMs / 1000)).toString(),
+      Math.max(1, Math.ceil(connectorRunTimeoutMs(agent) / 1000)).toString(),
     HERMES_TIMEOUT_SECONDS:
       process.env.HERMES_TIMEOUT_SECONDS ??
       Math.max(1, Math.ceil(connectorRunTimeoutMs(agent) / 1000)).toString(),
@@ -524,12 +590,12 @@ function defaultOpenClawSpec(agent: SupervisorAgentConfig, input: WakeConnectorI
       '--agent',
       openclawAgentId,
       '--session-key',
-      `agenttalk:${input.handle}:${input.wake.conversationId.toString()}`,
+      `agenttalk:${input.handle}:${input.wake.conversationId.toString()}:${input.wake.wakeId}`,
       '--message',
       wakeText(input, agent),
       '--json',
       '--timeout',
-      Math.max(1, Math.ceil(agent.connectorTimeoutMs / 1000)).toString(),
+      Math.max(1, Math.ceil(connectorRunTimeoutMs(agent) / 1000)).toString(),
     ],
     cwd: agent.repoPath,
   };
@@ -740,8 +806,75 @@ function collectOpenClawPayloadTexts(value: unknown, output: string[]) {
   collectOpenClawPayloadTexts(record.result, output);
 }
 
+function openClawObjectReplyText(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ['replyText', 'message', 'text', 'content']) {
+    const field = record[key];
+    if (typeof field === 'string' && field.trim()) {
+      return field.trim();
+    }
+  }
+  return undefined;
+}
+
+function openClawPayloadReplyText(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = parseJsonObject(trimmed);
+  const parsedReply = openClawObjectReplyText(parsed);
+  if (parsedReply) {
+    return parsedReply;
+  }
+  return trimmed;
+}
+
+function openClawNoReplyText(text: string) {
+  const normalized = text.trim().toLowerCase();
+  return (
+    /\bno agenttalk reply sent\b/.test(normalized) ||
+    /\bno reply sent\b/.test(normalized) ||
+    /\bno reply is needed\b/.test(normalized) ||
+    /\bnot sending (?:an )?agenttalk reply\b/.test(normalized) ||
+    /\bdo not send (?:an )?agenttalk reply\b/.test(normalized)
+  );
+}
+
+function openClawAgentTalkReplyToolUsed(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const result = record.result && typeof record.result === 'object'
+    ? record.result as Record<string, unknown>
+    : undefined;
+  const resultMeta = result?.meta && typeof result.meta === 'object'
+    ? result.meta as Record<string, unknown>
+    : undefined;
+  const toolSummary = (result?.toolSummary && typeof result.toolSummary === 'object'
+    ? result.toolSummary
+    : resultMeta?.toolSummary && typeof resultMeta.toolSummary === 'object'
+      ? resultMeta.toolSummary
+    : record.toolSummary) as Record<string, unknown> | undefined;
+  const tools = Array.isArray(toolSummary?.tools) ? toolSummary.tools : [];
+  return tools.some(tool =>
+    typeof tool === 'string' &&
+    (tool === 'agenttalk_conversation_reply' || tool.endsWith('.agenttalk_conversation_reply'))
+  );
+}
+
 function openClawResultFromJson(agent: SupervisorAgentConfig, stdout: string): WakeConnectorResult | undefined {
   const parsed = parseJsonObject(stdout);
+  if (parsed) {
+    const result = resultFromParsedObject(agent, parsed);
+    if (result) {
+      return result;
+    }
+  }
   const payloadTexts: string[] = [];
   collectOpenClawPayloadTexts(parsed, payloadTexts);
 
@@ -757,6 +890,76 @@ function openClawResultFromJson(agent: SupervisorAgentConfig, stdout: string): W
         metadata: result.metadata ?? { connector: agent.kind, parsed: 'openclaw-payload' },
       };
     }
+  }
+
+  for (const text of payloadTexts.reverse()) {
+    const replyText = openClawPayloadReplyText(text);
+    if (replyText) {
+      if (openClawNoReplyText(replyText)) {
+        return {
+          ok: true,
+          handled: true,
+          replySent: false,
+          message: 'OpenClaw completed without sending an AgentTalk reply',
+          metadata: {
+            connector: agent.kind,
+            parsed: 'openclaw-payload-no-reply',
+            noReplyText: true,
+            visibleText: truncateText(replyText),
+          },
+        };
+      }
+      const replyAlreadySent = openClawAgentTalkReplyToolUsed(parsed);
+      return {
+        ok: true,
+        handled: true,
+        replySent: replyAlreadySent,
+        replyText: replyAlreadySent ? undefined : truncateText(replyText),
+        message: replyAlreadySent
+          ? 'OpenClaw completed after sending an AgentTalk reply'
+          : 'OpenClaw completed with reply text',
+        metadata: {
+          connector: agent.kind,
+          parsed: 'openclaw-payload-text',
+          agenttalkReplyToolUsed: replyAlreadySent,
+          visibleText: truncateText(replyText),
+        },
+      };
+    }
+  }
+
+  const replyText = openClawObjectReplyText(parsed);
+  if (replyText) {
+    if (openClawNoReplyText(replyText)) {
+      return {
+        ok: true,
+        handled: true,
+        replySent: false,
+        message: 'OpenClaw completed without sending an AgentTalk reply',
+        metadata: {
+          connector: agent.kind,
+          parsed: 'openclaw-json-no-reply',
+          noReplyText: true,
+          visibleText: truncateText(replyText),
+        },
+      };
+    }
+    const replyAlreadySent = openClawAgentTalkReplyToolUsed(parsed);
+    return {
+      ok: true,
+      handled: true,
+      replySent: replyAlreadySent,
+      replyText: replyAlreadySent ? undefined : truncateText(replyText),
+      message: replyAlreadySent
+        ? 'OpenClaw completed after sending an AgentTalk reply'
+        : 'OpenClaw completed with reply text',
+      metadata: {
+        connector: agent.kind,
+        parsed: 'openclaw-json-text',
+        agenttalkReplyToolUsed: replyAlreadySent,
+        visibleText: truncateText(replyText),
+      },
+    };
   }
 
   return undefined;
@@ -806,7 +1009,11 @@ function normalizeConnectorResult(
   }
 
   if (agent.kind === 'openclaw') {
-    const openClawResult = openClawResultFromJson(agent, processResult.stdout);
+    const openClawOutput = [processResult.stdout, processResult.stderr]
+      .map(value => value.trim())
+      .filter(Boolean)
+      .join('\n');
+    const openClawResult = openClawResultFromJson(agent, openClawOutput);
     if (openClawResult) {
       return openClawResult;
     }
@@ -857,6 +1064,7 @@ function runProcess(
   timeoutMs: number
 ): Promise<ProcessResult> {
   const started = Date.now();
+  const startedAt = new Date(started).toISOString();
   return new Promise((resolve, reject) => {
     const child = spawn(spec.command, spec.args, {
       cwd: spec.cwd,
@@ -900,13 +1108,17 @@ function runProcess(
       }
     });
     child.on('close', (code, signal) => {
+      const ended = Date.now();
       finish({
         code,
         signal,
         timedOut,
         stdout,
         stderr,
-        durationMs: Date.now() - started,
+        pid: child.pid,
+        startedAt,
+        endedAt: new Date(ended).toISOString(),
+        durationMs: ended - started,
       });
     });
     if (spec.stdin) {
@@ -915,6 +1127,42 @@ function runProcess(
       child.stdin.end();
     }
   });
+}
+
+function metadataObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return { ...(value as Record<string, unknown>) };
+  }
+  return value === undefined || value === null ? {} : { connectorMetadata: value };
+}
+
+function withConnectorTiming(
+  result: WakeConnectorResult,
+  processResult: ProcessResult | undefined,
+  timing: {
+    connectorStartedAt: string;
+    connectorEndedAt: string;
+    connectorDurationMs: number;
+    latencyLogPath: string;
+  }
+): WakeConnectorResult {
+  return {
+    ...result,
+    metadata: {
+      ...metadataObject(result.metadata),
+      connectorTiming: {
+        connectorStartedAt: timing.connectorStartedAt,
+        connectorEndedAt: timing.connectorEndedAt,
+        connectorDurationMs: timing.connectorDurationMs,
+        processPid: processResult?.pid ?? null,
+        processStartedAt: processResult?.startedAt ?? null,
+        processEndedAt: processResult?.endedAt ?? null,
+        processDurationMs: processResult?.durationMs ?? null,
+        processTimedOut: processResult?.timedOut ?? null,
+        latencyLogPath: timing.latencyLogPath,
+      },
+    },
+  };
 }
 
 function busyCheckResult(
@@ -1005,6 +1253,7 @@ async function runConnectorBusyCheck(
     inputPath: string;
     contextJson: string;
     payloadJson: string;
+    latencyLogPath?: string;
   }
 ) {
   const command = agent.connector?.busyCommand?.trim();
@@ -1048,14 +1297,14 @@ function metadataFlag(metadata: unknown, key: string) {
   );
 }
 
-function enforceHermesLiveChatIdleWindow(
+function enforceLiveChatIdleWindow(
   agent: SupervisorAgentConfig,
   result: WakeConnectorResult,
   processResult: ProcessResult | undefined
 ) {
   if (
     !processResult ||
-    !hermesLiveChatEnabled(agent) ||
+    !connectorLiveChatEnabled(agent) ||
     !result.ok ||
     !result.handled ||
     !metadataFlag(result.metadata, 'idle') ||
@@ -1065,12 +1314,12 @@ function enforceHermesLiveChatIdleWindow(
   ) {
     return result;
   }
-  const idleTimeoutMs = hermesLiveChatIdleTimeoutMs(agent);
+  const idleTimeoutMs = connectorLiveChatIdleTimeoutMs(agent);
   if (processResult.durationMs + 1000 >= idleTimeoutMs) {
     return result;
   }
   const message =
-    `Hermes connector claimed live-chat idle after ${processResult.durationMs}ms, ` +
+    `${agent.kind} connector claimed live-chat idle after ${processResult.durationMs}ms, ` +
     `before configured idleTimeoutMs=${idleTimeoutMs}. Run AgentTalk listen/wait until the ` +
     'configured idle window elapses before returning idle. If you are ending intentionally after a bounded MCP listen, return endedByAgent true and idle false.';
   return {
@@ -1096,14 +1345,16 @@ export async function executeWakeConnector(
 ): Promise<WakeConnectorResult> {
   await fs.mkdir(runDir, { recursive: true });
   await fs.chmod(runDir, 0o700).catch(() => undefined);
+  const connectorStartedMs = Date.now();
+  const connectorStartedAt = new Date(connectorStartedMs).toISOString();
 
   const connectorInput: WakeConnectorInput = {
     ...input,
     agentKind: agent.kind,
-    liveChat: hermesLiveChatEnabled(agent),
-    liveChatIdleTimeoutMs: hermesLiveChatIdleTimeoutMs(agent),
-    liveChatMaxSessionMs: hermesLiveChatMaxSessionMs(agent),
-    startupTimeoutMs: hermesStartupTimeoutMs(agent),
+    liveChat: connectorLiveChatEnabled(agent),
+    liveChatIdleTimeoutMs: connectorLiveChatIdleTimeoutMs(agent),
+    liveChatMaxSessionMs: connectorLiveChatMaxSessionMs(agent),
+    startupTimeoutMs: connectorStartupTimeoutMs(agent),
   };
   const hermesSession = agent.kind === 'hermes' && !agent.command?.trim() && hermesSessionReuseEnabled(agent)
     ? await prepareHermesSession(connectorInput)
@@ -1119,6 +1370,7 @@ export async function executeWakeConnector(
   const stdoutPath = path.join(runDir, 'stdout.log');
   const stderrPath = path.join(runDir, 'stderr.log');
   const resultPath = path.join(runDir, 'result.json');
+  const latencyLogPath = path.join(runDir, 'latency.jsonl');
   const codexOutputSchemaPath = path.join(runDir, 'codex-result.schema.json');
   const contextJson = JSON.stringify(toJsonSafe(connectorInput.contextMessages));
   const payloadJson = JSON.stringify(toJsonSafe(connectorInput.payload));
@@ -1140,12 +1392,20 @@ export async function executeWakeConnector(
     inputPath,
     contextJson,
     payloadJson,
+    latencyLogPath,
   });
   if (busyResult) {
+    const connectorEndedMs = Date.now();
+    const timedBusyResult = withConnectorTiming(busyResult, undefined, {
+      connectorStartedAt,
+      connectorEndedAt: new Date(connectorEndedMs).toISOString(),
+      connectorDurationMs: connectorEndedMs - connectorStartedMs,
+      latencyLogPath,
+    });
     await fs.writeFile(stdoutPath, '', 'utf8');
     await fs.writeFile(stderrPath, '', 'utf8');
-    await fs.writeFile(resultPath, stringifyJsonSafe(busyResult), 'utf8');
-    return busyResult;
+    await fs.writeFile(resultPath, stringifyJsonSafe(timedBusyResult), 'utf8');
+    return timedBusyResult;
   }
 
   let processResult: ProcessResult | undefined;
@@ -1157,7 +1417,7 @@ export async function executeWakeConnector(
     if (spec) {
       processResult = await runProcess(
         spec,
-        connectorEnv(config, agent, connectorInput, { inputPath, contextJson, payloadJson }),
+        connectorEnv(config, agent, connectorInput, { inputPath, contextJson, payloadJson, latencyLogPath }),
         connectorRunTimeoutMs(agent)
       );
       if (
@@ -1172,13 +1432,13 @@ export async function executeWakeConnector(
         if (spec) {
           processResult = await runProcess(
             spec,
-            connectorEnv(config, agent, connectorInput, { inputPath, contextJson, payloadJson }),
+            connectorEnv(config, agent, connectorInput, { inputPath, contextJson, payloadJson, latencyLogPath }),
             connectorRunTimeoutMs(agent)
           );
         }
       }
     }
-    result = enforceHermesLiveChatIdleWindow(
+    result = enforceLiveChatIdleWindow(
       agent,
       normalizeConnectorResult(agent, processResult),
       processResult
@@ -1198,6 +1458,13 @@ export async function executeWakeConnector(
     };
   }
 
+  const connectorEndedMs = Date.now();
+  result = withConnectorTiming(result, processResult, {
+    connectorStartedAt,
+    connectorEndedAt: new Date(connectorEndedMs).toISOString(),
+    connectorDurationMs: connectorEndedMs - connectorStartedMs,
+    latencyLogPath,
+  });
   await fs.writeFile(stdoutPath, processResult?.stdout ?? '', 'utf8');
   await fs.writeFile(stderrPath, processResult?.stderr ?? '', 'utf8');
   await fs.writeFile(resultPath, stringifyJsonSafe(result), 'utf8');

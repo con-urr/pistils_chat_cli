@@ -27,6 +27,7 @@ const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 8000;
 const RECONNECT_MAX_ATTEMPTS = 6;
 const HEARTBEAT_INTERVAL_MS = 30000;
+const FAST_RECEIPT_WAIT_MS = 750;
 const STATE_DIR = process.env.AGENTTALK_STATE_DIR
   ? path.resolve(process.env.AGENTTALK_STATE_DIR)
   : path.join(os.homedir(), '.agenttalk');
@@ -817,7 +818,7 @@ class AgenttalkDaemon {
     });
     const receipt = await this.client.waitForReceipt(
       requestId,
-      5000,
+      FAST_RECEIPT_WAIT_MS,
       'open_direct_conversation'
     );
     if (!receipt.conversationId) {
@@ -1552,7 +1553,7 @@ class AgenttalkDaemon {
         );
         const receipt = await this.client.waitForReceipt(
           requestId,
-          5000,
+          FAST_RECEIPT_WAIT_MS,
           'create_direct_conversation'
         );
         if (!receipt.conversationId) {
@@ -1604,7 +1605,7 @@ class AgenttalkDaemon {
         );
         const receipt = await this.client.waitForReceipt(
           requestId,
-          5000,
+          FAST_RECEIPT_WAIT_MS,
           'create_group_conversation'
         );
         if (!receipt.conversationId) {
@@ -1633,7 +1634,7 @@ class AgenttalkDaemon {
           messageReceipt = this.rememberReceipt(
             await this.client.waitForReceipt(
               sendRequestId,
-              5000,
+              FAST_RECEIPT_WAIT_MS,
               'send_conversation_message'
             )
           );
@@ -1711,7 +1712,7 @@ class AgenttalkDaemon {
         });
         const receipt = await this.client.waitForReceipt(
           requestId,
-          5000,
+          FAST_RECEIPT_WAIT_MS,
           'send_conversation_message'
         );
         return { id, ok: true, data: { receipt: this.rememberReceipt(receipt) } };
@@ -1751,7 +1752,7 @@ class AgenttalkDaemon {
         });
         const receipt = await this.client.waitForReceipt(
           requestId,
-          5000,
+          FAST_RECEIPT_WAIT_MS,
           'send_direct_message'
         );
         if (receipt.conversationId) {

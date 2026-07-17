@@ -13,6 +13,7 @@ export type AgentTalkState = {
   credentialLabel?: string;
   registrationState?: 'registered' | 'not_registered';
   lastProfileSyncAt?: string;
+  handledConversationWatermarks?: Record<string, string>;
 };
 
 export function agentStatePath(stateDir: string) {

@@ -29,6 +29,8 @@ const child = spawn(process.execPath, useAgenttalkAlias ? [cliPath, 'mcp'] : [se
     AGENTTALK_SUPERVISOR_HOME: smokeSupervisorHome,
     SPACETIMEDB_HOST: 'https://maincloud.spacetimedb.com',
     SPACETIMEDB_DB_NAME: 'crimsonconfidentialgibbon',
+    AGENTTALK_CONTROL_PROFILE: 'plugin_managed',
+    AGENTTALK_CREDENTIAL_SCOPE: 'plugin_runtime',
     AGENTTALK_MCP_SMOKE: '1',
   },
 });
@@ -121,8 +123,12 @@ try {
     'agenttalk_chat_start',
     'agenttalk_inbox',
     'agenttalk_wake_status',
+    'agenttalk_wake_enable',
+    'agenttalk_wake_policy_set',
     'agenttalk_supervisor_status',
     'agenttalk_supervisor_config_get',
+    'agenttalk_supervisor_config_set',
+    'agenttalk_supervisor_wake_change_request',
   ]) {
     if (!names.has(required)) {
       fail(`Missing MCP tool ${required}`);
@@ -167,25 +173,61 @@ try {
     fail(`agenttalk_supervisor_config_get returned unexpected payload: ${supervisorConfigText}`);
   }
 
-  const supervisorDryRun = await request('tools/call', {
-    name: 'agenttalk_supervisor_config_set',
-    arguments: {
-      dryRun: true,
-      config: {
-        defaultWakePolicy: {
-          maxWakesPerMinute: 12,
+  const deniedToolCalls = [
+    {
+      name: 'agenttalk_wake_enable',
+      arguments: {},
+    },
+    {
+      name: 'agenttalk_wake_policy_set',
+      arguments: {
+        wakeOnDirectMessage: true,
+      },
+    },
+    {
+      name: 'agenttalk_supervisor_config_set',
+      arguments: {
+        dryRun: true,
+        config: {
+          defaultWakePolicy: {
+            maxWakesPerMinute: 12,
+          },
         },
       },
     },
+  ];
+  for (const denied of deniedToolCalls) {
+    const result = await request('tools/call', denied);
+    const text = result?.content?.[0]?.text ?? '';
+    const parsedDenied = JSON.parse(text);
+    const deniedText = `${parsedDenied.error ?? ''} ${parsedDenied.message ?? ''}`;
+    if (
+      parsedDenied.ok !== false ||
+      !deniedText.includes('plugin-managed AgentTalk runtimes cannot mutate')
+    ) {
+      fail(`${denied.name} should be denied for plugin-managed MCP: ${text}`);
+    }
+  }
+
+  const requestChange = await request('tools/call', {
+    name: 'agenttalk_supervisor_wake_change_request',
+    arguments: {
+      agentName: 'support',
+      wakeEnabled: true,
+      allowedWakeSenderAgentIds: ['agent-peer'],
+      reason: 'smoke test',
+      requestedBy: 'agenttalk-mcp-smoke',
+    },
   });
-  const supervisorDryRunText = supervisorDryRun?.content?.[0]?.text ?? '';
-  const parsedSupervisorDryRun = JSON.parse(supervisorDryRunText);
+  const requestChangeText = requestChange?.content?.[0]?.text ?? '';
+  const parsedRequestChange = JSON.parse(requestChangeText);
   if (
-    parsedSupervisorDryRun.ok !== true ||
-    parsedSupervisorDryRun.data?.dryRun !== true ||
-    parsedSupervisorDryRun.data?.config?.defaultWakePolicy?.maxWakesPerMinute !== 12
+    parsedRequestChange.ok !== true ||
+    parsedRequestChange.data?.applied !== false ||
+    parsedRequestChange.data?.humanApprovalRequired !== true ||
+    parsedRequestChange.data?.request?.status !== 'pending'
   ) {
-    fail(`agenttalk_supervisor_config_set dryRun returned unexpected payload: ${supervisorDryRunText}`);
+    fail(`agenttalk_supervisor_wake_change_request returned unexpected payload: ${requestChangeText}`);
   }
 
   console.log(
@@ -202,6 +244,8 @@ try {
         implemented: parsedSupervisorStatus.data.implemented,
         agents: parsedSupervisorStatus.data.agentCount,
       },
+      pluginManagedAdminDenied: deniedToolCalls.length,
+      wakeChangeRequest: parsedRequestChange.data.request.id,
     })
   );
 } finally {

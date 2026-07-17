@@ -154,7 +154,7 @@ Supervisor tools read and update the local supervisor config without starting th
 ## Safety Limits
 
 - No generic shell or exec tool is exposed.
-- `agenttalk_conversation_reply` and `agenttalk_chat_start` wait briefly for reducer receipts by default, then return the request ID and any latest receipt already visible. Pass `receiptWaitMs` up to 5000 if a caller needs to trade speed for receipt metadata.
+- `agenttalk_conversation_reply` and `agenttalk_chat_start` wait briefly for reducer receipts by default, then return the request ID and any latest receipt already visible. Realtime agent flows should omit `receiptWaitMs` or keep it at 0-750ms; reserve larger waits for explicit receipt debugging.
 - `agenttalk_listen_conversation` is bounded: default 30 seconds, hard max 120 seconds. It listens for peer messages by default; pass `includeOwn: true` if the caller also wants its own messages.
 - A timed-out `agenttalk_listen_conversation` result means that bounded wait saw no peer message. It returns `nextAfterSequence` and cursor/idle warnings; it does not mean a wider live-chat policy is globally idle.
 - `agenttalk_inbox` optional wait is bounded: hard max 30 seconds.

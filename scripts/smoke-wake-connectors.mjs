@@ -118,10 +118,15 @@ async function installFakeOpenClawRepo() {
       "const args = process.argv.slice(2);",
       "if (args[0] !== 'agent') { process.stderr.write('missing agent command'); process.exit(2); }",
       "const agentIndex = args.indexOf('--agent');",
-      "if (agentIndex === -1 || args[agentIndex + 1] !== 'main') { process.stderr.write('unexpected openclaw agent id'); process.exit(3); }",
+      "const agentId = args[agentIndex + 1];",
+      "if (agentIndex === -1 || !['main', 'stderr-main', 'stderr-top-level', 'mcp-main', 'meta-mcp-main', 'no-reply-main'].includes(agentId)) { process.stderr.write('unexpected openclaw agent id'); process.exit(3); }",
       "if (!args.includes('--json')) { process.stderr.write('missing --json'); process.exit(4); }",
-      "const result = { ok: true, handled: true, replySent: false, replyText: 'fake openclaw payload reply', message: 'fake openclaw handled wake', metadata: { fakeOpenClaw: true } };",
-      "process.stdout.write(JSON.stringify({ runId: 'fake-openclaw-run', status: 'ok', result: { payloads: [{ text: JSON.stringify(result), mediaUrl: null }] } }));",
+      "if (agentId === 'stderr-top-level') { process.stderr.write(JSON.stringify({ status: 'bootstrap_pending', message: 'fake openclaw top-level stderr reply' })); process.exit(0); }",
+      "const replyText = agentId === 'stderr-main' ? 'fake openclaw stderr payload reply' : 'fake openclaw payload reply';",
+      "const result = { ok: true, handled: true, replySent: false, replyText, message: 'fake openclaw handled wake', metadata: { fakeOpenClaw: true } };",
+      "const runResult = agentId === 'mcp-main' ? { payloads: [{ text: 'fake openclaw mcp visible text', mediaUrl: null }], toolSummary: { calls: 1, tools: ['agenttalk.agenttalk_conversation_reply'], failures: 0 } } : agentId === 'meta-mcp-main' ? { payloads: [{ text: 'fake openclaw meta mcp visible text', mediaUrl: null }], meta: { toolSummary: { calls: 1, tools: ['bash', 'agenttalk.agenttalk_conversation_reply'], failures: 0 } } } : agentId === 'no-reply-main' ? { payloads: [{ text: 'No AgentTalk reply sent; bounded test complete.', mediaUrl: null }] } : { payloads: [{ text: JSON.stringify(result), mediaUrl: null }] };",
+      "const output = JSON.stringify({ runId: 'fake-openclaw-run', status: 'ok', result: runResult });",
+      "if (agentId === 'stderr-main') { process.stderr.write(output); } else { process.stdout.write(output); }",
     ].join('\n'),
     'utf8'
   );
@@ -194,6 +199,46 @@ const cases = [
     openclawAgentId: 'main',
     expectReplyText: 'fake openclaw payload reply',
   },
+  {
+    name: 'openclaw-stderr-agent',
+    handle: 'openclaw-stderr-agent',
+    kind: 'openclaw',
+    repo: fakeOpenClawRepo,
+    openclawAgentId: 'stderr-main',
+    expectReplyText: 'fake openclaw stderr payload reply',
+  },
+  {
+    name: 'openclaw-stderr-top-level-agent',
+    handle: 'openclaw-stderr-top-level-agent',
+    kind: 'openclaw',
+    repo: fakeOpenClawRepo,
+    openclawAgentId: 'stderr-top-level',
+    expectReplyText: 'fake openclaw top-level stderr reply',
+  },
+  {
+    name: 'openclaw-mcp-reply-agent',
+    handle: 'openclaw-mcp-reply-agent',
+    kind: 'openclaw',
+    repo: fakeOpenClawRepo,
+    openclawAgentId: 'mcp-main',
+    expectReplySent: true,
+  },
+  {
+    name: 'openclaw-meta-mcp-reply-agent',
+    handle: 'openclaw-meta-mcp-reply-agent',
+    kind: 'openclaw',
+    repo: fakeOpenClawRepo,
+    openclawAgentId: 'meta-mcp-main',
+    expectReplySent: true,
+  },
+  {
+    name: 'openclaw-no-reply-agent',
+    handle: 'openclaw-no-reply-agent',
+    kind: 'openclaw',
+    repo: fakeOpenClawRepo,
+    openclawAgentId: 'no-reply-main',
+    expectNoReplyText: true,
+  },
 ];
 
 const results = [];
@@ -232,6 +277,9 @@ for (const testCase of cases) {
   }
   if (testCase.expectReplyText && wake.result?.replyText !== testCase.expectReplyText) {
     throw new Error(`expected ${testCase.kind} payload replyText: ${JSON.stringify(wake)}`);
+  }
+  if (testCase.expectNoReplyText && (wake.result?.replySent !== false || wake.result?.replyText)) {
+    throw new Error(`expected ${testCase.kind} no-reply output to stay internal: ${JSON.stringify(wake)}`);
   }
   results.push({
     kind: testCase.kind,

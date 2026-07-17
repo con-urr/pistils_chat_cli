@@ -17,15 +17,15 @@ import {
   wakeSenderAgentIdsJson,
 } from './config';
 import {
+  connectorLiveChatEnabled,
+  connectorLiveChatIdleTimeoutMs,
+  connectorLiveChatMaxSessionMs,
   connectorRunTimeoutMs,
   executeWakeConnector,
-  hermesLiveChatEnabled,
-  hermesLiveChatIdleTimeoutMs,
-  hermesLiveChatMaxSessionMs,
   type WakeConnectorResult,
 } from './connectors';
 import { stringifyJsonSafe, toJsonSafe } from './json';
-import { loadAgentState, saveAgentState } from './state';
+import { loadAgentState, saveAgentState, type AgentTalkState } from './state';
 
 type RuntimeAgent = {
   config: SupervisorAgentConfig;
@@ -37,6 +37,7 @@ type RuntimeAgent = {
   inFlightWakeIds: Set<string>;
   inFlightDirectDeliveryKeys: Set<string>;
   seenDirectDeliveryKeys: Set<string>;
+  handledConversationWatermarks: Map<string, bigint>;
   activeConversationSessions: Map<string, ActiveConversationSession>;
   jobs: Set<Promise<void>>;
   stats: {
@@ -67,6 +68,8 @@ type WakeDispatchLock = {
   lockPath: string;
   release: () => Promise<void>;
 };
+
+const MAX_HANDLED_CONVERSATION_WATERMARKS = 500;
 
 export type SupervisorRunOptions = {
   once?: boolean;
@@ -120,6 +123,114 @@ function shortClientRequestId(prefix: string, value: string) {
 
 function directDeliveryKey(delivery: ModuleTypes.ConversationDelivery) {
   return `${delivery.conversationId.toString()}:${delivery.messageId.toString()}:${delivery.sequence.toString()}`;
+}
+
+function handledConversationKey(senderAgentId: string, conversationId: bigint) {
+  return `${senderAgentId}:${conversationId.toString()}`;
+}
+
+function handledConversationWatermarksFromState(state: AgentTalkState) {
+  const map = new Map<string, bigint>();
+  const raw = state.handledConversationWatermarks;
+  if (!raw || typeof raw !== 'object') {
+    return map;
+  }
+  for (const [key, value] of Object.entries(raw)) {
+    const sequence = bigintFromUnknown(value);
+    if (sequence !== undefined) {
+      map.set(key, sequence);
+    }
+  }
+  return map;
+}
+
+function handledConversationWatermarksToState(map: Map<string, bigint>) {
+  const entries = Array.from(map.entries());
+  const bounded = entries.slice(Math.max(0, entries.length - MAX_HANDLED_CONVERSATION_WATERMARKS));
+  return Object.fromEntries(bounded.map(([key, value]) => [key, value.toString()]));
+}
+
+function mergeHandledConversationWatermarks(
+  left: Map<string, bigint>,
+  right: Map<string, bigint>
+) {
+  const merged = new Map(left);
+  for (const [key, value] of right) {
+    const existing = merged.get(key);
+    if (existing === undefined || value > existing) {
+      if (merged.has(key)) {
+        merged.delete(key);
+      }
+      merged.set(key, value);
+    }
+  }
+  while (merged.size > MAX_HANDLED_CONVERSATION_WATERMARKS) {
+    const oldest = merged.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    merged.delete(oldest);
+  }
+  return merged;
+}
+
+function recordHandledConversationSequence(
+  runtime: RuntimeAgent,
+  senderAgentId: string,
+  conversationId: bigint,
+  sequence: bigint
+) {
+  const key = handledConversationKey(senderAgentId, conversationId);
+  const existing = runtime.handledConversationWatermarks.get(key);
+  if (existing === undefined || sequence > existing) {
+    runtime.handledConversationWatermarks.set(key, sequence);
+  }
+}
+
+async function persistHandledConversationSequence(
+  runtime: RuntimeAgent,
+  senderAgentId: string,
+  conversationId: bigint,
+  sequence: bigint
+) {
+  recordHandledConversationSequence(runtime, senderAgentId, conversationId, sequence);
+  const state = await loadAgentState(runtime.connectorStateDir);
+  const persisted = handledConversationWatermarksFromState(state);
+  const merged = mergeHandledConversationWatermarks(persisted, runtime.handledConversationWatermarks);
+  runtime.handledConversationWatermarks = merged;
+  await saveAgentState(runtime.connectorStateDir, {
+    ...state,
+    handledConversationWatermarks: handledConversationWatermarksToState(merged),
+  });
+}
+
+async function refreshHandledConversationWatermarks(runtime: RuntimeAgent) {
+  const state = await loadAgentState(runtime.connectorStateDir);
+  runtime.handledConversationWatermarks = mergeHandledConversationWatermarks(
+    handledConversationWatermarksFromState(state),
+    runtime.handledConversationWatermarks
+  );
+}
+
+function handledConversationWatermark(
+  runtime: RuntimeAgent,
+  senderAgentId: string,
+  conversationId: bigint
+) {
+  return runtime.handledConversationWatermarks.get(handledConversationKey(senderAgentId, conversationId));
+}
+
+function wakeHandledByLocalWatermark(runtime: RuntimeAgent, wake: ModuleTypes.WakeRequestView) {
+  const watermark = handledConversationWatermark(runtime, wake.senderAgentId, wake.conversationId);
+  return watermark !== undefined && wake.maxSequence <= watermark;
+}
+
+function deliveryHandledByLocalWatermark(
+  runtime: RuntimeAgent,
+  delivery: ModuleTypes.ConversationDelivery
+) {
+  const watermark = handledConversationWatermark(runtime, delivery.senderAgentId, delivery.conversationId);
+  return watermark !== undefined && delivery.sequence <= watermark;
 }
 
 function directWakeEnabled(agent: SupervisorAgentConfig) {
@@ -181,10 +292,7 @@ function bigintFromUnknown(value: unknown) {
   return undefined;
 }
 
-function directReadThroughSequence(
-  delivery: ModuleTypes.ConversationDelivery,
-  result: WakeConnectorResult
-) {
+function resultLastHandledSequence(result: WakeConnectorResult) {
   const metadata = result.metadata && typeof result.metadata === 'object'
     ? result.metadata as Record<string, unknown>
     : {};
@@ -195,10 +303,29 @@ function directReadThroughSequence(
   const lastHandled =
     bigintFromUnknown(connectorMetadata.lastHandledSequence) ??
     bigintFromUnknown(metadata.lastHandledSequence);
+  return lastHandled;
+}
+
+function directReadThroughSequence(
+  delivery: ModuleTypes.ConversationDelivery,
+  result: WakeConnectorResult
+) {
+  const lastHandled = resultLastHandledSequence(result);
   if (lastHandled && lastHandled > delivery.sequence) {
     return lastHandled;
   }
   return delivery.sequence;
+}
+
+function wakeReadThroughSequence(
+  wake: ModuleTypes.WakeRequestView,
+  result: WakeConnectorResult
+) {
+  const lastHandled = resultLastHandledSequence(result);
+  if (lastHandled && lastHandled > wake.maxSequence) {
+    return lastHandled;
+  }
+  return wake.maxSequence;
 }
 
 function conversationSessionKey(conversationId: bigint) {
@@ -223,11 +350,11 @@ function startActiveConversationSession(
   wake: ModuleTypes.WakeRequestView,
   attemptId: string
 ) {
-  if (!hermesLiveChatEnabled(runtime.config)) {
+  if (!connectorLiveChatEnabled(runtime.config)) {
     return undefined;
   }
   const now = Date.now();
-  const maxSessionMs = hermesLiveChatMaxSessionMs(runtime.config);
+  const maxSessionMs = connectorLiveChatMaxSessionMs(runtime.config);
   const hardTimeoutMs = connectorRunTimeoutMs(runtime.config);
   const session: ActiveConversationSession = {
     conversationId: wake.conversationId.toString(),
@@ -235,7 +362,7 @@ function startActiveConversationSession(
     attemptId,
     startedAt: new Date(now).toISOString(),
     hardExpiresAt: new Date(now + hardTimeoutMs).toISOString(),
-    idleTimeoutMs: hermesLiveChatIdleTimeoutMs(runtime.config),
+    idleTimeoutMs: connectorLiveChatIdleTimeoutMs(runtime.config),
     maxSessionMs,
   };
   runtime.activeConversationSessions.set(session.conversationId, session);
@@ -542,6 +669,7 @@ async function prepareAgent(config: SupervisorConfig, agent: SupervisorAgentConf
       realtime,
       profile
     );
+    const runtimeState = await loadAgentState(connectorStateDir);
     const runtime: RuntimeAgent = {
       config: agent,
       realtime,
@@ -552,6 +680,7 @@ async function prepareAgent(config: SupervisorConfig, agent: SupervisorAgentConf
       inFlightWakeIds: new Set<string>(),
       inFlightDirectDeliveryKeys: new Set<string>(),
       seenDirectDeliveryKeys: new Set<string>(),
+      handledConversationWatermarks: handledConversationWatermarksFromState(runtimeState),
       activeConversationSessions: new Map<string, ActiveConversationSession>(),
       jobs: new Set<Promise<void>>(),
       stats: {
@@ -597,9 +726,12 @@ async function dispatchWake(
   wake: ModuleTypes.WakeRequestView
 ) {
   const agent = runtime.config;
-  runtime.stats.lastWakeAt = new Date().toISOString();
+  const dispatchStartedMs = Date.now();
+  const dispatchStartedAt = new Date(dispatchStartedMs).toISOString();
+  runtime.stats.lastWakeAt = dispatchStartedAt;
   let attemptId: string | undefined;
   try {
+    const claimStartedMs = Date.now();
     await runtime.realtime.claimWakeRequest({
       wakeId: wake.wakeId,
       registrationId: runtime.registrationId,
@@ -610,6 +742,7 @@ async function dispatchWake(
         connectorKind: agent.kind,
       }),
     });
+    const claimEndedMs = Date.now();
     runtime.stats.claimed += 1;
     await sleep(250);
 
@@ -621,6 +754,39 @@ async function dispatchWake(
     attemptId = attempt?.attemptId;
     if (!attemptId) {
       throw new Error(`Wake ${wake.wakeId} was claimed but no attempt row is visible`);
+    }
+    await appendLog(config, agent, {
+      event: 'wake_claimed',
+      wakeId: wake.wakeId,
+      attemptId,
+      conversationId: claimedWake.conversationId.toString(),
+      minSequence: claimedWake.minSequence.toString(),
+      maxSequence: claimedWake.maxSequence.toString(),
+      senderAgentId: claimedWake.senderAgentId,
+      dispatchStartedAt,
+      claimDurationMs: claimEndedMs - claimStartedMs,
+      sinceDispatchStartMs: claimEndedMs - dispatchStartedMs,
+    });
+
+    await refreshHandledConversationWatermarks(runtime);
+    if (wakeHandledByLocalWatermark(runtime, claimedWake)) {
+      await runtime.wakeClient.ackWake(
+        wake.wakeId,
+        attemptId
+      );
+      runtime.stats.acked += 1;
+      runtime.stats.skipped += 1;
+      runtime.stats.lastSuccessAt = new Date().toISOString();
+      await appendLog(config, agent, {
+        event: 'wake_skipped_duplicate_local_delivery',
+        wakeId: wake.wakeId,
+        attemptId,
+        conversationId: claimedWake.conversationId.toString(),
+        minSequence: claimedWake.minSequence.toString(),
+        maxSequence: claimedWake.maxSequence.toString(),
+        senderAgentId: claimedWake.senderAgentId,
+      });
+      return;
     }
 
     const localDenial = localWakeDenial(runtime, claimedWake);
@@ -653,6 +819,14 @@ async function dispatchWake(
       attemptId,
       JSON.stringify({ supervisor: true, agentName: agent.name })
     );
+    const wakeDispatchedMs = Date.now();
+    await appendLog(config, agent, {
+      event: 'wake_dispatched',
+      wakeId: wake.wakeId,
+      attemptId,
+      conversationId: claimedWake.conversationId.toString(),
+      sinceDispatchStartMs: wakeDispatchedMs - dispatchStartedMs,
+    });
     try {
       const session = startActiveConversationSession(runtime, claimedWake, attemptId);
       if (session) {
@@ -669,6 +843,15 @@ async function dispatchWake(
       const contextMessages = await runtime.wakeClient.fetchWakeContext(claimedWake);
       const payload = createWakeDispatchPayload(claimedWake);
       const runDir = path.join(config.runDir, safePathSegment(wake.wakeId), safePathSegment(attemptId));
+      const connectorStartedMs = Date.now();
+      await appendLog(config, agent, {
+        event: 'connector_process_start',
+        wakeId: claimedWake.wakeId,
+        attemptId,
+        conversationId: claimedWake.conversationId.toString(),
+        connectorKind: agent.kind,
+        sinceDispatchStartMs: connectorStartedMs - dispatchStartedMs,
+      });
       const result = await executeWakeConnector(
           config,
           agent,
@@ -685,6 +868,20 @@ async function dispatchWake(
           },
           runDir
         );
+      const connectorEndedMs = Date.now();
+      await appendLog(config, agent, {
+        event: 'connector_process_exit',
+        wakeId: claimedWake.wakeId,
+        attemptId,
+        conversationId: claimedWake.conversationId.toString(),
+        connectorKind: agent.kind,
+        connectorDurationMs: connectorEndedMs - connectorStartedMs,
+        sinceDispatchStartMs: connectorEndedMs - dispatchStartedMs,
+        ok: result.ok,
+        handled: result.handled,
+        replySent: result.replySent,
+        metadata: toJsonSafe(result.metadata),
+      });
 
       const finalResult = await maybeSendConnectorReply(runtime, claimedWake, attemptId, result);
       const endedSession = endActiveConversationSession(runtime, claimedWake, attemptId);
@@ -698,16 +895,28 @@ async function dispatchWake(
         });
       }
       if (finalResult.ok && finalResult.handled) {
+        const readThroughSequence = wakeReadThroughSequence(claimedWake, finalResult);
+        await persistHandledConversationSequence(
+          runtime,
+          claimedWake.senderAgentId,
+          claimedWake.conversationId,
+          readThroughSequence
+        );
+        await runtime.realtime.markConversationRead(claimedWake.conversationId, readThroughSequence);
         await runtime.wakeClient.ackWake(
           wake.wakeId,
           attemptId
         );
+        const ackedMs = Date.now();
         runtime.stats.acked += 1;
         runtime.stats.lastSuccessAt = new Date().toISOString();
         await appendLog(config, agent, {
           event: 'wake_acked',
           wakeId: wake.wakeId,
           attemptId,
+          conversationId: claimedWake.conversationId.toString(),
+          readThroughSequence: readThroughSequence.toString(),
+          sinceDispatchStartMs: ackedMs - dispatchStartedMs,
           result: toJsonSafe(finalResult),
         });
         return;
@@ -744,9 +953,36 @@ async function dispatchDirectDelivery(
   const deliveryKey = directDeliveryKey(delivery);
   const wake = wakeFromDirectDelivery(delivery);
   const attemptId = `${wake.wakeId}:attempt-1`;
-  runtime.stats.lastDirectAt = new Date().toISOString();
+  const dispatchStartedMs = Date.now();
+  const dispatchStartedAt = new Date(dispatchStartedMs).toISOString();
+  runtime.stats.lastDirectAt = dispatchStartedAt;
 
   try {
+    await refreshHandledConversationWatermarks(runtime);
+    if (deliveryHandledByLocalWatermark(runtime, delivery)) {
+      runtime.stats.skipped += 1;
+      await appendLog(config, agent, {
+        event: 'direct_delivery_skipped_duplicate_wake',
+        wakeId: wake.wakeId,
+        attemptId,
+        deliveryKey,
+        conversationId: delivery.conversationId.toString(),
+        sequence: delivery.sequence.toString(),
+        senderAgentId: delivery.senderAgentId,
+      });
+      return;
+    }
+    await appendLog(config, agent, {
+      event: 'direct_delivery_claimed',
+      wakeId: wake.wakeId,
+      attemptId,
+      deliveryKey,
+      conversationId: delivery.conversationId.toString(),
+      sequence: delivery.sequence.toString(),
+      senderAgentId: delivery.senderAgentId,
+      dispatchStartedAt,
+    });
+
     const localDenial = localWakeDenial(runtime, wake);
     if (localDenial) {
       runtime.stats.skipped += 1;
@@ -798,6 +1034,18 @@ async function dispatchDirectDelivery(
       const contextMessages = await runtime.wakeClient.fetchWakeContext(wake);
       const payload = createWakeDispatchPayload(wake);
       const runDir = path.join(config.runDir, safePathSegment(wake.wakeId), safePathSegment(attemptId));
+      const connectorStartedMs = Date.now();
+      await appendLog(config, agent, {
+        event: 'connector_process_start',
+        wakeId: wake.wakeId,
+        attemptId,
+        deliveryKey,
+        conversationId: delivery.conversationId.toString(),
+        sequence: delivery.sequence.toString(),
+        senderAgentId: delivery.senderAgentId,
+        connectorKind: agent.kind,
+        sinceDispatchStartMs: connectorStartedMs - dispatchStartedMs,
+      });
       const result = await executeWakeConnector(
         config,
         agent,
@@ -814,6 +1062,23 @@ async function dispatchDirectDelivery(
         },
         runDir
       );
+      const connectorEndedMs = Date.now();
+      await appendLog(config, agent, {
+        event: 'connector_process_exit',
+        wakeId: wake.wakeId,
+        attemptId,
+        deliveryKey,
+        conversationId: delivery.conversationId.toString(),
+        sequence: delivery.sequence.toString(),
+        senderAgentId: delivery.senderAgentId,
+        connectorKind: agent.kind,
+        connectorDurationMs: connectorEndedMs - connectorStartedMs,
+        sinceDispatchStartMs: connectorEndedMs - dispatchStartedMs,
+        ok: result.ok,
+        handled: result.handled,
+        replySent: result.replySent,
+        metadata: toJsonSafe(result.metadata),
+      });
 
       const finalResult = await maybeSendConnectorReply(runtime, wake, attemptId, result);
       const endedSession = endActiveConversationSession(runtime, wake, attemptId);
@@ -831,9 +1096,16 @@ async function dispatchDirectDelivery(
       }
       if (finalResult.ok && finalResult.handled) {
         const readThroughSequence = directReadThroughSequence(delivery, finalResult);
+        await persistHandledConversationSequence(
+          runtime,
+          delivery.senderAgentId,
+          delivery.conversationId,
+          readThroughSequence
+        );
         await runtime.realtime.markConversationRead(delivery.conversationId, readThroughSequence);
         runtime.stats.directDispatched += 1;
         runtime.stats.lastSuccessAt = new Date().toISOString();
+        const ackedMs = Date.now();
         await appendLog(config, agent, {
           event: 'direct_delivery_acked',
           wakeId: wake.wakeId,
@@ -843,6 +1115,7 @@ async function dispatchDirectDelivery(
           sequence: delivery.sequence.toString(),
           readThroughSequence: readThroughSequence.toString(),
           senderAgentId: delivery.senderAgentId,
+          sinceDispatchStartMs: ackedMs - dispatchStartedMs,
           result: toJsonSafe(finalResult),
         });
         return;
@@ -1002,6 +1275,7 @@ function claimableDirectDeliveries(runtime: RuntimeAgent) {
   return Array.from(byKey.values())
     .filter(row => row.recipientAgentId === runtime.agentId)
     .filter(row => row.senderAgentId !== runtime.agentId)
+    .filter(row => !deliveryHandledByLocalWatermark(runtime, row))
     .filter(row => !activeSession(runtime, row.conversationId))
     .filter(row => {
       const key = directDeliveryKey(row);

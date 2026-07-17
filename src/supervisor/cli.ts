@@ -118,6 +118,18 @@ function getIntFlag(flags: SupervisorFlags, keys: string[], defaultValue: number
   return parsed;
 }
 
+function getOptionalIntFlag(flags: SupervisorFlags, keys: string[]) {
+  const raw = getStringFlag(flags, keys);
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`${keys[0]} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
 function getWakeSenderAgentIdsFlag(
   flags: SupervisorFlags,
   keys: string[],
@@ -798,6 +810,17 @@ async function commandAddAgent(flags: SupervisorFlags) {
     'reuse-hermes-session',
     'reuseHermesSession',
   ]);
+  const liveChat = getOptionalBooleanFlag(flags, ['live-chat', 'liveChat']);
+  const liveChatIdleTimeoutMs = getOptionalIntFlag(flags, [
+    'live-chat-idle-timeout-ms',
+    'liveChatIdleTimeoutMs',
+  ]);
+  const liveChatMaxSessionMs = getOptionalIntFlag(flags, [
+    'live-chat-max-session-ms',
+    'liveChatMaxSessionMs',
+  ]);
+  const startupTimeoutMs = getOptionalIntFlag(flags, ['startup-timeout-ms', 'startupTimeoutMs']);
+  const wakePromptTemplate = getStringFlag(flags, ['wake-prompt-template', 'wakePromptTemplate']);
   const busyCommand = getStringFlag(flags, ['busy-command', 'busyCommand']);
   const busyCommandTimeoutMs = getIntFlag(
     flags,
@@ -823,6 +846,21 @@ async function commandAddAgent(flags: SupervisorFlags) {
   }
   if (reuseHermesSession !== undefined && kind === 'hermes') {
     connector.reuseHermesSession = reuseHermesSession;
+  }
+  if (liveChat !== undefined) {
+    connector.liveChat = liveChat;
+  }
+  if (liveChatIdleTimeoutMs !== undefined) {
+    connector.liveChatIdleTimeoutMs = liveChatIdleTimeoutMs;
+  }
+  if (liveChatMaxSessionMs !== undefined) {
+    connector.liveChatMaxSessionMs = liveChatMaxSessionMs;
+  }
+  if (startupTimeoutMs !== undefined) {
+    connector.startupTimeoutMs = startupTimeoutMs;
+  }
+  if (wakePromptTemplate?.trim()) {
+    connector.wakePromptTemplate = wakePromptTemplate;
   }
   if (busyCommand?.trim()) {
     connector.busyCommand = busyCommand;
@@ -1341,8 +1379,8 @@ async function commandInstallService(flags: SupervisorFlags) {
       if (!noStart) {
         const uid = os.userInfo().uid;
         await runCommand('launchctl', ['bootout', `gui/${uid}`, servicePath]).catch(() => undefined);
-        await runCommand('launchctl', ['bootstrap', `gui/${uid}`, servicePath]);
         await runCommand('launchctl', ['enable', `gui/${uid}/${label}`]).catch(() => undefined);
+        await runCommand('launchctl', ['bootstrap', `gui/${uid}`, servicePath]);
         started = true;
         actions.push('loaded launch agent');
       }

@@ -47,6 +47,8 @@ const STATE_PATH = path.join(STATE_DIR, 'state.json');
 const STATE_LOCK_DIR = path.join(STATE_DIR, '.state.lock');
 const DAEMON_PID_PATH = path.join(STATE_DIR, 'agenttalkd.pid');
 const DIRECTORY_SYNC_DELAY_MS = 250;
+const FAST_RECEIPT_WAIT_MS = 750;
+const MIN_AGENTTALK_NODE_MAJOR = 22;
 
 let QUIET = false;
 let STRICT_OUTPUT = false;
@@ -66,6 +68,23 @@ function writeStdout(line: string) {
 
 function writeJson(payload: unknown, pretty = true) {
   writeSync(1, JSON.stringify(payload, null, pretty ? 2 : undefined) + '\n');
+}
+
+function parseNodeMajor(version: string | undefined | null) {
+  const match = String(version ?? '').match(/^v?(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function nodeRuntimeInfo() {
+  const version = process.version;
+  const major = parseNodeMajor(version);
+  return {
+    command: process.execPath,
+    version,
+    major,
+    requiredMajor: MIN_AGENTTALK_NODE_MAJOR,
+    ok: typeof major === 'number' && major >= MIN_AGENTTALK_NODE_MAJOR,
+  };
 }
 
 function normalizeCliWarnings(...sets: Array<unknown>): CliJsonWarning[] {
@@ -2244,7 +2263,7 @@ async function commandChat(flags: Flags, positionals: string[], state: Agenttalk
     });
     const openReceipt = await client.waitForReceipt(
       openRequestId,
-      5000,
+      FAST_RECEIPT_WAIT_MS,
       'open_direct_conversation'
     );
     if (!openReceipt.conversationId) {
@@ -2258,7 +2277,7 @@ async function commandChat(flags: Flags, positionals: string[], state: Agenttalk
     );
     const sendReceipt = await client.waitForReceipt(
       sendRequestId,
-      5000,
+      FAST_RECEIPT_WAIT_MS,
       'send_conversation_message'
     );
     if (getBooleanFlag(flags, ['emit-event', 'mention-event'])) {
@@ -2357,7 +2376,7 @@ async function commandReply(flags: Flags, positionals: string[], state: Agenttal
     );
     const receipt = await client.waitForReceipt(
       requestId,
-      5000,
+      FAST_RECEIPT_WAIT_MS,
       'send_conversation_message'
     );
     const conversation = client
@@ -2750,7 +2769,7 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
       );
       const receipt = await client.waitForReceipt(
         createRequestId,
-        5000,
+        FAST_RECEIPT_WAIT_MS,
         'create_group_conversation'
       );
       conversation = receipt.conversationId
@@ -2773,7 +2792,7 @@ async function commandGroup(flags: Flags, positionals: string[], state: Agenttal
             richInput.clientRequestId ?? makeLocalRequestId('group:message'),
         }
       );
-      await client.waitForReceipt(sendRequestId, 5000, 'send_conversation_message');
+      await client.waitForReceipt(sendRequestId, FAST_RECEIPT_WAIT_MS, 'send_conversation_message');
     }
 
     const payload = {
@@ -4824,7 +4843,7 @@ async function commandConversation(
       );
       const receipt = await client.waitForReceipt(
         createRequestId,
-        5000,
+        FAST_RECEIPT_WAIT_MS,
         'create_group_conversation'
       );
       const created = receipt.conversationId
@@ -4837,7 +4856,7 @@ async function commandConversation(
                 ...parseRichMessageInput(flags),
                 clientRequestId: makeLocalRequestId('conversation:group:message'),
               }),
-              5000,
+              FAST_RECEIPT_WAIT_MS,
               'send_conversation_message'
             )
           : undefined;
@@ -4898,7 +4917,7 @@ async function commandConversation(
       );
       const receipt = await client.waitForReceipt(
         requestId,
-        5000,
+        FAST_RECEIPT_WAIT_MS,
         'send_conversation_message'
       );
 
@@ -5245,6 +5264,13 @@ async function commandDoctor(flags: Flags, state: AgenttalkState) {
   const outputJson = wantsJson(flags);
   const config = resolveConnectConfig(flags, state);
   const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
+  const node = nodeRuntimeInfo();
+
+  checks.push({
+    name: 'node_22_plus',
+    ok: node.ok,
+    detail: `${node.command} ${node.version} (requires >=${MIN_AGENTTALK_NODE_MAJOR})`,
+  });
 
   try {
     const parsed = new URL(config.host);
@@ -5301,6 +5327,7 @@ async function commandDoctor(flags: Flags, state: AgenttalkState) {
       daemonStatus: daemonStatus.response,
       daemonStarted: daemonStatus.started,
       stats: stats.data ?? stats,
+      runtime: { node },
       hotRetentionHours: data.hotRetentionHours ?? 12,
       messageStore: 'ephemeral-hot-realtime',
       archiveConfigured: data.archiveConfigured ?? false,
@@ -5366,6 +5393,7 @@ async function commandDoctor(flags: Flags, state: AgenttalkState) {
     daemon: false,
     host: config.host,
     databaseName: config.databaseName,
+    runtime: { node },
     tokenProvided: Boolean(config.token),
     identity,
     channelCount,
@@ -7487,7 +7515,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
           );
           const receipt = await client.waitForReceipt(
             createRequestId,
-            5000,
+            FAST_RECEIPT_WAIT_MS,
             'create_group_conversation'
           );
           const created = receipt.conversationId
@@ -7499,7 +7527,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
                   await client.sendConversationMessage(created.id, openingMessage, {
                     clientRequestId: makeLocalRequestId('jsonl:group:message'),
                   }),
-                  5000,
+                  FAST_RECEIPT_WAIT_MS,
                   'send_conversation_message'
                 )
               : undefined;
@@ -7688,7 +7716,7 @@ async function commandRunJsonl(flags: Flags, state: AgenttalkState) {
           });
           const receipt = await client.waitForReceipt(
             requestId,
-            5000,
+            FAST_RECEIPT_WAIT_MS,
             'send_conversation_message'
           );
           send(
