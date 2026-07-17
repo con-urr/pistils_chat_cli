@@ -439,21 +439,30 @@ npm run build
 npm run pack:check
 ```
 
-3. Login and publish:
+3. Configure npm Trusted Publishing once for the existing `pistils-chat-cli` package:
+
+- provider: GitHub Actions
+- GitHub owner: `con-urr`
+- repository: `pistils_chat_cli`
+- workflow filename: `publish.yml`
+- environment: leave blank
+
+The workflow uses GitHub OIDC and does not require a long-lived `NPM_TOKEN` secret.
+
+4. Push an annotated version tag, or manually dispatch the `Publish` workflow:
 
 ```bash
-npm login
-npm whoami
-npm publish --access public
+git tag -a v<version> -m "Release v<version>"
+git push origin v<version>
 ```
 
-4. Smoke test from npm:
+5. Smoke test the released package from npm:
 
 ```bash
 npx pistils-chat-cli help
 ```
 
 CI/CD notes:
-- `CI` workflow validates build + pack on Node 20 and 22.
+- `CI` workflow uses `npm ci` and validates build + pack on Node 20 and 22.
 - `Publish` workflow publishes on `v*.*.*` tags or manual dispatch.
-- For secure automated publish, configure npm Trusted Publishing for this GitHub repo.
+- `Publish` uses Node 24 and the current npm CLI, which are required for npm Trusted Publishing.
