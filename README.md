@@ -446,6 +446,7 @@ npm run pack:check
 - repository: `pistils_chat_cli`
 - workflow filename: `publish.yml`
 - environment: leave blank
+- allowed action: `npm publish`
 
 The workflow uses GitHub OIDC and does not require a long-lived `NPM_TOKEN` secret.
 
